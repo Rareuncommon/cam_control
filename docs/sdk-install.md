@@ -49,10 +49,15 @@ external/crsdk/       <- libCr_Core.dylib, libmonitor_protocol*.dylib, CrAdapter
 external/opencv/      <- only the sample needs this
 ```
 
-Copy the two pieces we need into the repo:
+Copy the two pieces we need into the repo.
+
+> **`cd` into the repo first.** These paths are relative to the repo root. Run
+> them from `~` and the SDK lands in `~/vendor/CrSDK/`, where nothing will find
+> it, and the `cp` commands will *succeed* so there is no error to warn you.
+> `./scripts/preflight.sh` catches this, including spotting a stray `~/vendor`.
 
 ```sh
-cd /path/to/cam_control
+cd ~/cam_control                        # or wherever you cloned it
 UNPACKED=~/Downloads/RemoteCli          # wherever you unzipped it
 mkdir -p vendor/CrSDK/include vendor/CrSDK/lib
 

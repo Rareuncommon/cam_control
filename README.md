@@ -80,6 +80,17 @@ at 9am on a Sunday.
 
 ## Setup, from cold
 
+0. **Clone the repo and check prerequisites.** Every command in these docs uses
+   paths relative to the repo root, so `cd` into the checkout first — running
+   them from `~` silently creates stray directories in your home folder.
+   ```sh
+   git clone https://github.com/Rareuncommon/cam_control.git ~/cam_control
+   cd ~/cam_control
+   ./scripts/preflight.sh
+   ```
+   `preflight.sh` installs nothing. It checks you are in the right directory and
+   that Xcode CLT, Homebrew, cmake 3.24+, autoconf, automake and libtool are
+   present, printing the exact fix command for anything missing.
 1. **Cameras** — configure each body per [`docs/camera-setup.md`](docs/camera-setup.md).
    Read the access-authentication credentials off each one while you are there.
 2. **SDK** — download and place the Sony Camera Remote SDK per
