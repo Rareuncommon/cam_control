@@ -88,14 +88,32 @@ it or adding `--model FX30` later is safe.
 
 ## The sequence
 
+The sample **auto-discovers cameras on the LAN** — there is no IP to type. It
+calls `SDK::EnumCameraObjects()` and lists what it finds:
+
+```
+Enumerate connected camera devices...
+Camera enumeration successful. 1 detected.
+
+[1] ILME-FX30 (6C:6E:07:18:59:EB)
+```
+
+Note it identifies a networked camera by **MAC address**, not IP, and reports the
+model itself. (`RemoteCli.cpp:21` `#define`s `MSEARCH_ENB` unconditionally, so the
+manual enter-an-IP path further down that file is dead code in the shipped
+sample. The `--model` patch option is therefore irrelevant on this path — the
+FX6 hint is never used.)
+
 | Prompt | Enter | Notes |
 |---|---|---|
-| `Please enter the IP address` | the camera's static IP | e.g. `10.0.0.51` |
-| `Is it an SSH connection? (y/n)` | **`y`** | "SSH" is Sony's name for the access-authentication encrypted channel, not a separate transport. Answer `y` whenever `Access Authen. Settings` is On. |
-| `Connect to camera with input number...` | **`1`** | only one camera is listed |
+| `Connect to camera with input number...` | **`1`** | select the discovered camera |
 | `<< TOP-MENU >>` | **`1`** | Connect (Remote Control Mode) |
 | `fingerprint: ...` `Are you sure you want to continue connecting? (y/n)` | **`y`** | the fingerprint is fetched from the camera over the wire; it should match the one on `Access Authen. Info` — **compare them**, that is the whole point of the field |
 | `Please SSH password >` | the password from `Access Authen. Info` | masked with `*` as you type, so it will look like nothing is happening. The username is *not* prompted — it comes from the patch above. |
+
+The fingerprint and password steps appear automatically: the camera itself
+reports whether access authentication is on, via `GetSSHsupport()` on the
+enumerated object. There is no y/n question about SSH on this path.
 | `<< REMOTE-MENU >>` | **`1`** | Shutter/Rec Operation Menu |
 | `<< Shutter/Rec Operation Menu >>` | **`7`** | **Movie Rec Button (Toggle)** — this is the acceptance test |
 

@@ -53,6 +53,44 @@ Checked directly against the shipped headers and dylibs, not assumed:
 - **OpenCV is not needed.** Only Sony's `RemoteCli` sample links it, to display
   live view in a desktop window. We relay JPEG frames instead.
 
+## Discovery and camera identity — confirmed on hardware
+
+`SDK::EnumCameraObjects()` **auto-discovers cameras on the LAN**. Observed
+finding an FX30 over wired Ethernet and self-reporting its model and real MAC
+address without being told an IP.
+
+Each enumerated `ICrCameraObjectInfo` exposes everything the daemon needs to
+identify and connect a body:
+
+| Accessor | Use in `camd` |
+|---|---|
+| `GetMACAddress()` / `GetMACAddressChar()` | **stable per-body identity** |
+| `GetIPAddress()` / `GetIPAddressChar()` | current address, may change |
+| `GetModel()` | FX3 vs FX30, straight from the camera |
+| `GetSSHsupport()` | whether access authentication is on |
+| `GetAuthenticationState()` | auth progress/state |
+| `GetPairingNecessity()` | whether pairing is required |
+| `GetConnectionStatus()` | connection state |
+| `GetGuid()`, `GetName()`, `GetAdaptorName()` | diagnostics and logging |
+
+Design consequences for Phase 1 and 2:
+
+- **Key cameras by MAC, not IP.** The SDK identifies networked bodies by MAC, and
+  it is the one identifier that survives an address change. Config still pins
+  static IPs — that is good practice and makes the network debuggable — but the
+  daemon should match discovered cameras to config entries by MAC and treat the
+  IP as informational. This matters directly for Phase 2: a camera that comes
+  back on a different address must still be recognised as the same camera.
+- **Do not hand-build camera objects from config IPs.** Sony's sample has a
+  second, `#ifdef`-disabled path that constructs a camera from a model hint plus
+  IP plus MAC. It requires guessing the model up front — and its default guess
+  is wrong for us. Enumeration reports the truth instead. Prefer it.
+- **Never assume a model.** `GetModel()` is authoritative. The FX3/FX30
+  distinction drives value normalisation in `cambridge`, so it must come from
+  the camera rather than from config that can drift.
+- **Access authentication is discoverable**, not something to configure blind:
+  `GetSSHsupport()` tells us whether a body expects credentials before we try.
+
 ## Build
 
 Requires the Sony SDK vendored first — see [`docs/sdk-install.md`](../docs/sdk-install.md).
