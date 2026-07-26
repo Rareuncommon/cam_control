@@ -20,9 +20,14 @@ against hardware.
 Next action is yours, at the machine: work through
 [`docs/phase-0-acceptance.md`](docs/phase-0-acceptance.md).
 
+The SDK side of Phase 0 is verified: SDK 2.02.00's headers, symbols, library
+layout and runtime load paths have all been checked, and `linkcheck.cpp`
+compiles clean against the real headers. What remains is the hardware half —
+building Sony's `RemoteCli` on the Mac and rolling record on a camera.
+
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | scaffolded, awaiting hardware test |
+| 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | SDK verified; awaiting hardware test |
 | 1 | `camd` core — single camera, property get/set, record, over REST | not started |
 | 2 | Multi-camera + connection lifecycle; kill tests 5/5 | not started |
 | 3 | WebSocket events + Node bridge with mirrored state | not started |

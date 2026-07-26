@@ -35,14 +35,15 @@ Work through [`docs/camera-setup.md`](camera-setup.md) on a single body:
 
 ### C. SDK on the Mac
 
-- [ ] SDK downloaded and placed per [`docs/sdk-install.md`](sdk-install.md)
+- [ ] Xcode CLT and build tools: `xcode-select --install`, `brew install cmake autoconf automake libtool`
+- [ ] SDK placed per [`docs/sdk-install.md`](sdk-install.md) — everything comes from `RemoteCli.zip`
 - [ ] `./scripts/check-sdk.sh` prints `SDK layout OK`
 - [ ] `cmake -S camd -B camd/build && cmake --build camd/build --target camd-linkcheck`
-- [ ] `./camd/build/camd-linkcheck` prints a version number
+- [ ] `./camd/build/camd-linkcheck` prints `Camera Remote SDK 2.02.00`
 
 ### D. The actual acceptance test
 
-- [ ] `./scripts/build-remotecli.sh ~/Downloads/CrSDK_v2.02.00_Mac` builds Sony's sample
+- [ ] `./scripts/build-remotecli.sh ~/Downloads/RemoteCli` builds Sony's sample
 - [ ] `RemoteCli` enumerates or accepts the camera by IP
 - [ ] Connects, supplying the access-authentication username and password
 - [ ] **Starts recording** — confirm the red tally / REC indicator on the camera body itself, not just the CLI's output
@@ -66,7 +67,8 @@ Whether it passes or fails, capture:
 
 | Symptom | Likely cause |
 |---|---|
-| Init succeeds, zero cameras found | `CrAdapter/` not beside the binary, or camera not on `USB-LAN Connection` |
+| Init succeeds, zero cameras found | `CrAdapter/` not at `Contents/Frameworks/CrAdapter` relative to the binary — that path is hardcoded in `libCr_Core.dylib`. Or the camera is not on `USB-LAN Connection`. |
+| `libmonitor_protocol.dylib` not found | only `libCr_Core.dylib` was copied; the whole of `external/crsdk/` is required |
 | dylib refuses to load, Gatekeeper dialog | quarantine attribute still set — `xattr -dr com.apple.quarantine vendor/CrSDK` |
 | Connects, then immediately drops | access authentication mismatch, or camera went to sleep — see camera-setup §6 |
 | Ping works, SDK cannot see camera | `Remote Shoot Function` not enabled, or the camera is on a different subnet than it looks |

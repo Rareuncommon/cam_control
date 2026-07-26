@@ -1,49 +1,56 @@
 # vendor/CrSDK — put the Sony Camera Remote SDK here
 
 This directory is intentionally empty in git. The Sony Camera Remote SDK is
-licensed per-developer, requires registration and license acceptance, and
+licensed per-developer, requires registration and licence acceptance, and
 **must not be committed to this repo**. `.gitignore` excludes everything here
 except this file.
 
-Full download and placement walkthrough: [`docs/sdk-install.md`](../../docs/sdk-install.md).
+Full walkthrough: [`docs/sdk-install.md`](../../docs/sdk-install.md).
+
+## Where it comes from
+
+Everything needed is inside Sony's **`RemoteCli.zip`** (SDK 2.02.00) — headers
+under `app/CRSDK/`, prebuilt libraries under `external/crsdk/`. The separate
+`libssh2.zip`, `libusb.zip` and `openssl.zip` downloads are upstream OSS source
+published for licence compliance; they are not build inputs.
 
 ## Target layout
 
-After unpacking, this directory must look like the following. The exact folder
-names inside Sony's archive have changed between SDK releases, so copy the
-*contents* into this shape rather than moving the archive folder here wholesale:
-
 ```
 vendor/CrSDK/
-├── include/
-│   └── CRSDK/
-│       ├── CameraRemote_SDK.h
-│       ├── CrDeviceProperty.h
-│       ├── CrCommandData.h
-│       ├── CrDefines.h
-│       ├── CrError.h
-│       ├── CrTypes.h
-│       ├── IDeviceCallback.h
-│       └── ... (all other headers Sony ships)
-└── lib/
+├── include/CRSDK/                  <- copy of app/CRSDK/
+│   ├── CameraRemote_SDK.h
+│   ├── CrDeviceProperty.h
+│   ├── CrCommandData.h
+│   ├── CrError.h
+│   ├── IDeviceCallback.h
+│   ├── ICrCameraObjectInfo.h
+│   └── ... (all other headers Sony ships)
+└── lib/                            <- copy of external/crsdk/
     ├── libCr_Core.dylib
+    ├── libmonitor_protocol.dylib
+    ├── libmonitor_protocol_pf.dylib
     └── CrAdapter/
         ├── libCr_PTP_IP.dylib
         ├── libCr_PTP_USB.dylib
-        └── ... (everything else Sony ships in CrAdapter/)
+        ├── libssh2.dylib
+        └── libusb-1.0.0.dylib
 ```
 
-## Two things that will bite you
+## Three things that will bite you
 
-1. **`CrAdapter/` must stay a subfolder next to the core library.** `libCr_Core.dylib`
-   loads the transport adapters by relative path at runtime. If `CrAdapter/` is
-   flattened or renamed, the SDK initialises fine and then finds zero cameras —
-   with no useful error. Our CMake build copies `CrAdapter/` next to each built
-   binary for this reason.
+1. **Copy the whole of `external/crsdk/`, not just `libCr_Core.dylib`.**
+   `libmonitor_protocol.dylib` is referenced by name from the core library.
 
-2. **macOS quarantines the dylibs.** They arrive unsigned from a downloaded
-   archive, and on macOS 26 Gatekeeper will refuse to load them. Clear the
-   quarantine attribute after unpacking:
+2. **`CrAdapter/` is loaded from `Contents/Frameworks/CrAdapter` at runtime** —
+   that relative path is hardcoded inside `libCr_Core.dylib`. In *this* vendor
+   tree it just sits under `lib/`; the build stages it to the right place next
+   to each binary via `crsdk_stage_runtime()`. If the adapters are ever in the
+   wrong place, the SDK initialises successfully and then finds zero cameras
+   with no useful error.
+
+3. **macOS quarantines the dylibs.** They arrive unsigned from a downloaded
+   archive, and Gatekeeper on macOS 26 will refuse to load them:
    ```sh
    xattr -dr com.apple.quarantine vendor/CrSDK
    ```
@@ -54,6 +61,6 @@ vendor/CrSDK/
 ./scripts/check-sdk.sh
 ```
 
-That script checks the headers and libs are where the build expects, confirms
-the dylibs are `arm64`, and reports whether the quarantine attribute is still
-set. Run it before the first build.
+Checks every header, both `libmonitor_protocol` libraries, all four `CrAdapter`
+dylibs, the architecture (`arm64` expected — Sony ships universal binaries), and
+the quarantine attribute. Run it before the first build.

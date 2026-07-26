@@ -25,6 +25,34 @@ These are load-bearing. Later phases should not erode them.
    camera actually accepted, which is frequently not what was asked for
    (nearest legal step, or refused outright in the current mode).
 
+## SDK facts, verified against 2.02.00
+
+Checked directly against the shipped headers and dylibs, not assumed:
+
+- **The API is `extern "C"` inside `namespace SCRSDK`.** It exports unmangled
+  global symbols — `Init`, `Release`, `Connect`, `EnumCameraObjects`,
+  `SetDeviceProperty`, `SendCommand`. Confirmed present in `libCr_Core.dylib`.
+
+  Consequence for Phase 1: those are extremely generic names in the global C
+  symbol namespace. If we link a second library that also exports a C symbol
+  called `Init` or `Connect`, the collision resolves silently at load time and
+  the failure will look like the SDK misbehaving. Keep `camd`'s third-party
+  dependencies minimal, and always call through the `SCRSDK::` qualifier so the
+  intent is unambiguous in our own source.
+
+- **Transport adapters load from `Contents/Frameworks/CrAdapter`**, a relative
+  path hardcoded in `libCr_Core.dylib`. Not `./CrAdapter`. Handled by
+  `crsdk_stage_runtime()` in `cmake/FindCrSDK.cmake`.
+
+- **`libmonitor_protocol.dylib` and `libmonitor_protocol_pf.dylib`** must sit
+  beside `libCr_Core.dylib`; the core references them by name.
+
+- **All shipped dylibs are universal (`x86_64` + `arm64`)** — native on Apple
+  Silicon. Sony builds them against macOS deployment target 12.1, which we match.
+
+- **OpenCV is not needed.** Only Sony's `RemoteCli` sample links it, to display
+  live view in a desktop window. We relay JPEG frames instead.
+
 ## Build
 
 Requires the Sony SDK vendored first — see [`docs/sdk-install.md`](../docs/sdk-install.md).

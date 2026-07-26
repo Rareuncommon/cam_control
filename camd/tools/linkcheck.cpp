@@ -5,14 +5,15 @@
 // safe to run at any time, including mid-service.
 //
 // The point is to isolate one question: can we compile against these headers,
-// link against this dylib, and have it load at runtime with CrAdapter/ staged
-// correctly? If this prints a version, every environment variable in Phase 0
-// is settled and any later failure is our own logic.
+// link against this dylib, and have it load at runtime with the SDK runtime
+// staged correctly? If this prints a version, every environment variable in
+// Phase 0 is settled and any later failure is our own logic.
 //
-// Note: the API names below (Init / GetSDKVersion / Release in namespace
-// SCRSDK) are the long-standing CRSDK surface. If SDK 2.02 renamed them, this
-// file is the first thing that will fail to compile — which is exactly what we
-// want to find out now rather than in Phase 1.
+// The declarations used here were checked against the real 2.02.00 headers:
+//   CameraRemote_SDK.h:47   bool Init(CrInt32u logtype = 0);
+//   CameraRemote_SDK.h:51   bool Release();
+//   CameraRemote_SDK.h:150  CrInt32u GetSDKVersion();
+// The version decode below matches Sony's own RemoteCli.cpp.
 
 #include <cstdint>
 #include <cstdio>
@@ -24,7 +25,8 @@ int main() {
         std::fprintf(stderr,
                      "FAIL: SCRSDK::Init() returned false.\n"
                      "  The library loaded but refused to initialise. Check that\n"
-                     "  CrAdapter/ sits next to this binary.\n");
+                     "  Contents/Frameworks/CrAdapter/ exists next to this binary\n"
+                     "  and that libmonitor_protocol.dylib was staged alongside it.\n");
         return 1;
     }
 

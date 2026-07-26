@@ -24,14 +24,18 @@ fi
 header=""
 for candidate in \
   "${SDK_ROOT}/include/CRSDK/CameraRemote_SDK.h" \
-  "${SDK_ROOT}/include/CameraRemote_SDK.h" \
-  "${SDK_ROOT}/app/CRSDK/CameraRemote_SDK.h"
+  "${SDK_ROOT}/app/CRSDK/CameraRemote_SDK.h" \
+  "${SDK_ROOT}/include/CameraRemote_SDK.h"
 do
   [[ -f "${candidate}" ]] && { header="${candidate}"; break; }
 done
 
 if [[ -n "${header}" ]]; then
   ok "CameraRemote_SDK.h  -> ${header#"${REPO_ROOT}/"}"
+  hdr_dir="$(dirname "${header}")"
+  for h in CrDeviceProperty.h CrCommandData.h CrError.h IDeviceCallback.h ICrCameraObjectInfo.h; do
+    [[ -f "${hdr_dir}/${h}" ]] || bad "missing header: ${h} (copy the whole CRSDK/ folder, not just some of it)"
+  done
   [[ "${header}" == "${SDK_ROOT}/include/CRSDK/"* ]] || \
     warn "not at the canonical vendor/CrSDK/include/CRSDK/ path; CMake will still find it, but docs/sdk-install.md describes the preferred layout"
 else
@@ -44,6 +48,7 @@ fi
 core=""
 for candidate in \
   "${SDK_ROOT}/lib/libCr_Core.dylib" \
+  "${SDK_ROOT}/external/crsdk/libCr_Core.dylib" \
   "${SDK_ROOT}/libCr_Core.dylib"
 do
   [[ -f "${candidate}" ]] && { core="${candidate}"; break; }
@@ -51,27 +56,39 @@ done
 
 if [[ -n "${core}" ]]; then
   ok "libCr_Core.dylib    -> ${core#"${REPO_ROOT}/"}"
+  lib_dir="$(dirname "${core}")"
+
   if command -v lipo >/dev/null 2>&1; then
     archs="$(lipo -archs "${core}" 2>/dev/null || echo unknown)"
     if [[ " ${archs} " == *" ${EXPECTED_ARCH} "* ]]; then
       ok "architecture        -> ${archs}"
     else
       bad "architecture is '${archs}', expected to include '${EXPECTED_ARCH}'"
-      warn "an x86_64-only SDK means running camd under Rosetta — stop and decide deliberately"
     fi
   else
     warn "lipo not available (not macOS?) — skipping architecture check"
   fi
+
+  # libCr_Core references these by name; they must travel with it.
+  for lib in libmonitor_protocol.dylib libmonitor_protocol_pf.dylib; do
+    if [[ -f "${lib_dir}/${lib}" ]]; then
+      ok "$(printf '%-20s' "${lib}")-> present"
+    else
+      bad "${lib} missing — copy the entire contents of external/crsdk/, not just libCr_Core.dylib"
+    fi
+  done
 else
   bad "libCr_Core.dylib not found under vendor/CrSDK/"
 fi
 
 # --- transport adapters -----------------------------------------------------
-# libCr_Core loads these by relative path at runtime. Flatten or rename this
-# folder and the SDK initialises cleanly, then finds zero cameras.
+# libCr_Core loads these from the hardcoded relative path
+# "Contents/Frameworks/CrAdapter". Get this wrong and the SDK initialises
+# cleanly, then finds zero cameras with no error.
 adapter=""
 for candidate in \
   "${SDK_ROOT}/lib/CrAdapter" \
+  "${SDK_ROOT}/external/crsdk/CrAdapter" \
   "${SDK_ROOT}/CrAdapter"
 do
   [[ -d "${candidate}" ]] && { adapter="${candidate}"; break; }
@@ -81,14 +98,17 @@ if [[ -n "${adapter}" ]]; then
   count="$(find "${adapter}" -name '*.dylib' | wc -l | tr -d ' ')"
   if [[ "${count}" -gt 0 ]]; then
     ok "CrAdapter/          -> ${adapter#"${REPO_ROOT}/"} (${count} dylibs)"
+    for lib in libCr_PTP_IP libCr_PTP_USB libssh2 libusb-1.0.0; do
+      find "${adapter}" -name "${lib}*.dylib" | grep -q . \
+        || bad "CrAdapter/${lib}*.dylib missing"
+    done
     find "${adapter}" -name 'libCr_PTP_IP*.dylib' | grep -q . \
-      && ok "libCr_PTP_IP        -> present (this is the one Ethernet control needs)" \
-      || bad "libCr_PTP_IP*.dylib missing — Ethernet transport will not work"
+      && ok "libCr_PTP_IP        -> present (this is the one Ethernet control needs)"
   else
     bad "CrAdapter/ exists but contains no dylibs"
   fi
 else
-  bad "CrAdapter/ not found — it must sit beside libCr_Core.dylib, not be flattened"
+  bad "CrAdapter/ not found — it must sit beside libCr_Core.dylib in the vendor tree"
 fi
 
 # --- Gatekeeper quarantine --------------------------------------------------
