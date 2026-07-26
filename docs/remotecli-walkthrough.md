@@ -8,12 +8,33 @@ Do this with **one FX30** only.
 
 ---
 
-## Two hardcoded values that will stop you
+## Patch it first — it will not build or connect unmodified
 
-Read these before you start, because both fail in ways that look like a network
-or camera problem.
+Two problems, both confirmed on our own hardware. `scripts/patch-remotecli.sh`
+fixes them; this section explains what it changes and why, so the edits are not
+magic.
 
-### 1. The username is hardcoded to `admin`
+### 1. It does not compile on current Xcode
+
+`RemoteCli.cpp:53`, inside an `#if defined(__APPLE__)` block:
+
+```cpp
+std::exit(EXIT_FAILURE);
+return;                    // <- unreachable, and non-void main() must return a value
+```
+
+Dead code — `std::exit()` never returns — but AppleClang 21 promotes
+`-Wreturn-mismatch` to a hard error, so the build fails with:
+
+```
+error: non-void function 'main' should return a value [-Wreturn-mismatch]
+```
+
+Only macOS builds reach it, which is why Sony has not caught it. The patch makes
+it `return EXIT_FAILURE;`. `EXIT_FAILURE` is already in scope — it is used on the
+preceding line.
+
+### 2. The access-authentication username is hardcoded to `admin`
 
 `CameraDevice.cpp:153`
 
@@ -21,57 +42,60 @@ or camera problem.
 const char* inputId = "admin";
 ```
 
-The sample prompts for a *password* but never for a username — it always sends
-`admin`. Check the username on the camera's `Access Authen. Info` screen. If it
-is not `admin`, the sample cannot connect until that line is edited.
+The sample prompts for a *password* but never a username — it always sends
+`admin`, and there is no flag or environment variable to override it.
 
-**Report the username to me** either way; it determines whether `camd` needs it
-as config or can assume a constant.
+**Sony's cameras generate a random per-body username.** Ours is not `admin`, so
+connection fails outright until this is corrected. Read the real value off
+`MENU → Network → Network Option → Access Authen. Info` and pass it to the patch
+script.
 
-### 2. The Ethernet model is hardcoded to the FX6
+This matters beyond the sample: it means `camd` must carry a **per-camera
+username** in config, not assume a constant. Already reflected in
+`config/cambridge.example.json`.
+
+### 3. Optional — the Ethernet model hint is hardcoded to the FX6
 
 `RemoteCli.cpp:164`
 
 ```cpp
-SDK::CrCameraDeviceModelList ethernetModel = SDK::CrCameraDeviceModelList::CrCameraDeviceModel_ILME_FX6;
+SDK::CrCameraDeviceModelList ethernetModel = ...CrCameraDeviceModel_ILME_FX6;
 ```
 
-That model hint is passed to `CreateCameraObjectInfoEthernetConnection()`. We are
-connecting to an FX30, not an FX6. If the connect fails, **this is the first
-thing to change** — the enum values exist in `CRSDK/CrDefines.h:109-110`:
+Passed to `CreateCameraObjectInfoEthernetConnection()`. We are on an FX30. The
+enums are at `CRSDK/CrDefines.h:109-110` (`..._ILME_FX3`, `..._ILME_FX30`).
 
-```cpp
-CrCameraDeviceModel_ILME_FX3,
-CrCameraDeviceModel_ILME_FX30,
-```
+**Try the FX6 default first.** Whether that hint is enforced or merely advisory
+tells us how `camd` should identify bodies in Phase 1, and that is worth one
+failed connect attempt to learn. Add `--model FX30` only if it fails.
 
-So edit line 164 to `CrCameraDeviceModel_ILME_FX30` and rebuild
-(`./scripts/build-remotecli.sh ~/Downloads/RemoteCli`).
-
-Try it unedited first — it is useful to know whether the hint is enforced or
-merely advisory, because that shapes how `camd` identifies bodies in Phase 1.
-
-Incidentally the MAC address is dummy data too (`CC:CC:CC:CC:CC:CC`,
-`RemoteCli.cpp:162`) and the sample connects with it, which suggests the SDK does
-not validate that field for Ethernet connections.
+Note the MAC address is dummy data too (`CC:CC:CC:CC:CC:CC`, `RemoteCli.cpp:162`)
+and the sample connects with it — so the SDK appears not to validate that field
+for Ethernet connections, even though the camera displays a real MAC.
 
 ---
 
-## The sequence
+## Build
 
-```
+```sh
+./scripts/patch-remotecli.sh --user <username-from-camera> ~/Downloads/RemoteCli
 ./scripts/build-remotecli.sh ~/Downloads/RemoteCli
 cd build/remotecli && ./RemoteCli
 ```
 
+The patch script is idempotent and saves `*.cambridge-orig` backups, so re-running
+it or adding `--model FX30` later is safe.
+
+## The sequence
+
 | Prompt | Enter | Notes |
 |---|---|---|
 | `Please enter the IP address` | the camera's static IP | e.g. `10.0.0.51` |
-| `Is it an SSH connection? (y/n)` | **`y`** | "SSH" is Sony's name for the access-authentication encrypted channel. Answer `y` whenever `Access Authen. Settings` is On. |
+| `Is it an SSH connection? (y/n)` | **`y`** | "SSH" is Sony's name for the access-authentication encrypted channel, not a separate transport. Answer `y` whenever `Access Authen. Settings` is On. |
 | `Connect to camera with input number...` | **`1`** | only one camera is listed |
 | `<< TOP-MENU >>` | **`1`** | Connect (Remote Control Mode) |
-| `fingerprint: ...` `Are you sure you want to continue connecting? (y/n)` | **`y`** | the fingerprint is fetched from the camera; it should match `Access Authen. Info` on the body — **check that it does** |
-| `Please SSH password >` | the password from `Access Authen. Info` | masked with `*` as you type, so it will look like nothing is happening |
+| `fingerprint: ...` `Are you sure you want to continue connecting? (y/n)` | **`y`** | the fingerprint is fetched from the camera over the wire; it should match the one on `Access Authen. Info` — **compare them**, that is the whole point of the field |
+| `Please SSH password >` | the password from `Access Authen. Info` | masked with `*` as you type, so it will look like nothing is happening. The username is *not* prompted — it comes from the patch above. |
 | `<< REMOTE-MENU >>` | **`1`** | Shutter/Rec Operation Menu |
 | `<< Shutter/Rec Operation Menu >>` | **`7`** | **Movie Rec Button (Toggle)** — this is the acceptance test |
 
@@ -98,11 +122,12 @@ Not required to pass Phase 0, but each answer saves Phase 1 guesswork:
 
 ## What to send me
 
-1. Whether it connected unedited, or needed the `ethernetModel` change
-2. The **username** from `Access Authen. Info` (is it `admin`?)
-3. Whether the fingerprint shown by the CLI matched the camera's screen
-4. Any `Failed to connect: 0x...` code, verbatim — `CRSDK/CrError.h` decodes
-   these precisely and the specific value tells us a lot
-5. Anything in the camera menus that did not match `docs/camera-setup.md`
+1. Whether it connected with the FX6 model hint, or needed `--model FX30`
+2. Whether the fingerprint shown by the CLI matched the camera's screen
+3. Any `Failed to connect: 0x...` code, verbatim — `CRSDK/CrError.h` decodes
+   these precisely and the specific value narrows the cause a lot
+4. Anything in the camera menus that did not match `docs/camera-setup.md`
 
-Do not send me the password.
+**Not the password.** It goes in `config/cambridge.json`, which is git-ignored.
+Sony's `Access Authen. Info` screen is regenerable — if a password has been
+shown around, reinitialising network settings on the body rotates it.

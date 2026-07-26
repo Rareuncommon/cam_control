@@ -47,6 +47,7 @@ Work through [`docs/camera-setup.md`](camera-setup.md) on a single body:
 Exact keypress sequence, and the two hardcoded values in Sony's sample that will
 stop you: [`docs/remotecli-walkthrough.md`](remotecli-walkthrough.md).
 
+- [ ] `./scripts/patch-remotecli.sh --user <username-from-camera> ~/Downloads/RemoteCli` — required: the sample does not compile on current Xcode and hardcodes the wrong username
 - [ ] `./scripts/build-remotecli.sh ~/Downloads/RemoteCli` builds Sony's sample
 - [ ] `RemoteCli` accepts the camera by IP, SSH connection = `y`
 - [ ] Fingerprint shown by the CLI matches the camera's `Access Authen. Info` screen

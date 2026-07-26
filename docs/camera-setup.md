@@ -120,20 +120,32 @@ these credentials on connect.
 - ✅ `MENU → (Network) → [Network Option] → [Access Authen. Info]` — displays the
   **username, password, MAC address, and fingerprint** for that body. *(firmware Ver. 2.00+)*
 
-Read the credentials off each camera and put them in `config/cambridge.json`
-(git-ignored — never commit them). Sony's own guidance is to treat this screen
-as sensitive.
+✅ **Confirmed on hardware:** the camera generates a **random per-body username**
+as well as a password — it is *not* a fixed value like `admin`. This is why
+`config/cambridge.example.json` carries a username per camera rather than one
+global setting, and why Sony's own `RemoteCli` sample cannot connect unpatched
+(it hardcodes `admin` — see [`remotecli-walkthrough.md`](remotecli-walkthrough.md)).
 
-🔍 Open question for hardware bring-up: whether the password is stable across
-power cycles and firmware updates, or regenerates. If it regenerates, our
-config needs a re-pairing workflow rather than static credentials — flag it
-immediately if you see it change.
+The screen shows: **MAC address, username, password, and fingerprint.**
 
-| Body | Username | Password | Fingerprint |
+> **Credentials do not live in this repo.** Read them off each body straight into
+> `config/cambridge.json`, which is git-ignored. Do not fill them into a table
+> here, and do not paste them into chat or tickets — treat the whole screen as
+> sensitive, which is Sony's own guidance. If a password does get exposed,
+> reinitialising the body's network settings rotates it.
+
+🔍 Open question for bring-up: whether the credentials are stable across power
+cycles and firmware updates, or regenerate. If they regenerate, `camd` needs a
+re-pairing workflow rather than static config — flag it immediately if you see a
+value change.
+
+Track *which* bodies are configured here; the values themselves go in the config file:
+
+| Body | Access auth enabled | Credentials in config? | MAC recorded |
 |---|---|---|---|
-| FX3 | | *(in config, not here)* | |
-| FX30 #1 | | | |
-| FX30 #2 | | | |
+| FX3 | ☐ | ☐ | ☐ |
+| FX30 #1 | ☐ | ☐ | ☐ |
+| FX30 #2 | ☐ | ☐ | ☐ |
 
 ---
 
