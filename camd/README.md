@@ -91,6 +91,56 @@ Design consequences for Phase 1 and 2:
 - **Access authentication is discoverable**, not something to configure blind:
   `GetSSHsupport()` tells us whether a body expects credentials before we try.
 
+## Record control — the FX30 has no toggle command
+
+Confirmed on hardware during Phase 0.
+
+`CrCommandId_MovieRecButtonToggle` is **not supported on the FX30**. Sony's sample
+gates it on the `MovieRecButtonToggleEnableStatus` property, and on our body that
+property reports `writable == -1`, so the sample prints *"Movie Rec Button(Toggle)
+is not supported"* and refuses. Record works only via `CrCommandId_MovieRecord`
+with `CrCommandParam_Down` / `CrCommandParam_Up` — emulating a physical button
+press.
+
+**This makes `recordStart` and `recordStop` dangerous to implement naively.** Our
+REST API promises intent ("start recording"), but the camera only offers "press
+the REC button", and a press on a Sony body *flips* the recording state. A
+duplicate command — a double-tap in the UI, a re-sent WebSocket message, an
+operator hitting record on a camera that is already rolling — would **stop a
+recording that should be running.** Mid-service, that is the worst failure this
+project can produce.
+
+So the daemon must make record commands state-checked, not fire-and-forget:
+
+1. Read `CrDeviceProperty_RecordingState` first.
+2. Only send the button press if the current state differs from the requested one.
+3. Re-read to confirm the camera actually changed state, and report the real
+   outcome — never assume the press worked.
+
+`CrDeviceProperty_RecordingState` (`CrMovie_Recording_State`, header line 1447)
+reports:
+
+| Value | Meaning |
+|---|---|
+| `0x0000` | `Not_Recording` |
+| `0x0001` | `Recording` |
+| `0x0002` | **`Recording_Failed`** |
+| `0x0003` | `IntervalRec_Waiting_Record` |
+
+`Recording_Failed` is exactly the kind of state that must fail loud in the UI: the
+camera believed it was told to record and could not. A red "REC" indicator driven
+only by "we sent the command" would show a lie. Drive the indicator from this
+property.
+
+Open question for Phase 1, needs one hardware check: whether `Down` alone starts
+recording (with `Up` merely releasing the virtual button), or whether `Down` and
+`Up` map to start and stop respectively. The state-checked design above is
+correct either way, but the exact command sequence per action depends on it.
+
+Also unexplored: `CrCommandId_MovieRecButtonToggle2` exists in `CrCommandData.h`
+as a second toggle variant with no menu entry in Sony's sample. Worth probing
+once — if the FX30 supports it, it would remove the read-before-write dance.
+
 ## Build
 
 Requires the Sony SDK vendored first — see [`docs/sdk-install.md`](../docs/sdk-install.md).

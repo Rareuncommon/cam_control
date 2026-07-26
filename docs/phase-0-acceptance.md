@@ -1,4 +1,4 @@
-# Phase 0 — acceptance
+# Phase 0 — acceptance ✅ PASSED
 
 **Goal:** prove the toolchain, the SDK, the network, and the camera menu
 configuration all work *before* we write a line of our own camera code.
@@ -6,9 +6,21 @@ configuration all work *before* we write a line of our own camera code.
 **Acceptance test:** Sony's own `RemoteCli` sample app starts and stops
 recording on one FX30 over wired Ethernet.
 
-Nothing in Phase 1 starts until that passes. If it fails, the fault is in the
-environment, and the whole point of this phase is to find that out while it is
-still cheap.
+**Result: passed.** SDK 2.02.00 built and initialised on macOS 26 / Apple
+Silicon, auto-discovered the FX30 over wired Ethernet, authenticated with
+access authentication, and started and stopped recording.
+
+What the phase surfaced, all recorded in [`camd/README.md`](../camd/README.md):
+
+- The SDK **auto-discovers** cameras on the LAN and identifies them by **MAC**,
+  reporting model, IP, and access-auth requirement itself — so `camd` should
+  discover and match on MAC rather than construct cameras from config IPs.
+- Sony generates a **random per-body username**, so credentials are per-camera.
+- The **FX30 does not support the record toggle command.** Record must be driven
+  as discrete button Down/Up events, which means `camd` has to read
+  `RecordingState` before acting or risk stopping a live recording.
+- Sony's sample needs two patches to build and connect at all
+  (`scripts/patch-remotecli.sh`).
 
 ---
 

@@ -115,7 +115,18 @@ The fingerprint and password steps appear automatically: the camera itself
 reports whether access authentication is on, via `GetSSHsupport()` on the
 enumerated object. There is no y/n question about SSH on this path.
 | `<< REMOTE-MENU >>` | **`1`** | Shutter/Rec Operation Menu |
-| `<< Shutter/Rec Operation Menu >>` | **`7`** | **Movie Rec Button (Toggle)** — this is the acceptance test |
+| `<< Shutter/Rec Operation Menu >>` | **`6`** | **Movie Rec Button** — see below |
+| `Operate the movie recording button ? (y/n)` | **`y`** | |
+| `[1] Up  [2] Down` | **`2`** then, on a second pass, **`1`** | Down = press, Up = release |
+
+> **Option `7` (Movie Rec Button Toggle) does not work on the FX30** — it reports
+> *"Movie Rec Button(Toggle) is not supported"*. Confirmed on our hardware. Record
+> must be driven as discrete button events via option `6`. The full sequence that
+> works is `6` `y` `2` (down), then `6` `y` `1` (up).
+>
+> This is not just a sample-app quirk — it constrains `camd`'s record
+> implementation significantly. See "Record control" in
+> [`camd/README.md`](../camd/README.md).
 
 Press `7` again to stop recording. Option `6` is a non-toggling Movie Rec Button
 if the toggle misbehaves.

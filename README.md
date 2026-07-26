@@ -13,21 +13,17 @@ production VLAN, static IPs
 
 ## Current status
 
-**Phase 0 — environment and SDK bring-up.** Nothing controls a camera yet. The
-repo is scaffolded and the Phase 0 acceptance test is written but not yet run
-against hardware.
+**Phase 1 — `camd` core.**
 
-Next action is yours, at the machine: work through
+Phase 0 passed on hardware: SDK 2.02.00 built on macOS 26 / Apple Silicon,
+auto-discovered an FX30 over wired Ethernet, authenticated with access
+authentication, and started and stopped recording via Sony's own sample app.
+Details and the findings that came out of it:
 [`docs/phase-0-acceptance.md`](docs/phase-0-acceptance.md).
-
-The SDK side of Phase 0 is verified: SDK 2.02.00's headers, symbols, library
-layout and runtime load paths have all been checked, and `linkcheck.cpp`
-compiles clean against the real headers. What remains is the hardware half —
-building Sony's `RemoteCli` on the Mac and rolling record on a camera.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | SDK verified; awaiting hardware test |
+| 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | ✅ **passed** |
 | 1 | `camd` core — single camera, property get/set, record, over REST | not started |
 | 2 | Multi-camera + connection lifecycle; kill tests 5/5 | not started |
 | 3 | WebSocket events + Node bridge with mirrored state | not started |
@@ -105,7 +101,10 @@ at 9am on a Sunday.
    fill in IPs, credentials, and ports. The real file is git-ignored because it
    holds camera passwords.
 4. **Verify** — `./scripts/check-sdk.sh`, then build and run `camd-linkcheck`.
-5. **Phase 0 test** — [`docs/phase-0-acceptance.md`](docs/phase-0-acceptance.md).
+5. **Phase 0 test** — [`docs/phase-0-acceptance.md`](docs/phase-0-acceptance.md),
+   driving Sony's sample per
+   [`docs/remotecli-walkthrough.md`](docs/remotecli-walkthrough.md). Already
+   passed once; repeat it on a new machine or after an SDK upgrade.
 
 ---
 
