@@ -1,0 +1,79 @@
+{
+  "$comment": [
+    "Copy to config/cambridge.json and fill in. The real file is git-ignored",
+    "because it holds camera access-authentication credentials.",
+    "Read username/password off each body at:",
+    "MENU -> (Network) -> [Network Option] -> [Access Authen. Info]"
+  ],
+
+  "camd": {
+    "$comment": "The C++ daemon. Loopback only by design — nothing outside this Mac talks to it directly.",
+    "bind": "127.0.0.1",
+    "restPort": 8787,
+    "wsPath": "/ws",
+    "$comment_ws": "WebSocket shares the REST port via HTTP upgrade; one port, one listener.",
+
+    "connection": {
+      "$comment": "Phase 2 lifecycle tuning. A dead camera must never affect the other two.",
+      "heartbeatIntervalMs": 2000,
+      "heartbeatTimeoutMs": 6000,
+      "reconnectBackoffMs": [1000, 2000, 4000, 8000, 15000],
+      "reconnectBackoffMaxMs": 15000,
+      "$comment_backoff": "Caps at 15s so a camera that comes back mid-service rejoins fast. The brief's target is reconnect within ~10s of link restore."
+    }
+  },
+
+  "cambridge": {
+    "$comment": "The Node app server and web UI. Binds all interfaces so the iPad on the production VLAN can reach it.",
+    "bind": "0.0.0.0",
+    "port": 8088,
+    "camdUrl": "ws://127.0.0.1:8787/ws"
+  },
+
+  "logging": {
+    "$comment": "Every state change, timestamped, to a rotating file. This is what we read on Monday morning when something went wrong on Sunday.",
+    "dir": "./logs",
+    "level": "info",
+    "rotate": {
+      "maxSizeMb": 20,
+      "maxFiles": 30
+    }
+  },
+
+  "cameras": [
+    {
+      "id": "cam1",
+      "label": "FX3 — Wide",
+      "model": "ILME-FX3",
+      "ip": "10.0.0.0",
+      "auth": {
+        "username": "REPLACE_ME",
+        "password": "REPLACE_ME"
+      },
+      "$comment_fingerprint": "Access Authen. Info also shows a fingerprint. Whether the SDK needs it is a Phase 1 open question; record it here once we know.",
+      "fingerprint": ""
+    },
+    {
+      "id": "cam2",
+      "label": "FX30 — Center",
+      "model": "ILME-FX30",
+      "ip": "10.0.0.0",
+      "auth": {
+        "username": "REPLACE_ME",
+        "password": "REPLACE_ME"
+      },
+      "fingerprint": ""
+    },
+    {
+      "id": "cam3",
+      "label": "FX30 — Tight",
+      "model": "ILME-FX30",
+      "ip": "10.0.0.0",
+      "auth": {
+        "username": "REPLACE_ME",
+        "password": "REPLACE_ME"
+      },
+      "fingerprint": ""
+    }
+  ]
+}

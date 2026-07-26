@@ -1,0 +1,39 @@
+# --- Sony Camera Remote SDK -------------------------------------------------
+# The SDK is licensed per-developer and must not be redistributed. Everything
+# under vendor/CrSDK/ is ignored except the placement instructions.
+vendor/CrSDK/*
+!vendor/CrSDK/README.md
+
+# Sony's RemoteCli sample, unpacked for Phase 0
+vendor/RemoteCli/
+
+# --- Real config (contains camera credentials) ------------------------------
+config/cambridge.json
+config/*.local.json
+
+# --- Build output -----------------------------------------------------------
+build/
+camd/build/
+*.o
+*.dylib
+*.so
+*.a
+.cache/
+compile_commands.json
+
+# --- Node -------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+.npm/
+
+# --- Logs / runtime ---------------------------------------------------------
+logs/
+*.log
+run/
+*.pid
+
+# --- macOS / editors --------------------------------------------------------
+.DS_Store
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd service definition for camd.
+
+  NOT LOADABLE YET — camd itself is Phase 1. This is scaffolded now so the
+  deployment shape is settled early, and so Phase 1 has somewhere to land.
+
+  Install (once camd exists):
+    1. Edit the paths below to match the real checkout location.
+    2. cp launchd/studio.cambridge.camd.plist ~/Library/LaunchAgents/
+    3. launchctl load -w ~/Library/LaunchAgents/studio.cambridge.camd.plist
+    4. launchctl list | grep cambridge
+
+  A LaunchAgent (per-user, ~/Library/LaunchAgents) rather than a LaunchDaemon
+  (system, root) on purpose: camd needs no privileges, and running it as the
+  logged-in operator keeps log files and the config readable without sudo.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>studio.cambridge.camd</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/CHANGEME/cam_control/camd/build/camd</string>
+        <string>--config</string>
+        <string>/Users/CHANGEME/cam_control/config/cambridge.json</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/CHANGEME/cam_control</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it ever exits. The daemon is supposed to fail soft and stay
+         up, but if it does die during a service, come straight back. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Do not hammer the CPU if camd is crash-looping on a bad config. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- Crash output only. camd's own rotating log is configured in
+         config/cambridge.json and is the postmortem record. -->
+    <key>StandardOutPath</key>
+    <string>/Users/CHANGEME/cam_control/logs/camd.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/CHANGEME/cam_control/logs/camd.launchd.err.log</string>
+</dict>
+</plist>
