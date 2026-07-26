@@ -36,7 +36,7 @@ Work through [`docs/camera-setup.md`](camera-setup.md) on a single body:
 ### C. SDK on the Mac
 
 - [ ] Repo cloned, and your shell is `cd`'d into the checkout — not `~`
-- [ ] `./scripts/preflight.sh` prints `Preflight OK` (checks Xcode CLT, Homebrew, cmake 3.24+, autoconf, automake, libtool)
+- [ ] `./scripts/preflight.sh` prints `Preflight OK` — needs only Xcode CLT and CMake 3.24+ (Homebrew optional)
 - [ ] SDK placed per [`docs/sdk-install.md`](sdk-install.md) — everything comes from `RemoteCli.zip`
 - [ ] `./scripts/check-sdk.sh` prints `SDK layout OK`
 - [ ] `cmake -S camd -B camd/build && cmake --build camd/build --target camd-linkcheck`

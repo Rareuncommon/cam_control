@@ -88,9 +88,14 @@ at 9am on a Sunday.
    cd ~/cam_control
    ./scripts/preflight.sh
    ```
-   `preflight.sh` installs nothing. It checks you are in the right directory and
-   that Xcode CLT, Homebrew, cmake 3.24+, autoconf, automake and libtool are
-   present, printing the exact fix command for anything missing.
+   `preflight.sh` installs nothing — it checks you are in the right directory and
+   that the toolchain is present, printing the exact fix command for any gap.
+
+   The build needs only **Xcode command line tools** (`xcode-select --install`)
+   and **CMake 3.24+**. Homebrew is optional: CMake can equally come from the
+   universal `.dmg` at <https://cmake.org/download/>. Sony's README also lists
+   autoconf, automake and libtool, but nothing in the build path uses them — the
+   bundled OSS dependencies ship prebuilt.
 1. **Cameras** — configure each body per [`docs/camera-setup.md`](docs/camera-setup.md).
    Read the access-authentication credentials off each one while you are there.
 2. **SDK** — download and place the Sony Camera Remote SDK per

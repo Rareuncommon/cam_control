@@ -52,45 +52,41 @@ else
   fixit "xcode-select --install"
 fi
 
-# --- Homebrew ---------------------------------------------------------------
-if command -v brew >/dev/null 2>&1; then
-  ok "Homebrew -> $(command -v brew)"
-else
-  bad "Homebrew not found"
-  fixit '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-  echo "      then, on Apple Silicon, add it to your shell:"
-  echo '        echo '"'"'eval "$(/opt/homebrew/bin/brew shellenv)"'"'"' >> ~/.zprofile'
-  echo '        eval "$(/opt/homebrew/bin/brew shellenv)"'
-fi
-
-# --- build tools ------------------------------------------------------------
-# Sony's README asks for cmake, autoconf, automake and libtool.
-missing=()
-for tool in cmake autoconf automake libtool; do
-  if command -v "${tool}" >/dev/null 2>&1; then
-    ver=""
-    case "${tool}" in
-      cmake) ver=" $(cmake --version 2>/dev/null | head -1 | awk '{print $3}')" ;;
-    esac
-    ok "${tool}${ver}"
-  else
-    bad "${tool} not found"
-    missing+=("${tool}")
-  fi
-done
-if [[ ${#missing[@]} -gt 0 ]]; then
-  fixit "brew install ${missing[*]}"
-fi
-
-# CMake 3.24+ is what camd/CMakeLists.txt requires.
+# --- cmake ------------------------------------------------------------------
+# The only hard build dependency beyond the Xcode toolchain. Verified against
+# Sony's RemoteCli build: it is pure CMake plus a C++ compiler linking prebuilt
+# dylibs. Sony's README also lists autoconf/automake/libtool, but nothing in
+# the build path uses them — they would only matter when building the bundled
+# OSS dependencies from source, and Sony ships those prebuilt. Homebrew is
+# therefore optional; it is just one of several ways to get cmake.
 if command -v cmake >/dev/null 2>&1; then
-  cmv="$(cmake --version | head -1 | awk '{print $3}')"
+  cmv="$(cmake --version 2>/dev/null | head -1 | awk '{print $3}')"
   major="${cmv%%.*}"; rest="${cmv#*.}"; minor="${rest%%.*}"
   if (( major < 3 || (major == 3 && minor < 24) )); then
     bad "cmake ${cmv} is too old — camd needs 3.24 or later"
-    fixit "brew upgrade cmake"
+    fixit "upgrade cmake (brew upgrade cmake, or reinstall from cmake.org)"
+  else
+    ok "cmake ${cmv} -> $(command -v cmake)"
   fi
+elif [[ -x /Applications/CMake.app/Contents/bin/cmake ]]; then
+  bad "CMake.app is installed but its cmake is not on PATH"
+  fixit 'echo '"'"'export PATH="/Applications/CMake.app/Contents/bin:$PATH"'"'"' >> ~/.zprofile'
+  echo "      then open a new terminal tab, or run that export in this one"
+else
+  bad "cmake not found — this is the only build tool you still need"
+  echo "      Either of these works; the first avoids installing Homebrew:"
+  echo "        1. Download the macOS universal .dmg from https://cmake.org/download/"
+  echo "           drag CMake.app to /Applications, then add it to PATH:"
+  echo '           echo '"'"'export PATH="/Applications/CMake.app/Contents/bin:$PATH"'"'"' >> ~/.zprofile'
+  echo "        2. Install Homebrew, then: brew install cmake"
 fi
+
+# Advisory only — present in Sony's README, unused by this build path.
+for tool in autoconf automake libtool; do
+  command -v "${tool}" >/dev/null 2>&1 \
+    && ok "${tool} (not required, but present)"
+done
+command -v brew >/dev/null 2>&1 && ok "Homebrew -> $(command -v brew) (optional)"
 
 echo
 
