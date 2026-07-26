@@ -44,9 +44,13 @@ Work through [`docs/camera-setup.md`](camera-setup.md) on a single body:
 
 ### D. The actual acceptance test
 
+Exact keypress sequence, and the two hardcoded values in Sony's sample that will
+stop you: [`docs/remotecli-walkthrough.md`](remotecli-walkthrough.md).
+
 - [ ] `./scripts/build-remotecli.sh ~/Downloads/RemoteCli` builds Sony's sample
-- [ ] `RemoteCli` enumerates or accepts the camera by IP
-- [ ] Connects, supplying the access-authentication username and password
+- [ ] `RemoteCli` accepts the camera by IP, SSH connection = `y`
+- [ ] Fingerprint shown by the CLI matches the camera's `Access Authen. Info` screen
+- [ ] Connects, using the access-authentication password (username is hardcoded to `admin` — verify that matches the camera)
 - [ ] **Starts recording** — confirm the red tally / REC indicator on the camera body itself, not just the CLI's output
 - [ ] **Stops recording**
 - [ ] Clip is present on the card
