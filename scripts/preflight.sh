@@ -19,9 +19,15 @@ echo
 # The single most common mistake: running the documented commands from ~ instead
 # of the checkout. Relative paths then create stray directories in $HOME.
 if [[ "$(pwd)" != "${REPO_ROOT}" ]]; then
-  warn "your shell is in $(pwd), not the repo root"
+  # A hard failure, not a warning. This has bitten twice, and it is insidious
+  # because git commands keep working from a subdirectory — so the mistake stays
+  # invisible until cmake or node resolves a relative path against the wrong
+  # place and reports something that looks unrelated.
+  bad "your shell is in $(pwd), not the repo root"
   fixit "cd ${REPO_ROOT}"
-  echo "      (every command in the docs uses paths relative to the repo root)"
+  echo "      Every command in the docs uses paths relative to the repo root."
+  echo "      Note git works fine from a subdirectory, so a successful 'git pull'"
+  echo "      here does not mean the other commands will resolve correctly."
 else
   ok "shell is at the repo root"
 fi
@@ -79,6 +85,28 @@ else
   echo "           drag CMake.app to /Applications, then add it to PATH:"
   echo '           echo '"'"'export PATH="/Applications/CMake.app/Contents/bin:$PATH"'"'"' >> ~/.zprofile'
   echo "        2. Install Homebrew, then: brew install cmake"
+fi
+
+# --- node -------------------------------------------------------------------
+# Required by cambridge (the app server and web UI), not by camd. The daemon
+# builds and runs without it; the browser panel does not.
+if command -v node >/dev/null 2>&1; then
+  nodev="$(node --version 2>/dev/null | sed 's/^v//')"
+  nodemajor="${nodev%%.*}"
+  if [[ "${nodemajor}" -ge 22 ]]; then
+    ok "node ${nodev} -> $(command -v node)"
+  else
+    bad "node ${nodev} is too old — cambridge needs 22 or later"
+    echo "      It uses Node's built-in WebSocket client and test runner, which is"
+    echo "      how cambridge avoids having any npm dependencies at all."
+    fixit "install Node 22 LTS from https://nodejs.org/en/download (macOS arm64 .pkg)"
+  fi
+else
+  bad "node not found — needed for cambridge (the web UI); camd itself does not need it"
+  echo "      Either of these works; the first avoids installing Homebrew:"
+  echo "        1. Download the macOS Apple Silicon .pkg from https://nodejs.org/en/download"
+  echo "           (take the LTS build, 22 or later) and run the installer"
+  echo "        2. Install Homebrew, then: brew install node"
 fi
 
 # Advisory only — present in Sony's README, unused by this build path.
