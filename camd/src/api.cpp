@@ -34,7 +34,8 @@ void applyOutcome(const std::shared_ptr<Outcome>& out, http::Response& res) {
 
 }  // namespace
 
-Api::Api(Registry& registry, ws::Hub& hub) : registry_(registry), hub_(hub) {}
+Api::Api(Registry& registry, ws::Hub& hub, bool fakeMode)
+    : registry_(registry), hub_(hub), fakeMode_(fakeMode) {}
 
 void Api::install(http::Server& server, const std::string& wsPath) {
     const int timeoutMs = registry_.config().connection.commandTimeoutMs;
@@ -347,6 +348,27 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             std::this_thread::sleep_for(std::chrono::milliseconds(66));  // ~15fps
         }
     });
+
+    // --- kill-test rehearsal (fake backend only) ----------------------------
+    // Lets the Phase 2 disconnect behaviour be exercised end to end — daemon,
+    // Node mirror and UI banner — without unplugging anything. Registered only
+    // under --fake, so it cannot exist on the machine driving a real service.
+    if (fakeMode_) {
+        server.route("POST", "/debug/link/:mac",
+                     [](const http::Request& req, http::Response& res) {
+            json::Value parsed;
+            std::string perr;
+            json::parse(req.body, parsed, perr);
+            const bool down = parsed.isObject() ? parsed["down"].asBool(true) : true;
+            const std::string mac = req.param("mac");
+            fakeBackendSetLinkDown(mac, down);
+            json::Value v = json::Value::makeObject();
+            v.set("mac", json::Value(mac));
+            v.set("linkDown", json::Value(down));
+            res.json(200, v.dump());
+        });
+        LOG_WARN("api", "--fake: /debug/link/:mac is enabled for kill-test rehearsal");
+    }
 
     // --- websocket ----------------------------------------------------------
     server.webSocket(wsPath, [this](const http::Request&, http::Connection&& conn) {

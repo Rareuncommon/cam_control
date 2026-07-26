@@ -273,6 +273,30 @@ TEST(camera_reconnects_after_link_is_restored) {
     CHECK(waitFor([w2] { return w2->snapshot().state == ConnState::Connected; }, 5000));
 }
 
+TEST(reappearing_on_the_network_cancels_a_long_backoff) {
+    // Once backoff reaches its ceiling, a camera that recovers would otherwise sit
+    // idle for the rest of that interval — up to 15s in production config, which
+    // blows the "rejoin within ~10s of link restore" target for the exact case
+    // that matters: a body that has been off long enough to be power-cycled.
+    // Discovery seeing it return must cancel the wait.
+    Rig rig;
+    CHECK(rig.waitAllConnected());
+    auto* w2 = rig.registry->find("cam2");
+
+    fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
+    // Let several failed attempts accumulate so the backoff has climbed.
+    CHECK(waitFor([w2] { return w2->snapshot().reconnectAttempts >= 2; }, 4000));
+
+    fakeBackendSetLinkDown("AA:BB:CC:00:00:02", false);
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(waitFor([w2] { return w2->snapshot().state == ConnState::Connected; }, 5000));
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    // Must be bounded by the discovery interval, not by the backoff ceiling.
+    CHECK(elapsed < 2000);
+}
+
 TEST(requests_against_an_offline_camera_answer_immediately) {
     // A disconnected camera must produce a fast honest answer rather than making
     // every caller wait out the command timeout — otherwise the UI stalls whenever
@@ -303,6 +327,54 @@ TEST(reconnect_action_is_accepted_while_connected) {
     w->requestReconnect();
     // It should drop and come back without help.
     CHECK(waitFor([w] { return w->snapshot().state == ConnState::Connected; }, 5000));
+}
+
+TEST(a_dropped_camera_does_not_let_another_entry_steal_its_body) {
+    // Regression: with one FX30 unplugged, the surviving FX30 is briefly the only
+    // unclaimed body of its model. Matching per-camera let whichever config entry
+    // was examined first take it — including the entry for the camera that is
+    // actually gone — so two cards ended up pointing at one body. Caught by
+    // noticing two cameras reporting the same IP in the UI.
+    Rig rig;
+    CHECK(rig.waitAllConnected());
+
+    fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
+    auto* w2 = rig.registry->find("cam2");
+    auto* w3 = rig.registry->find("cam3");
+    CHECK(waitFor([w2] { return w2->snapshot().state != ConnState::Connected; }, 3000));
+
+    // Give discovery several cycles to do the wrong thing if it is going to.
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+    const auto s2 = w2->snapshot();
+    const auto s3 = w3->snapshot();
+
+    // cam3 keeps its own body, still connected and still on its own MAC.
+    CHECK_EQ(s3.state == ConnState::Connected, true);
+    CHECK_EQ(s3.mac, std::string("AA:BB:CC:00:00:03"));
+    // cam2 must not have adopted cam3's camera.
+    CHECK(s2.mac != s3.mac);
+    CHECK(s2.ip != s3.ip);
+    CHECK(s2.state != ConnState::Connected);
+}
+
+TEST(a_pinned_mac_never_falls_back_to_a_model_match) {
+    // A config entry that names a MAC is pinned to that body. Binding it to
+    // whatever camera of the same model happens to be reachable would be worse
+    // than leaving it offline, because the operator would be controlling the wrong
+    // camera without knowing.
+    Rig rig;
+    CHECK(rig.waitAllConnected());
+
+    fakeBackendSetLinkDown("AA:BB:CC:00:00:01", true);   // the only FX3
+    auto* w1 = rig.registry->find("cam1");
+    CHECK(waitFor([w1] { return w1->snapshot().state != ConnState::Connected; }, 3000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    const auto s1 = w1->snapshot();
+    // It stays on its own MAC and stays disconnected rather than adopting an FX30.
+    CHECK_EQ(s1.mac, std::string("AA:BB:CC:00:00:01"));
+    CHECK(s1.state != ConnState::Connected);
 }
 
 TEST(snapshot_is_readable_while_a_camera_is_wedged) {

@@ -3,11 +3,16 @@
 Node.js service that talks to `camd` over its WebSocket API, owns all business
 logic, and serves the browser control panel.
 
-**Status: not started.** This lands in Phase 3 (event bridge + mirrored state
-model) and Phase 4 (control panel). The directory exists so the shape of the
-repo is settled; there is no implementation here yet, deliberately.
+**Status: built.** Phases 3–5. Zero npm dependencies — Node 22's built-in
+WebSocket client talks to camd, and the browser is fed by Server-Sent Events, so
+there is no install step before a service and nothing to break on a Node upgrade.
 
-## What lives here when it is built
+```sh
+node src/server.js --config ../config/cambridge.json
+npm test        # 27 tests, no install required
+```
+
+## What lives here
 
 - Multi-camera state model, mirrored from `camd` events
 - Normalisation across bodies — the FX30 is Super 35 and the FX3 is full-frame,
@@ -21,8 +26,13 @@ repo is settled; there is no implementation here yet, deliberately.
 
 ## Frontend
 
-Single-file HTML, vanilla JS, no build step unless something genuinely demands
-one. Must be usable on a laptop screen and on an iPad in landscape.
+`public/index.html` — one file, vanilla JS, no build step. Dark by default
+because it runs in a dim booth. Three cameras fit an iPad in landscape without
+scrolling; controls are sized for a finger, not just a mouse.
+
+The recording indicator is driven from the camera's own `RecordingState`, never
+from "we sent the command" — including the `Recording_Failed` case, which shows
+a banner rather than a calm red dot.
 
 ## Not architected against (Phase 6+ backlog)
 

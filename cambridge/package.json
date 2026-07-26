@@ -1,0 +1,17 @@
+{
+  "name": "cambridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Application server and web control panel for the CamBridge Sony multi-camera system",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

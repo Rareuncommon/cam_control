@@ -13,26 +13,37 @@ production VLAN, static IPs
 
 ## Current status
 
-**Phase 1 — `camd` core.**
+**Phases 1–5 are built. Phases 2, 4 and 5 await their hardware acceptance runs.**
 
-Phase 0 passed on hardware: SDK 2.02.00 built on macOS 26 / Apple Silicon,
-auto-discovered an FX30 over wired Ethernet, authenticated with access
-authentication, and started and stopped recording via Sony's own sample app.
-Details and the findings that came out of it:
-[`docs/phase-0-acceptance.md`](docs/phase-0-acceptance.md).
+Phase 0 passed on hardware. Phases 1–5 are implemented and verified as far as is
+possible without the studio rig: 51 C++ tests and 27 Node tests pass, and the
+whole stack has been run end to end against a simulated three-camera setup.
+What only real cameras can settle is listed in
+[`docs/phases-1-5.md`](docs/phases-1-5.md).
+
+Run it now, with no hardware:
+
+```sh
+cmake -S camd -B camd/build && cmake --build camd/build
+./camd/build/camd --config config/cambridge.json --fake &
+node cambridge/src/server.js --config config/cambridge.json
+# then open http://localhost:8088
+```
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | ✅ **passed** |
-| 1 | `camd` core — single camera, property get/set, record, over REST | not started |
-| 2 | Multi-camera + connection lifecycle; kill tests 5/5 | not started |
-| 3 | WebSocket events + Node bridge with mirrored state | not started |
-| 4 | Web control panel, laptop + iPad landscape | not started |
-| 5 | Presets, scenes, gang control, match mode | not started |
+| 1 | `camd` core — single camera, property get/set, record, over REST | ✅ built, `curl` acceptance passes |
+| 2 | Multi-camera + connection lifecycle; kill tests 5/5 | built; **hardware kill tests outstanding** |
+| 3 | WebSocket events + Node bridge with mirrored state | ✅ built and verified end to end |
+| 4 | Web control panel, laptop + iPad landscape | built; **your mock-service run outstanding** |
+| 5 | Presets, scenes, gang control, match mode | built; **you define the acceptance tests** |
 | 6+ | Multiview, Companion, ATEM tally, Q-SYS | backlog, not built |
 
-Phases are strictly sequential: no phase begins until the previous one's
-acceptance test passes on real hardware.
+Phases 1–5 were built in one pass at your request, rather than gated one at a
+time. The hardware acceptance tests still gate calling them *done* — see
+[`docs/phases-1-5.md`](docs/phases-1-5.md) for exactly what is proven and what
+is not.
 
 ---
 
@@ -111,8 +122,8 @@ at 9am on a Sunday.
 ## Repo layout
 
 ```
-camd/            C++ control daemon (Phase 1+); today, only the linkcheck tool
-cambridge/       Node.js app server + web UI (Phase 3+); scaffold only
+camd/            C++ control daemon: config, HTTP/WS, per-camera workers, Sony backend
+cambridge/       Node.js app server + single-file web UI; zero npm dependencies
 config/          single editable config file; real one is git-ignored
 docs/            SDK install, camera setup, per-phase acceptance tests
 launchd/         macOS service definition for camd

@@ -66,8 +66,18 @@ const std::vector<std::int64_t> kIsoFull{
 const std::vector<std::int64_t> kIsoSuper35{
     250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
     4000, 5000, 6400, 12800};
+// Shutter speed is packed numerator<<16 | denominator in the SDK, so 1/50 is
+// 0x00010032. The fake uses the real encoding rather than a friendly integer, so
+// the Node layer's decoding is exercised honestly instead of against a shape that
+// only exists in tests.
+std::int64_t packShutter(int num, int den) {
+    return (static_cast<std::int64_t>(num) << 16) | static_cast<std::int64_t>(den);
+}
 const std::vector<std::int64_t> kShutter{
-    24, 30, 48, 50, 60, 100, 120, 250, 500, 1000, 2000, 4000};
+    packShutter(1, 24),  packShutter(1, 30),   packShutter(1, 48),
+    packShutter(1, 50),  packShutter(1, 60),   packShutter(1, 100),
+    packShutter(1, 120), packShutter(1, 250),  packShutter(1, 500),
+    packShutter(1, 1000), packShutter(1, 2000), packShutter(1, 4000)};
 const std::vector<std::int64_t> kWbPresets{0, 1, 2, 3, 4, 5};
 
 std::int64_t snapTo(const std::vector<std::int64_t>& allowed, std::int64_t want) {
@@ -88,7 +98,7 @@ public:
         const bool super35 = info_.model.find("FX30") != std::string::npos;
         props_[prop::kFNumber] = enumerated(400, kFNumbers);
         props_[prop::kIso] = enumerated(super35 ? 800 : 640, super35 ? kIsoSuper35 : kIsoFull);
-        props_[prop::kShutterSpeed] = enumerated(50, kShutter);
+        props_[prop::kShutterSpeed] = enumerated(packShutter(1, 50), kShutter);
         props_[prop::kExposureMode] = enumerated(1, {0, 1, 2, 3});
         props_[prop::kWhiteBalance] = enumerated(2, kWbPresets);
         props_[prop::kColorTemp] = ranged(5600, 2500, 9900, 100);

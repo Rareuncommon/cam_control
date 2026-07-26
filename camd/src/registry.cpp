@@ -138,6 +138,13 @@ bool CameraWorker::run(std::function<void(CameraSession*)> fn, int timeoutMs) {
 void CameraWorker::offerDiscovery(const DiscoveredCamera& d) {
     {
         std::lock_guard<std::mutex> lock(targetMu_);
+        // A camera that was missing and is now visible is hard evidence the link is
+        // back. Without this, a body that had been down long enough for the backoff
+        // to reach its ceiling would sit idle for another full interval after
+        // recovering — which blows the brief's "rejoin within ~10s of link restore"
+        // target for exactly the case that matters, a power-cycled camera.
+        if (!targetVisible_) reappeared_ = true;
+        targetVisible_ = true;
         target_ = d;
         haveTarget_ = true;
     }
@@ -149,6 +156,14 @@ void CameraWorker::offerDiscovery(const DiscoveredCamera& d) {
         if (!d.mac.empty()) snap_.mac = d.mac;
     }
     jobCv_.notify_all();
+}
+
+void CameraWorker::offerMissing() {
+    std::lock_guard<std::mutex> lock(targetMu_);
+    targetVisible_ = false;
+    // haveTarget_ is deliberately left set: the last known address stays as a
+    // reconnect candidate, so a body that is briefly invisible to discovery is
+    // still retried rather than being forgotten.
 }
 
 void CameraWorker::requestReconnect() {
@@ -405,6 +420,12 @@ void CameraWorker::stepReconnecting() {
         reconnectAttempts_ = 0;
         nextAttempt_ = clock_t_::now();
     }
+    if (reappeared_.exchange(false)) {
+        LOG_INFO(cfg_.id.c_str(),
+                 "camera is visible on the network again — cancelling backoff");
+        reconnectAttempts_ = 0;
+        nextAttempt_ = clock_t_::now();
+    }
     if (clock_t_::now() >= nextAttempt_) {
         setState(ConnState::Connecting, "");
     }
@@ -603,43 +624,63 @@ void Registry::discoveryLoop() {
             discovered_ = found;
         }
 
-        // Match discovered bodies to configured cameras. MAC is the strongest
-        // signal and the only one that survives an address change, so it wins;
-        // IP is a fallback for a config that has not recorded a MAC yet; model is
-        // a last resort for a single-body-of-that-type setup.
+        // Match discovered bodies to configured cameras.
+        //
+        // Matching runs in strength order across ALL cameras — every MAC match is
+        // resolved before any IP match is considered, and every IP match before any
+        // model match. Doing it per-camera instead would let a weak match win a
+        // race: with one FX30 unplugged, the remaining FX30 is briefly the only
+        // unclaimed body of its model, and whichever config entry is examined first
+        // would take it — including the entry belonging to the camera that is
+        // actually gone. That produces two cards pointing at one body, which is
+        // both wrong and very hard to spot mid-service.
         std::vector<bool> claimed(found.size(), false);
+        std::vector<bool> assigned(workers_.size(), false);
 
-        for (auto& w : workers_) {
-            const CameraConfig* cc = cfg_.findById(w->id());
-            if (!cc) continue;
-            int hit = -1;
+        auto claim = [&](std::size_t widx, std::size_t fidx) {
+            claimed[fidx] = true;
+            assigned[widx] = true;
+            workers_[widx]->offerDiscovery(found[fidx]);
+        };
 
-            if (!cc->mac.empty()) {
-                for (std::size_t i = 0; i < found.size(); ++i) {
-                    if (!claimed[i] && upperMac(found[i].mac) == cc->mac) { hit = static_cast<int>(i); break; }
+        // Pass 1 — MAC. Authoritative.
+        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
+            const CameraConfig* cc = cfg_.findById(workers_[wi]->id());
+            if (!cc || cc->mac.empty()) continue;
+            for (std::size_t i = 0; i < found.size(); ++i) {
+                if (!claimed[i] && upperMac(found[i].mac) == cc->mac) { claim(wi, i); break; }
+            }
+        }
+
+        // Pass 2 — IP, for entries with no MAC recorded yet.
+        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
+            if (assigned[wi]) continue;
+            const CameraConfig* cc = cfg_.findById(workers_[wi]->id());
+            // A config entry that names a MAC is pinned to that body. Never fall
+            // back for it: binding "FX30 — Center" to whatever FX30 happens to be
+            // reachable is worse than leaving it offline and saying so.
+            if (!cc || !cc->mac.empty() || cc->ip.empty()) continue;
+            for (std::size_t i = 0; i < found.size(); ++i) {
+                if (!claimed[i] && found[i].ip == cc->ip) { claim(wi, i); break; }
+            }
+        }
+
+        // Pass 3 — model, only when it is unambiguous and the entry is unpinned.
+        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
+            if (assigned[wi]) continue;
+            const CameraConfig* cc = cfg_.findById(workers_[wi]->id());
+            if (!cc || !cc->mac.empty() || cc->model.empty()) continue;
+            int matches = 0;
+            int candidate = -1;
+            for (std::size_t i = 0; i < found.size(); ++i) {
+                if (claimed[i]) continue;
+                if (found[i].model == cc->model) {
+                    ++matches;
+                    if (candidate < 0) candidate = static_cast<int>(i);
                 }
             }
-            if (hit < 0 && !cc->ip.empty()) {
-                for (std::size_t i = 0; i < found.size(); ++i) {
-                    if (!claimed[i] && found[i].ip == cc->ip) { hit = static_cast<int>(i); break; }
-                }
-            }
-            if (hit < 0 && !cc->model.empty()) {
-                int matches = 0;
-                int candidate = -1;
-                for (std::size_t i = 0; i < found.size(); ++i) {
-                    if (claimed[i]) continue;
-                    if (found[i].model == cc->model) { ++matches; if (candidate < 0) candidate = static_cast<int>(i); }
-                }
-                // Only accept a model match when it is unambiguous — two FX30s and
-                // no MAC in config must not be silently assigned at random.
-                if (matches == 1) hit = candidate;
-            }
-
-            if (hit >= 0) {
-                claimed[static_cast<std::size_t>(hit)] = true;
-                w->offerDiscovery(found[static_cast<std::size_t>(hit)]);
-            }
+            // Two FX30s and no MAC in config must not be assigned at random.
+            if (matches == 1) claim(wi, static_cast<std::size_t>(candidate));
         }
 
         for (std::size_t i = 0; i < found.size(); ++i) {
@@ -647,6 +688,11 @@ void Registry::discoveryLoop() {
                 LOG_DEBUG("discovery", "unclaimed camera on network: %s %s at %s",
                           found[i].model.c_str(), found[i].mac.c_str(), found[i].ip.c_str());
             }
+        }
+        // Tell the unmatched workers they are missing, so that when their body does
+        // come back the transition is detected and any pending backoff is cancelled.
+        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
+            if (!assigned[wi]) workers_[wi]->offerMissing();
         }
 
         // Poll faster while something we expect is missing; idle back once

@@ -71,7 +71,13 @@ public:
     bool run(std::function<void(CameraSession*)> fn, int timeoutMs);
 
     // Offered by the discovery thread when a matching body appears on the network.
+    // A camera reappearing after being absent cancels any pending backoff: the
+    // network has just told us the body is back, so waiting out a 15s timer would
+    // be ignoring evidence.
     void offerDiscovery(const DiscoveredCamera& d);
+
+    // Told by the discovery thread when no body matched this camera this cycle.
+    void offerMissing();
 
     // Forces a teardown and immediate reconnect attempt.
     void requestReconnect();
@@ -132,6 +138,8 @@ private:
     std::mutex targetMu_;
     DiscoveredCamera target_;
     bool haveTarget_ = false;
+    bool targetVisible_ = false;   // seen in the most recent discovery sweep
+    std::atomic<bool> reappeared_{false};
 
     ConnState state_ = ConnState::Offline;
     int reconnectAttempts_ = 0;

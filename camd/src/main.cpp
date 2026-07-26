@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
     }
 
     camd::http::Server server;
-    camd::Api api(registry, hub);
+    camd::Api api(registry, hub, fake);
     api.install(server, cfg.wsPath);
 
     if (!server.start(cfg.bind, cfg.restPort)) {
