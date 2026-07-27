@@ -23,6 +23,7 @@
   </nav>
   <span id="camd-pill" class="pill">connecting…</span>
   <span class="spacer"></span>
+  <button id="pad-open" class="small ghost" style="display:none" title="Gamepad control">🎮</button>
   <button id="advanced-toggle" class="small ghost" title="Keep every camera's extra controls open">More controls</button>
   <button id="rec-all" class="danger">● Record all</button>
   <button id="stop-all">■ Stop all</button>
@@ -145,9 +146,45 @@
   </div>
 </dialog>
 
+<dialog id="pad-dialog">
+  <h3>Gamepad control</h3>
+  <div class="sub note" id="pad-status">No gamepad detected</div>
+
+  <div class="line" style="margin:14px 0">
+    <button id="pad-toggle" class="big" disabled>Gamepad control is off</button>
+  </div>
+
+  <div class="formgrid">
+    <label for="pad-camera">Drives</label>
+    <select id="pad-camera"></select>
+  </div>
+
+  <table class="list" style="margin-top:14px">
+    <tr><th>Control</th><th>Does</th></tr>
+    <tr><td>Left stick ↕</td><td>Iris — up is more light</td></tr>
+    <tr><td>Left stick ↔</td><td>Colour temperature</td></tr>
+    <tr><td>Right stick ↕</td><td>Focus</td></tr>
+    <tr><td>Right stick ↔</td><td>ISO</td></tr>
+    <tr><td>A / ✕</td><td>Record this camera</td></tr>
+    <tr><td>B / ○</td><td>Autofocus</td></tr>
+    <tr><td>Shoulders</td><td>Previous / next camera</td></tr>
+    <tr><td>Start</td><td>Record all / stop all</td></tr>
+  </table>
+
+  <p class="note" style="margin:12px 0 0">
+    Push a stick further to move faster. Control stays off until you switch it on
+    here, and is off again every time the page loads.
+  </p>
+
+  <div class="line" style="margin-top:14px;justify-content:flex-end">
+    <button id="pad-close" class="ghost">Close</button>
+  </div>
+</dialog>
+
 <div id="toasts"></div>
 
-<!-- At the end of <body> so app.js finds every element it wires up on load. -->
-<script src="app.js"></script>
+<!-- A module so app.js can import gamepad.js. Modules defer, so the DOM is
+     ready by the time it runs. -->
+<script type="module" src="app.js"></script>
 </body>
 </html>

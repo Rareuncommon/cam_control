@@ -18,6 +18,8 @@ import { Logger } from './log.js';
 import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId } from './adopt.js';
+import { AtemTally, tallyForCameras } from './atem.js';
+import { ViscaServer } from './visca.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -30,6 +32,10 @@ function loadConfig(path) {
     camd: { bind: '127.0.0.1', restPort: 8787, wsPath: '/ws' },
     logging: { dir: './logs', level: 'info' },
     cameras: [],
+    // Both off unless the config asks for them: a studio without a switcher or a
+    // joystick should not have sockets it never uses listening on the network.
+    atem: { enabled: false, host: '', port: 9910, mapping: {} },
+    visca: { enabled: false, bind: '0.0.0.0', port: 52381, tcp: true, mapping: {} },
   };
   if (!existsSync(path)) {
     process.stderr.write(`cambridge: no config at ${path}, using defaults\n`);
@@ -42,6 +48,8 @@ function loadConfig(path) {
       camd: { ...defaults.camd, ...(parsed.camd ?? {}) },
       logging: { ...defaults.logging, ...(parsed.logging ?? {}) },
       cameras: parsed.cameras ?? [],
+      atem: { ...defaults.atem, ...(parsed.atem ?? {}) },
+      visca: { ...defaults.visca, ...(parsed.visca ?? {}) },
     };
   } catch (err) {
     process.stderr.write(`cambridge: config ${path} is not valid JSON: ${err.message}\n`);
@@ -144,6 +152,51 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     return res;
   };
 
+  // --- switcher tally -------------------------------------------------------
+  // Read-only, and entirely optional. With no ATEM configured this stays null
+  // and every tally indicator simply never lights.
+  let atem = null;
+  if (cfg.atem.enabled && cfg.atem.host) {
+    atem = new AtemTally({
+      host: cfg.atem.host,
+      port: cfg.atem.port,
+      log: (level, msg) => log.write(level, 'atem', msg),
+    });
+    atem.on('tally', (snapshot) => {
+      const byCamera = tallyForCameras(cfg.atem.mapping, snapshot);
+      if (state.applyTally(byCamera)) {
+        const live = Object.entries(byCamera).filter(([, t]) => t.program).map(([id]) => id);
+        log.info('tally', live.length ? `program: ${live.join(', ')}` : 'program: none');
+      }
+    });
+    // Losing the switcher must clear tally rather than freeze it. A red light on
+    // a camera that is no longer live is worse than no light at all.
+    atem.on('disconnected', () => {
+      log.warn('atem', 'switcher connection lost, clearing tally');
+      state.applyTally({});
+    });
+  }
+
+  // --- VISCA -----------------------------------------------------------------
+  // Lets a hardware joystick or a VISCA controller drive the same cameras. Every
+  // command lands on applyFn, so a move made from a joystick is logged and
+  // gang-aware exactly like one made from the browser.
+  let visca = null;
+  if (cfg.visca.enabled) {
+    visca = new ViscaServer({
+      state,
+      applyFn,
+      actionFn: (cameraId, action, actionBody) => camd.action(cameraId, action, actionBody),
+      recallPreset: (name, cameraId) => presets.recallPreset(cameraId, name, applyFn),
+      savePreset: (name, cameraId) => presets.savePreset(cameraId, name),
+      mapping: cfg.visca.mapping,
+      bind: cfg.visca.bind,
+      port: cfg.visca.port,
+      tcp: cfg.visca.tcp !== false,
+      log: (level, msg) => log.write(level, 'visca', msg),
+    });
+  }
+
   // --- SSE fanout -----------------------------------------------------------
   const sseClients = new Set();
 
@@ -159,9 +212,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   // and repainting per event would swamp an iPad over Wi-Fi.
   let pushTimer = null;
   state.on('change', (change) => {
-    if (change.type === 'connectionState' || change.type === 'camdConnection') {
+    if (change.type === 'connectionState' || change.type === 'camdConnection'
+        || change.type === 'tally') {
       // Connection transitions are the one thing that must never be delayed —
-      // "camera offline" is the message the operator needs instantly.
+      // "camera offline" is the message the operator needs instantly. Tally is
+      // the same: it has to track the cut, not trail it by a coalescing window.
       pushToClients({ type: 'state', view: state.view() });
       return;
     }
@@ -529,8 +584,22 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     camd,
     presets,
     gangs,
+    atem,
+    visca,
     start() {
       camd.start();
+      if (atem) {
+        log.info('atem', `watching switcher at ${cfg.atem.host}:${cfg.atem.port} for tally`);
+        atem.start();
+      }
+      if (visca) {
+        // A VISCA port clash must not stop the cameras working. Say so and carry
+        // on: losing the joystick is an inconvenience, losing the panel is not.
+        visca.start().then(
+          () => log.info('visca', `listening on ${cfg.visca.bind}:${cfg.visca.port}`),
+          (err) => log.error('visca', `could not start (${err.message}); joystick control is off`),
+        );
+      }
       return new Promise((resolvePromise, rejectPromise) => {
         // Without this, a port clash surfaces as an unhandled 'error' event and a
         // raw stack trace — which reads like a crash of unknown cause rather than
@@ -557,6 +626,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     },
     async stop() {
       camd.stop();
+      atem?.stop();
+      await visca?.stop();
       for (const c of sseClients) { try { c.end(); } catch { /* closed */ } }
       sseClients.clear();
       await new Promise((r) => server.close(r));

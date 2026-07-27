@@ -14,6 +14,10 @@
   --warn: #f0a92e;
   --bad: #ef4d5a;
   --rec: #ff2d3f;
+  /* Deliberately distinct from --rec: "recording" and "on air" are different
+     facts, and a camera can easily be one without the other. */
+  --pgm: #e01020;
+  --pvw: #2fbf5f;
   --radius: 12px;
 }
 * { box-sizing: border-box; }
@@ -77,6 +81,13 @@ button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 .cam.recording { border-color: var(--rec); box-shadow: 0 0 0 2px var(--rec) inset; }
 .cam.offline   { opacity: .7; }
 .cam.selected  { border-color: var(--accent); }
+
+/* Tally from the switcher. Program outranks recording for the border: what is
+   on air matters more to everyone in the room than what is on a card. */
+.cam.pgm  { border-color: var(--pgm); box-shadow: 0 0 0 3px var(--pgm) inset; }
+.cam.pvw  { border-color: var(--pvw); }
+.pill.pgm { background: var(--pgm); border-color: var(--pgm); color: #fff; font-weight: 700; }
+.pill.pvw { background: var(--pvw); border-color: var(--pvw); color: #04121f; font-weight: 700; }
 
 .cam > header {
   background: var(--panel-2); padding: 10px 12px; gap: 9px;
@@ -163,6 +174,8 @@ details.more .inner { display: flex; flex-direction: column; gap: 9px; padding-b
   border-radius: var(--radius); overflow: hidden; aspect-ratio: 16 / 9;
 }
 .feed.recording { border-color: var(--rec); box-shadow: 0 0 0 2px var(--rec) inset; }
+.feed.pgm { border-color: var(--pgm); box-shadow: 0 0 0 3px var(--pgm) inset; }
+.feed.pvw { border-color: var(--pvw); box-shadow: 0 0 0 2px var(--pvw) inset; }
 .feed img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: crosshair; }
 .feed .overlay {
   position: absolute; left: 0; right: 0; top: 0; padding: 8px 10px;

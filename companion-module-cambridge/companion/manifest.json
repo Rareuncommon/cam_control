@@ -1,0 +1,26 @@
+{
+	"$schema": "https://raw.githubusercontent.com/bitfocus/companion-module-base/main/assets/manifest.schema.json",
+	"id": "cambridge",
+	"name": "cambridge",
+	"shortname": "CamBridge",
+	"description": "Sony FX3 / FX30 camera control via CamBridge. Record, exposure, presets, scenes, match and tally.",
+	"version": "1.0.0",
+	"license": "MIT",
+	"repository": "https://github.com/Rareuncommon/cam_control",
+	"bugs": "https://github.com/Rareuncommon/cam_control/issues",
+	"maintainers": [
+		{
+			"name": "CamBridge"
+		}
+	],
+	"legacyIds": [],
+	"runtime": {
+		"type": "node22",
+		"api": "nodejs-ipc",
+		"apiVersion": "1.14.1",
+		"entrypoint": "../src/index.js"
+	},
+	"manufacturer": "Sony",
+	"products": ["ILME-FX3", "ILME-FX30"],
+	"keywords": ["camera", "sony", "fx3", "fx30", "ccu", "tally"]
+}

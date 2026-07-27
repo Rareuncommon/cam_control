@@ -136,6 +136,27 @@ export class StateModel extends EventEmitter {
     this.emit('change', { type: 'properties', cameraId });
   }
 
+  /**
+   * Tally from the switcher, keyed by camera id.
+   *
+   * Held on the mirror rather than fetched, because tally has to be as instant
+   * as the cut it reflects. It is deliberately *not* cleared when a camera goes
+   * offline: the switcher is still putting that input on air, and hiding that
+   * would be the wrong thing to tell the operator.
+   */
+  applyTally(byCamera) {
+    let changed = false;
+    for (const cam of this.cameras.values()) {
+      const next = byCamera?.[cam.id] ?? null;
+      const before = cam.tally ?? null;
+      if (before?.program === next?.program && before?.preview === next?.preview) continue;
+      cam.tally = next;
+      changed = true;
+    }
+    if (changed) this.emit('change', { type: 'tally' });
+    return changed;
+  }
+
   setCamdConnected(connected) {
     if (this.camdConnected === connected) return;
     this.camdConnected = connected;
@@ -165,6 +186,7 @@ export class StateModel extends EventEmitter {
         state: cam.state,
         detail: cam.detail,
         reconnectAttempts: cam.reconnectAttempts,
+        tally: cam.tally ?? null,
         status: {
           ...cam.status,
           recordingLabel:

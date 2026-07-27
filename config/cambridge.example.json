@@ -40,6 +40,33 @@
     }
   },
 
+  "atem": {
+    "$comment": "Tally from a Blackmagic ATEM. Read-only — CamBridge never sends the switcher a command. Leave enabled false if there is no switcher.",
+    "enabled": false,
+    "host": "172.16.16.10",
+    "port": 9910,
+    "$comment_mapping": "Which ATEM input each camera is plugged into, as numbered on the switcher.",
+    "mapping": {
+      "cam1": 1,
+      "cam2": 2,
+      "cam3": 3
+    }
+  },
+
+  "visca": {
+    "$comment": "Accept VISCA so a hardware joystick or controller panel can drive the cameras. Off by default: no reason to have a socket open for hardware that is not there.",
+    "enabled": false,
+    "bind": "0.0.0.0",
+    "port": 52381,
+    "tcp": true,
+    "$comment_mapping": "VISCA address for each camera. Omit the whole mapping to fall back to camera order, which is right for a single-camera setup.",
+    "mapping": {
+      "cam1": 1,
+      "cam2": 2,
+      "cam3": 3
+    }
+  },
+
   "cameras": [
     {
       "id": "cam1",

@@ -1,0 +1,13 @@
+{
+  "name": "companion-module-cambridge",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@companion-module/base": "~1.14.1"
+  }
+}

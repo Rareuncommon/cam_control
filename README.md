@@ -61,6 +61,17 @@ where you want focus and the normalised position goes to the camera.
 
 Full walkthrough: [`docs/running-the-app.md`](docs/running-the-app.md).
 
+### Driving it from something other than the browser
+
+A **Bitfocus Companion** module (`companion-module-cambridge/`) puts record,
+exposure, scenes and tally on a Stream Deck, with feedbacks so a record button
+goes red by itself. **ATEM tally** marks the live camera ON AIR in the panel and
+on Companion. A **VISCA** server lets a hardware joystick drive the cameras. And
+any **gamepad** the browser sees can ride the iris through a song.
+
+All four are off until switched on. Setup, and what each still needs real
+hardware to confirm: [`docs/integrations.md`](docs/integrations.md).
+
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | ✅ **passed** |
@@ -72,7 +83,9 @@ Full walkthrough: [`docs/running-the-app.md`](docs/running-the-app.md).
 | 6 | Live multiview | ✅ built |
 | — | Camera adoption from the UI, macOS app | ✅ built (beyond the original brief) |
 | — | Expanded control set + touch-first UI rework | built; **two items need a real body, below** |
-| 6+ | Companion, ATEM tally, Q-SYS | backlog, not built |
+| 6+ | Bitfocus Companion module | ✅ built and verified end to end |
+| 6+ | ATEM tally, VISCA server, gamepad | built; **tally and VISCA need your hardware to confirm** |
+| 6+ | Q-SYS | backlog, not built |
 
 Phases 1–5 were built in one pass at your request, rather than gated one at a
 time. The hardware acceptance tests still gate calling them *done* — see

@@ -27,9 +27,13 @@ camd/build/
 compile_commands.json
 
 # --- Node -------------------------------------------------------------------
+# cambridge itself has no dependencies. The Companion module is the exception:
+# it must build against Bitfocus's SDK, which is installed with `npm install`
+# in companion-module-cambridge/ and never committed.
 node_modules/
 npm-debug.log*
 .npm/
+package-lock.json
 
 # --- Logs / runtime ---------------------------------------------------------
 logs/

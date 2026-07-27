@@ -1,4 +1,5 @@
-'use strict';
+import { createGamepadControl } from './gamepad.js';
+
 // CamBridge control panel.
 //
 // Vanilla JS, no build step. The organising idea for the UI is that a booth
@@ -33,6 +34,10 @@ let interacting = null;
 // Persisted so a booth iPad comes back the way it was left.
 let advanced = localStorage.getItem('cb.advanced') === '1';
 let rampMs = Number(localStorage.getItem('cb.rampMs') ?? 0);
+// Which camera a gamepad drives. Deliberately not persisted as "enabled" —
+// gamepad control always starts off, so a controller left plugged in over the
+// week cannot move a camera the moment the panel is opened.
+let padCamera = localStorage.getItem('cb.padCamera') ?? null;
 
 function toast(message, kind = 'ok', ttl = 5000) {
   const t = el('div', { class: `toast ${kind}`, text: message });
@@ -59,6 +64,16 @@ const doAction = (id, action, body) =>
   api('POST', `/api/cameras/${encodeURIComponent(id)}/actions/${action}`, body);
 
 // --- controls ---------------------------------------------------------------
+
+// Tally from the switcher. Only rendered when an ATEM is actually configured —
+// an always-present "off" badge would train the eye to ignore the one place it
+// most needs to look.
+function tallyBadge(cam) {
+  if (!cam.tally) return null;
+  if (cam.tally.program) return el('span', { class: 'pill pgm', text: 'ON AIR' });
+  if (cam.tally.preview) return el('span', { class: 'pill pvw', text: 'PVW' });
+  return null;
+}
 
 function stateBadge(cam) {
   const map = {
@@ -212,8 +227,11 @@ function cameraCard(cam) {
   const failed = cam.status?.recordingFailed;
   const connected = cam.state === 'connected';
 
+  const tallyClass = cam.tally?.program ? ' pgm' : cam.tally?.preview ? ' pvw' : '';
+
   const card = el('section', {
-    class: `cam${rec ? ' recording' : ''}${connected ? '' : ' offline'}`, 'data-id': cam.id,
+    class: `cam${rec ? ' recording' : ''}${connected ? '' : ' offline'}${tallyClass}`,
+    'data-id': cam.id,
   });
   card.append(el('header', {},
     el('span', { class: `recdot${rec ? ' on' : ''}${failed ? ' failed' : ''}` }),
@@ -223,6 +241,8 @@ function cameraCard(cam) {
         `${cam.model || 'unknown'} · ${cam.ip || '—'}` +
         (cam.properties?.exposureMode ? ` · ${cam.properties.exposureMode.label}` : '') })),
     el('span', { class: 'spacer' }),
+    tallyBadge(cam),
+    padCamera === cam.id && gamepad?.enabled ? el('span', { class: 'pill', text: '🎮' }) : null,
     stateBadge(cam)));
 
   const body = el('div', { class: 'body' });
@@ -344,7 +364,8 @@ function renderControl() {
 
 function feedTile(cam) {
   const rec = cam.status?.recording;
-  const tile = el('div', { class: `feed${rec ? ' recording' : ''}` });
+  const tallyClass = cam.tally?.program ? ' pgm' : cam.tally?.preview ? ' pvw' : '';
+  const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
 
   if (cam.state === 'connected') {
     const img = el('img', {
@@ -380,6 +401,7 @@ function feedTile(cam) {
   tile.append(el('div', { class: 'overlay' },
     el('span', { class: `recdot${rec ? ' on' : ''}` }),
     el('span', { text: cam.label || cam.id }),
+    tallyBadge(cam),
     el('span', { class: 'spacer' }),
     el('span', { class: 'note', text: cam.properties?.fNumber?.label ?? '' })));
 
@@ -553,6 +575,7 @@ function renderTools() {
     }, document.createTextNode(c.label)));
   }
   $('#focus-note').textContent = meta.focusNote ?? '';
+  renderPadCameras();
 }
 
 function switchView(name) {
@@ -684,6 +707,115 @@ $('#adopt-confirm').addEventListener('click', async () => {
 for (const chip of document.querySelectorAll('#recall-groups .chip')) {
   chip.addEventListener('click', () => chip.classList.toggle('on'));
 }
+
+// --- gamepad ----------------------------------------------------------------
+
+/** The camera a gamepad drives: the chosen one, or the first connected one. */
+function padTarget() {
+  const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected');
+  return chosen ?? view.cameras.find((c) => c.state === 'connected') ?? null;
+}
+
+// Properties where pushing "up" should walk *down* the raw scale. Iris is the
+// one that matters: up means more light, which is a lower f-number. This is the
+// same rule the on-screen stepper uses, kept here so a stick and the − / +
+// buttons never disagree about which way is brighter.
+const PAD_INVERTED = { fNumber: true };
+
+/** `intent` is +1 for stick up/right, in operator terms, not raw terms. */
+async function padStep(propName, intent, coarse) {
+  const cam = padTarget();
+  const prop = cam?.properties?.[propName];
+  if (!cam || !prop || !prop.writable) return;
+  const direction = PAD_INVERTED[propName] ? -intent : intent;
+
+  if (prop.options?.length) {
+    const idx = prop.options.findIndex((o) => o.raw === prop.raw);
+    if (idx < 0) return;
+    const next = prop.options[idx + direction];
+    if (!next) return;
+    await setProp(cam.id, propName, next.raw);
+    return;
+  }
+  if (prop.range) {
+    const size = (prop.range.step || 1) * coarse;
+    const next = Math.min(Math.max(prop.raw + direction * size, prop.range.min), prop.range.max);
+    if (next !== prop.raw) await setProp(cam.id, propName, next);
+  }
+}
+
+async function padAction(action) {
+  const cam = padTarget();
+  if (action === 'recordAll') {
+    const anyRolling = view.cameras.some((c) => c.status?.recording);
+    await api('POST', '/api/record-all', { start: !anyRolling });
+    return;
+  }
+  if (!cam) return;
+  if (action === 'recordToggle') {
+    await doAction(cam.id, cam.status?.recording ? 'recordStop' : 'recordStart');
+  } else if (action === 'autofocus') {
+    await doAction(cam.id, 'autofocus');
+  } else if (action === 'nextCamera' || action === 'prevCamera') {
+    const live = view.cameras.filter((c) => c.state === 'connected');
+    if (live.length < 2) return;
+    const at = live.findIndex((c) => c.id === cam.id);
+    const step = action === 'nextCamera' ? 1 : -1;
+    const next = live[(at + step + live.length) % live.length];
+    setPadCamera(next.id);
+    toast(`Gamepad now drives ${next.label}`);
+  }
+}
+
+function setPadCamera(id) {
+  padCamera = id;
+  localStorage.setItem('cb.padCamera', id ?? '');
+  const sel = $('#pad-camera');
+  if (sel) sel.value = id ?? '';
+  renderControl();
+}
+
+const gamepad = createGamepadControl({
+  onStep: (prop, direction, coarse) => padStep(prop, direction, coarse),
+  onButton: (action) => padAction(action),
+  onStatus: ({ connected, name }) => {
+    $('#pad-status').textContent = connected ? name : 'No gamepad detected';
+    $('#pad-toggle').disabled = !connected;
+    // The header button is the only hint most people will see, so it only
+    // appears once a controller is actually plugged in.
+    $('#pad-open').style.display = connected ? '' : 'none';
+  },
+});
+gamepad.start();
+
+$('#pad-toggle').addEventListener('click', () => {
+  gamepad.setEnabled(!gamepad.enabled);
+  const on = gamepad.enabled;
+  $('#pad-toggle').textContent = on ? 'Gamepad control is ON' : 'Gamepad control is off';
+  $('#pad-toggle').classList.toggle('primary', on);
+  $('#pad-open').classList.toggle('primary', on);
+  toast(on ? `Gamepad drives ${padTarget()?.label ?? 'nothing yet'}` : 'Gamepad control off');
+  renderControl();
+});
+
+/** Kept in step with the camera list, not just filled once when opened. */
+function renderPadCameras() {
+  const sel = $('#pad-camera');
+  if (!sel) return;
+  const target = padTarget()?.id ?? '';
+  sel.textContent = '';
+  for (const c of view.cameras) {
+    sel.append(el('option', { value: c.id, selected: c.id === target },
+      document.createTextNode(c.label)));
+  }
+}
+
+$('#pad-open').addEventListener('click', () => {
+  renderPadCameras();
+  $('#pad-dialog').showModal();
+});
+$('#pad-camera').addEventListener('change', (e) => setPadCamera(e.target.value));
+$('#pad-close').addEventListener('click', () => $('#pad-dialog').close());
 
 async function loadMeta() {
   meta = await api('GET', '/api/presets');
