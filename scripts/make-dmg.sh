@@ -84,7 +84,13 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>CamBridge</string>
     <key>CFBundleIconFile</key><string>CamBridge</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>LSUIElement</key><false/>
+    <!-- Agent app, not a windowed one. The executable here is a shell script
+         that never registers with the window server, so with LSUIElement false
+         macOS bounces the Dock icon for about a minute, decides the launch
+         failed, and kills the process — taking camd and the panel down with it.
+         As an agent there is no Dock icon and no launch timeout; quitting is
+         done from the panel's Quit button instead. -->
+    <key>LSUIElement</key><true/>
     <key>LSMinimumSystemVersion</key><string>12.1</string>
 </dict>
 </plist>
@@ -289,7 +295,7 @@ if [[ "${healthy}" != true ]]; then
 fi
 say "camd healthy on ${CAMD_PORT}"
 
-"${NODE}" "${RES}/cambridge/src/server.js" --config "${CONFIG}" \
+CAMBRIDGE_LAUNCHER_PID=$$ "${NODE}" "${RES}/cambridge/src/server.js" --config "${CONFIG}" \
     >> "${LOG_DIR}/cambridge.stdout.log" 2>&1 &
 UI_PID=$!
 

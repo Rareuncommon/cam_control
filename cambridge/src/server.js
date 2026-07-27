@@ -468,6 +468,29 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         return sendJson(res, 200, { ok: failed.length === 0, results });
       }
 
+      // --- quit ---
+      // The app runs as a macOS agent with no Dock icon, so this is the way out.
+      // The launcher's PID is passed down so we can signal it rather than just
+      // exiting: it owns camd too, and its trap is what stops both cleanly.
+      if (path === '/api/shutdown' && req.method === 'POST') {
+        log.info('cambridge', 'shutdown requested from the panel');
+        sendJson(res, 200, { ok: true, stopping: true });
+        const launcher = Number(process.env.CAMBRIDGE_LAUNCHER_PID);
+        setTimeout(async () => {
+          if (Number.isFinite(launcher) && launcher > 1) {
+            try { process.kill(launcher, 'SIGTERM'); return; } catch { /* already gone */ }
+          }
+          // Started from a terminal, or the launcher has already exited. Stop
+          // our own side cleanly; a camd started separately keeps running, which
+          // is correct — we did not start it and must not assume we own it.
+          camd.stop();
+          atem?.stop();
+          await visca?.stop();
+          process.exit(0);
+        }, 150);
+        return;
+      }
+
       // --- presets ---
       if (path === '/api/presets' && req.method === 'GET') {
         return sendJson(res, 200, {

@@ -34,7 +34,13 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <!-- Stays in the Dock so there is an obvious way to quit, which also stops
          both background processes. -->
-    <key>LSUIElement</key><false/>
+    <!-- Agent app, not a windowed one. The executable here is a shell script
+         that never registers with the window server, so with LSUIElement false
+         macOS bounces the Dock icon for about a minute, decides the launch
+         failed, and kills the process — taking camd and the panel down with it.
+         As an agent there is no Dock icon and no launch timeout; quitting is
+         done from the panel's Quit button instead. -->
+    <key>LSUIElement</key><true/>
     <key>LSMinimumSystemVersion</key><string>12.1</string>
 </dict>
 </plist>

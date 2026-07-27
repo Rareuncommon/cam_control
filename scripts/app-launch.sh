@@ -145,7 +145,8 @@ This is usually the Sony SDK missing from vendor/CrSDK, or a configuration error
 fi
 say "camd healthy on ${CAMD_PORT}"
 
-node cambridge/src/server.js --config "${CONFIG}" >> "${LOG_DIR}/cambridge.stdout.log" 2>&1 &
+CAMBRIDGE_LAUNCHER_PID=$$ \
+  node cambridge/src/server.js --config "${CONFIG}" >> "${LOG_DIR}/cambridge.stdout.log" 2>&1 &
 UI_PID=$!
 
 for _ in $(seq 1 50); do

@@ -736,6 +736,21 @@ for (const chip of document.querySelectorAll('#recall-groups .chip')) {
   chip.addEventListener('click', () => chip.classList.toggle('on'));
 }
 
+// CamBridge runs as a macOS agent with no Dock icon, so this is the way to stop
+// it. Confirmed first: it takes the cameras offline for everyone, not just this
+// browser tab.
+$('#quit').addEventListener('click', async () => {
+  const rolling = view.cameras.filter((c) => c.status?.recording);
+  const warning = rolling.length
+    ? `${rolling.map((c) => c.label).join(', ')} ${rolling.length === 1 ? 'is' : 'are'} RECORDING.\n\n`
+    : '';
+  if (!confirm(`${warning}Quit CamBridge? This disconnects every camera and stops the control panel for everyone.`)) return;
+  await api('POST', '/api/shutdown');
+  document.body.innerHTML =
+    '<div style="padding:40px;font:16px -apple-system,sans-serif;color:#93a1b0">' +
+    'CamBridge has stopped. Open it again from Applications.</div>';
+});
+
 // --- gamepad ----------------------------------------------------------------
 
 /** The camera a gamepad drives: the chosen one, or the first connected one. */
