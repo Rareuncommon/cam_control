@@ -66,7 +66,7 @@ std::vector<DiscoveredCamera> makePresent() {
 // Switches a camera's Flexible Exposure gates to Manual, which is what makes
 // iris and gain writable. A real FX30 arrives with them on Auto, so any test that
 // wants to drive exposure has to do this first — exactly like the operator does.
-inline void makeExposureManual(CameraWorker* w) {
+inline void makeExposureManual(const std::shared_ptr<CameraWorker>& w) {
     auto ok = std::make_shared<bool>(false);
     w->run([ok](CameraSession* s) {
         if (!s) return;
@@ -107,7 +107,7 @@ struct Rig {
     }
 
     bool waitConnected(const std::string& id, int timeoutMs = 3000) {
-        auto* w = registry->find(id);
+        auto w = registry->find(id);
         if (!w) return false;
         return waitFor([w] { return w->snapshot().state == ConnState::Connected; }, timeoutMs);
     }
@@ -133,7 +133,7 @@ TEST(worker_connects_to_discovered_camera) {
 TEST(worker_reads_properties_with_ranges_and_allowed_values) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
     makeExposureManual(w);
 
     auto props = std::make_shared<PropertyMap>();
@@ -154,7 +154,7 @@ TEST(worker_reads_properties_with_ranges_and_allowed_values) {
 TEST(worker_reports_actual_applied_value_not_the_request) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
     makeExposureManual(w);
 
     auto applied = std::make_shared<std::int64_t>(0);
@@ -174,7 +174,7 @@ TEST(iris_is_read_only_until_its_auto_gate_is_switched_to_manual) {
     // indistinguishable from "unsupported" unless you check irisMode.
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
 
     auto before = std::make_shared<PropertyMap>();
     CHECK(w->run([before](CameraSession* s) {
@@ -199,7 +199,7 @@ TEST(iris_is_read_only_until_its_auto_gate_is_switched_to_manual) {
 TEST(worker_rejects_write_to_read_only_property) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
     auto err = std::make_shared<std::string>();
     auto ok = std::make_shared<bool>(true);
     CHECK(w->run([err, ok](CameraSession* s) {
@@ -213,12 +213,12 @@ TEST(worker_rejects_write_to_read_only_property) {
 TEST(record_start_is_verified_against_camera_state) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
 
     auto state = std::make_shared<std::int64_t>(kRecordingUnknown);
     auto ok = std::make_shared<bool>(false);
     auto err = std::make_shared<std::string>();
-    CHECK(w->run([w, state, ok, err](CameraSession* s) {
+    CHECK(w->run([w = w.get(), state, ok, err](CameraSession* s) {
         *ok = w->setRecording(s, true, *state, *err);
     }, 6000));
     CHECK(*ok);
@@ -232,13 +232,13 @@ TEST(record_start_twice_does_not_stop_a_running_recording) {
     // stop the take. A redundant start must be a no-op.
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
 
     auto run = [&](bool want) {
         auto state = std::make_shared<std::int64_t>(kRecordingUnknown);
         auto ok = std::make_shared<bool>(false);
         auto err = std::make_shared<std::string>();
-        CHECK(w->run([w, state, ok, err, want](CameraSession* s) {
+        CHECK(w->run([w = w.get(), state, ok, err, want](CameraSession* s) {
             *ok = w->setRecording(s, want, *state, *err);
         }, 6000));
         CHECK(*ok);
@@ -255,11 +255,11 @@ TEST(record_start_twice_does_not_stop_a_running_recording) {
 TEST(record_stop_when_idle_is_a_no_op) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
     auto state = std::make_shared<std::int64_t>(kRecordingUnknown);
     auto ok = std::make_shared<bool>(false);
     auto err = std::make_shared<std::string>();
-    CHECK(w->run([w, state, ok, err](CameraSession* s) {
+    CHECK(w->run([w = w.get(), state, ok, err](CameraSession* s) {
         *ok = w->setRecording(s, false, *state, *err);
     }, 6000));
     CHECK(*ok);
@@ -276,7 +276,7 @@ TEST(one_camera_going_offline_does_not_affect_the_others) {
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
 
-    auto* w2 = rig.registry->find("cam2");
+    auto w2 = rig.registry->find("cam2");
     CHECK(waitFor([w2] {
         auto st = w2->snapshot().state;
         return st == ConnState::Reconnecting || st == ConnState::Offline ||
@@ -286,7 +286,7 @@ TEST(one_camera_going_offline_does_not_affect_the_others) {
     // The survivors must still be connected and must still respond quickly. The
     // deadline here is the point: if cam2 could block them, this would time out.
     for (const char* id : {"cam1", "cam3"}) {
-        auto* w = rig.registry->find(id);
+        auto w = rig.registry->find(id);
         CHECK_EQ(w->snapshot().state == ConnState::Connected, true);
 
         auto applied = std::make_shared<std::int64_t>(0);
@@ -309,7 +309,7 @@ TEST(camera_reconnects_after_link_is_restored) {
     CHECK(rig.waitAllConnected());
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
-    auto* w2 = rig.registry->find("cam2");
+    auto w2 = rig.registry->find("cam2");
     CHECK(waitFor([w2] { return w2->snapshot().state != ConnState::Connected; }, 3000));
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", false);
@@ -327,7 +327,7 @@ TEST(reappearing_on_the_network_cancels_a_long_backoff) {
     // Discovery seeing it return must cancel the wait.
     Rig rig;
     CHECK(rig.waitAllConnected());
-    auto* w2 = rig.registry->find("cam2");
+    auto w2 = rig.registry->find("cam2");
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
     // Let several failed attempts accumulate so the backoff has climbed.
@@ -350,7 +350,7 @@ TEST(requests_against_an_offline_camera_answer_immediately) {
     Rig rig;
     CHECK(rig.waitAllConnected());
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
-    auto* w2 = rig.registry->find("cam2");
+    auto w2 = rig.registry->find("cam2");
     CHECK(waitFor([w2] { return w2->snapshot().state != ConnState::Connected; }, 3000));
 
     auto sawNull = std::make_shared<std::atomic<bool>>(false);
@@ -369,7 +369,7 @@ TEST(requests_against_an_offline_camera_answer_immediately) {
 TEST(reconnect_action_is_accepted_while_connected) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
-    auto* w = rig.registry->find("cam1");
+    auto w = rig.registry->find("cam1");
     w->requestReconnect();
     // It should drop and come back without help.
     CHECK(waitFor([w] { return w->snapshot().state == ConnState::Connected; }, 5000));
@@ -385,8 +385,8 @@ TEST(a_dropped_camera_does_not_let_another_entry_steal_its_body) {
     CHECK(rig.waitAllConnected());
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
-    auto* w2 = rig.registry->find("cam2");
-    auto* w3 = rig.registry->find("cam3");
+    auto w2 = rig.registry->find("cam2");
+    auto w3 = rig.registry->find("cam3");
     CHECK(waitFor([w2] { return w2->snapshot().state != ConnState::Connected; }, 3000));
 
     // Give discovery several cycles to do the wrong thing if it is going to.
@@ -413,8 +413,8 @@ TEST(a_pinned_mac_never_falls_back_to_a_model_match) {
     CHECK(rig.waitAllConnected());
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:01", true);   // the only FX3
-    auto* w1 = rig.registry->find("cam1");
-    CHECK(waitFor([w1] { return w1->snapshot().state != ConnState::Connected; }, 3000));
+    auto w1 = rig.registry->find("cam1");
+    CHECK(waitFor([w1 = w1.get()] { return w1->snapshot().state != ConnState::Connected; }, 3000));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     const auto s1 = w1->snapshot();
@@ -432,11 +432,87 @@ TEST(snapshot_is_readable_while_a_camera_is_wedged) {
     for (const auto& d : makePresent()) fakeBackendSetLinkDown(d.mac, true);
 
     const auto t0 = std::chrono::steady_clock::now();
-    for (auto* w : rig.registry->all()) {
+    for (const auto& w : rig.registry->all()) {
         auto s = w->snapshot();
         CHECK(!s.id.empty());
     }
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
     CHECK(elapsed < 200);
+}
+
+// --- runtime adoption ------------------------------------------------------
+
+TEST(a_camera_can_be_adopted_while_the_daemon_runs) {
+    // Adoption must never restart the daemon: a restart would drop the cameras
+    // already live, so adding a third body would interrupt the two mid-service.
+    Config cfg = makeTestConfig();
+    cfg.cameras.resize(1);  // start with only cam1 configured
+    Registry registry(cfg, makeFakeBackend(makePresent()));
+    std::string err;
+    CHECK(registry.start(err));
+
+    CHECK(waitFor([&] {
+        auto w = registry.find("cam1");
+        return w && w->snapshot().state == ConnState::Connected;
+    }, 3000));
+    CHECK_EQ(registry.all().size(), static_cast<std::size_t>(1));
+
+    CameraConfig adopted;
+    adopted.id = "cam2";
+    adopted.label = "Adopted";
+    adopted.mac = "AA:BB:CC:00:00:02";
+    adopted.model = "ILME-FX30";
+    adopted.username = "u";
+    adopted.password = "p";
+    CHECK(registry.addCamera(adopted, err));
+    CHECK_EQ(registry.all().size(), static_cast<std::size_t>(2));
+
+    // The new camera connects on its own, and the existing one is undisturbed.
+    CHECK(waitFor([&] {
+        auto w = registry.find("cam2");
+        return w && w->snapshot().state == ConnState::Connected;
+    }, 4000));
+    CHECK_EQ(registry.find("cam1")->snapshot().state == ConnState::Connected, true);
+
+    registry.stop();
+}
+
+TEST(adoption_rejects_duplicate_ids_and_duplicate_bodies) {
+    Config cfg = makeTestConfig();
+    cfg.cameras.resize(1);
+    Registry registry(cfg, makeFakeBackend(makePresent()));
+    std::string err;
+    CHECK(registry.start(err));
+
+    CameraConfig dupId;
+    dupId.id = "cam1";
+    dupId.mac = "AA:BB:CC:00:00:09";
+    CHECK(!registry.addCamera(dupId, err));
+    CHECK(err.find("already exists") != std::string::npos);
+
+    // Adopting the same physical body twice would give two cards fighting over one
+    // camera — the same class of confusion as the model-fallback bug.
+    CameraConfig dupMac;
+    dupMac.id = "somethingElse";
+    dupMac.mac = "AA:BB:CC:00:00:01";
+    CHECK(!registry.addCamera(dupMac, err));
+    CHECK(err.find("already adopted") != std::string::npos);
+
+    registry.stop();
+}
+
+TEST(forgetting_a_camera_stops_it_and_leaves_the_others_running) {
+    Rig rig;
+    CHECK(rig.waitAllConnected());
+
+    std::string err;
+    CHECK(rig.registry->removeCamera("cam2", err));
+    CHECK_EQ(rig.registry->all().size(), static_cast<std::size_t>(2));
+    CHECK(rig.registry->find("cam2") == nullptr);
+
+    // The survivors keep working, and keep their own identities.
+    CHECK_EQ(rig.registry->find("cam1")->snapshot().state == ConnState::Connected, true);
+    CHECK_EQ(rig.registry->find("cam3")->snapshot().mac, std::string("AA:BB:CC:00:00:03"));
+    CHECK(!rig.registry->removeCamera("cam2", err));
 }

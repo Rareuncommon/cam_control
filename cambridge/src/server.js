@@ -17,6 +17,7 @@ import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, PRESET_PROPS, FOCUS_EXCLUDED_REASON } from './control.js';
+import { Adoption, normaliseMac, suggestId } from './adopt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -134,6 +135,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   );
   const presets = new Presets(store, state, log);
   const gangs = new Gangs(store, state, log);
+  const adoption = new Adoption(configPath, camd, log);
 
   /** Injected setter used by presets, gang and match, so all writes are logged. */
   const applyFn = async (cameraId, prop, raw) => {
@@ -278,9 +280,59 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         });
       }
 
+      // --- setup: discovery and adoption ---
+      // Everything needed to add a camera from the browser. Discovery is annotated
+      // with whether each body is already adopted, and by which entry, so the setup
+      // page never offers to adopt a camera twice.
       if (path === '/api/discovered' && req.method === 'GET') {
         const d = await camd.discovered();
-        return sendJson(res, d.ok ? 200 : 502, d.body ?? { error: 'camd unreachable' });
+        if (!d.ok) return sendJson(res, 502, d.body ?? { error: 'camd unreachable' });
+        const adopted = adoption.adopted();
+        const byMac = new Map(adopted.map((c) => [normaliseMac(c.mac), c]));
+        const takenIds = new Set(adopted.map((c) => c.id));
+        const list = (d.body?.discovered ?? []).map((cam) => {
+          const mac = normaliseMac(cam.mac);
+          const owner = byMac.get(mac);
+          return {
+            ...cam,
+            mac: mac ?? cam.mac,
+            adopted: !!owner,
+            adoptedAs: owner ? { id: owner.id, label: owner.label } : null,
+            suggestedId: owner ? owner.id : suggestId(cam.model, mac, takenIds),
+          };
+        });
+        return sendJson(res, 200, {
+          discovered: list,
+          adoptedCount: adopted.length,
+          // Adopting needs credentials the operator has to read off the body.
+          credentialHint:
+            'Each camera generates its own username and password. Read them on the ' +
+            'camera: MENU → Network → Network Option → [Access Authen. Info].',
+        });
+      }
+
+      if (path === '/api/adopt' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (!body?.mac) return sendJson(res, 400, { error: 'mac is required' });
+        const result = await adoption.adopt(body);
+        if (result.ok) await refreshEverything();
+        return sendJson(res, result.ok ? 201 : 409, result);
+      }
+
+      let am = path.match(/^\/api\/cameras\/([^/]+)\/adoption$/);
+      if (am) {
+        const id = decodeURIComponent(am[1]);
+        if (req.method === 'DELETE') {
+          const result = await adoption.forget(id);
+          if (result.ok) await refreshEverything();
+          return sendJson(res, result.ok ? 200 : 404, result);
+        }
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const body = await readBody(req);
+          const result = await adoption.update(id, body ?? {});
+          if (result.ok) await refreshEverything();
+          return sendJson(res, result.ok ? 200 : 404, result);
+        }
       }
 
       // --- property set, with gang fanout ---

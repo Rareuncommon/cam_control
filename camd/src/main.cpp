@@ -81,10 +81,6 @@ int main(int argc, char** argv) {
             std::cerr << "  - " << e << "\n";
             LOG_ERROR("config", "%s", e.c_str());
         }
-        if (cfg.cameras.empty()) {
-            std::cerr << "camd: no usable camera entries, refusing to start\n";
-            return 1;
-        }
         std::cerr << "camd: continuing with " << cfg.cameras.size()
                   << " camera entr" << (cfg.cameras.size() == 1 ? "y" : "ies")
                   << " — fix the above when you can\n";
@@ -95,6 +91,10 @@ int main(int argc, char** argv) {
 
     LOG_INFO("camd", "starting: %zu camera(s), REST on %s:%d, WS at %s",
              cfg.cameras.size(), cfg.bind.c_str(), cfg.restPort, cfg.wsPath.c_str());
+    if (cfg.cameras.empty()) {
+        // Perfectly normal on first run — cameras are adopted through the UI.
+        LOG_INFO("camd", "no cameras configured yet; adopt them from the Setup tab");
+    }
 
     std::unique_ptr<camd::Backend> backend;
     if (fake) {

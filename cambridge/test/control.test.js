@@ -247,3 +247,31 @@ test('view exposes both raw values and labels', () => {
   assert.equal(cam1.properties.fNumber.label, 'f/4.0');
   assert.equal(cam1.properties.shutterSpeed.label, '1/50');
 });
+
+// --- adoption --------------------------------------------------------------
+
+test('suggested ids are readable, stable and unique', async () => {
+  const { suggestId, normaliseMac } = await import('../src/adopt.js');
+  assert.equal(suggestId('ILME-FX3', '6C:6E:07:18:49:93'), 'fx3');
+  assert.equal(suggestId('ILME-FX30', '6C:6E:07:19:75:F0'), 'fx30');
+
+  // A second body of the same model is disambiguated by its MAC tail rather than
+  // a counter, so an id stays attached to a camera regardless of adoption order.
+  const taken = new Set(['fx30']);
+  assert.equal(suggestId('ILME-FX30', '6C:6E:07:19:75:F0', taken), 'fx30-f0');
+  // And it must not read as a model number.
+  assert.ok(!/^fx\d{4,}$/.test(suggestId('ILME-FX30', '6C:6E:07:18:59:EB', taken)));
+
+  assert.equal(suggestId('', '', new Set()), 'camera');
+});
+
+test('MAC normalisation accepts the formats a human might type', async () => {
+  const { normaliseMac } = await import('../src/adopt.js');
+  const want = '6C:6E:07:18:59:EB';
+  assert.equal(normaliseMac('6C:6E:07:18:59:EB'), want);
+  assert.equal(normaliseMac('6c-6e-07-18-59-eb'), want);
+  assert.equal(normaliseMac('6c6e071859eb'), want);
+  assert.equal(normaliseMac('not a mac'), null);
+  assert.equal(normaliseMac(''), null);
+  assert.equal(normaliseMac(undefined), null);
+});

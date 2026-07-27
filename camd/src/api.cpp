@@ -46,7 +46,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         v.set("ok", json::Value(true));
         v.set("backend", json::Value(registry_.backendVersion()));
         int connected = 0;
-        for (auto* w : registry_.all()) {
+        for (const auto& w : registry_.all()) {
             if (w->snapshot().state == ConnState::Connected) ++connected;
         }
         v.set("camerasConfigured", json::Value(static_cast<std::int64_t>(registry_.all().size())));
@@ -61,7 +61,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
     // render connection state.
     server.route("GET", "/cameras", [this](const http::Request&, http::Response& res) {
         json::Value arr = json::Value::makeArray();
-        for (auto* w : registry_.all()) arr.push(cameraSnapshotJson(w->snapshot()));
+        for (const auto& w : registry_.all()) arr.push(cameraSnapshotJson(w->snapshot()));
         json::Value v = json::Value::makeObject();
         v.set("cameras", std::move(arr));
         res.json(200, v.dump());
@@ -86,15 +86,57 @@ void Api::install(http::Server& server, const std::string& wsPath) {
     });
 
     server.route("GET", "/cameras/:id", [this](const http::Request& req, http::Response& res) {
-        auto* w = registry_.find(req.param("id"));
+        auto w = registry_.find(req.param("id"));
         if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
         res.json(200, cameraSnapshotJson(w->snapshot()).dump());
+    });
+
+    // --- adopt / forget at runtime ------------------------------------------
+    // Adding a camera must not restart the daemon: a restart would drop the other
+    // cameras, and adopting a third body should never interrupt two that are live.
+    server.route("POST", "/cameras", [this](const http::Request& req, http::Response& res) {
+        json::Value body;
+        std::string perr;
+        if (!json::parse(req.body, body, perr) || !body.isObject()) {
+            res.error(400, "body must be a JSON object: " + perr);
+            return;
+        }
+        CameraConfig cc;
+        cc.id = body["id"].asString();
+        cc.label = body["label"].asString();
+        cc.model = body["model"].asString();
+        cc.ip = body["ip"].asString();
+        cc.mac = body["mac"].asString();
+        cc.fingerprint = body["fingerprint"].asString();
+        if (body["auth"].isObject()) {
+            cc.username = body["auth"]["username"].asString();
+            cc.password = body["auth"]["password"].asString();
+        }
+        if (cc.id.empty()) { res.error(400, "id is required"); return; }
+        if (cc.label.empty()) cc.label = cc.id;
+
+        std::string err;
+        if (!registry_.addCamera(cc, err)) { res.error(409, err); return; }
+
+        json::Value v = json::Value::makeObject();
+        v.set("adopted", json::Value(true));
+        v.set("id", json::Value(cc.id));
+        res.json(201, v.dump());
+    });
+
+    server.route("DELETE", "/cameras/:id", [this](const http::Request& req, http::Response& res) {
+        std::string err;
+        if (!registry_.removeCamera(req.param("id"), err)) { res.error(404, err); return; }
+        json::Value v = json::Value::makeObject();
+        v.set("forgotten", json::Value(true));
+        v.set("id", json::Value(req.param("id")));
+        res.json(200, v.dump());
     });
 
     // --- properties ---------------------------------------------------------
     server.route("GET", "/cameras/:id/properties",
                  [this, timeoutMs](const http::Request& req, http::Response& res) {
-        auto* w = registry_.find(req.param("id"));
+        auto w = registry_.find(req.param("id"));
         if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
 
         auto out = std::make_shared<Outcome>();
@@ -128,7 +170,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
 
     server.route("PUT", "/cameras/:id/properties/:prop",
                  [this, timeoutMs](const http::Request& req, http::Response& res) {
-        auto* w = registry_.find(req.param("id"));
+        auto w = registry_.find(req.param("id"));
         if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
 
         // Accept {"value": N} or a bare number, since curl-by-hand is a first-class
@@ -187,7 +229,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
     // --- actions ------------------------------------------------------------
     server.route("POST", "/cameras/:id/actions/:action",
                  [this, timeoutMs](const http::Request& req, http::Response& res) {
-        auto* w = registry_.find(req.param("id"));
+        auto w = registry_.find(req.param("id"));
         if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
 
         const std::string action = req.param("action");
@@ -283,7 +325,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
     // whole response, so this writes its own headers.
     server.routeStream("GET", "/cameras/:id/liveview",
                        [this, timeoutMs](const http::Request& req, http::Connection& conn) {
-        auto* w = registry_.find(req.param("id"));
+        auto w = registry_.find(req.param("id"));
         if (!w) {
             std::string body = "{\"error\":\"no such camera\"}";
             conn.writeAll("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n"
@@ -378,7 +420,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         hello.set("event", json::Value("hello"));
         hello.set("backend", json::Value(registry_.backendVersion()));
         json::Value arr = json::Value::makeArray();
-        for (auto* w : registry_.all()) arr.push(cameraSnapshotJson(w->snapshot()));
+        for (const auto& w : registry_.all()) arr.push(cameraSnapshotJson(w->snapshot()));
         hello.set("cameras", std::move(arr));
         conn.writeAll(ws::encodeFrame(ws::Opcode::Text, hello.dump()));
         hub_.serve(std::move(conn));

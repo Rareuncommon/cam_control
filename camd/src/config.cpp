@@ -87,8 +87,13 @@ bool Config::loadString(const std::string& text, Config& out,
     }
 
     const json::Value& cams = root["cameras"];
-    if (!cams.isArray() || cams.size() == 0) {
-        errors.push_back("config must contain a non-empty \"cameras\" array");
+    if (!cams.isArray()) {
+        if (root.contains("cameras")) {
+            errors.push_back("\"cameras\" must be an array");
+        }
+        // An absent or empty camera list is the normal first-run state: cameras are
+        // adopted through the UI, and refusing to start without one would mean you
+        // could never reach the UI to adopt the first.
     } else {
         std::set<std::string> seenIds;
         for (std::size_t i = 0; i < cams.size(); ++i) {

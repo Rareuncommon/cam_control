@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CamBridge</title>
 <!-- Inlined so the page makes no external requests at all, and so a missing
      favicon does not put a 404 in the console next to real errors. -->
@@ -33,13 +34,20 @@ html, body {
 }
 body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
-header {
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+header#top {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 20;
 }
-header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
-header .spacer { flex: 1; }
+header#top h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+.spacer { flex: 1; }
+
+nav.tabs { display: flex; gap: 4px; }
+nav.tabs button {
+  background: transparent; border: 1px solid transparent; color: var(--dim);
+  padding: 6px 14px; min-height: 36px; border-radius: 8px; font-weight: 600;
+}
+nav.tabs button.active { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 
 .pill {
   font-size: 12px; padding: 3px 9px; border-radius: 999px;
@@ -61,13 +69,15 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
 button.danger  { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
 button.small   { min-height: 32px; padding: 5px 9px; font-size: 13px; }
+button.ghost   { background: transparent; }
 
-#banner {
-  display: none; padding: 10px 16px; background: var(--bad); color: #fff; font-weight: 600;
-}
+#banner { display: none; padding: 10px 16px; background: var(--bad); color: #fff; font-weight: 600; }
 #banner.show { display: block; }
 
-#grid {
+.view { display: none; }
+.view.active { display: block; }
+
+#grid, #mvgrid {
   display: grid; gap: 12px; padding: 12px;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
@@ -81,15 +91,13 @@ button.small   { min-height: 32px; padding: 5px 9px; font-size: 13px; }
 .cam.offline   { opacity: .72; }
 
 .cam header {
-  position: static; background: var(--panel-2); padding: 9px 12px; gap: 8px;
-  border-bottom: 1px solid var(--line);
+  background: var(--panel-2); padding: 9px 12px; gap: 8px;
+  border-bottom: 1px solid var(--line); display: flex; align-items: center;
 }
 .cam h2 { font-size: 15px; margin: 0; font-weight: 620; }
 .cam .meta { font-size: 11px; color: var(--dim); }
 
-.recdot {
-  width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none;
-}
+.recdot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none; }
 .recdot.on { background: var(--rec); animation: pulse 1.1s ease-in-out infinite; }
 .recdot.failed { background: var(--warn); }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
@@ -101,9 +109,9 @@ button.small   { min-height: 32px; padding: 5px 9px; font-size: 13px; }
 .row .value { font-variant-numeric: tabular-nums; font-weight: 600; }
 
 select, input[type=range] { width: 100%; }
-select {
+select, input[type=text], input[type=password] {
   font: inherit; font-size: 14px; background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; min-height: 40px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; min-height: 40px;
 }
 select:disabled { opacity: .45; }
 input[type=range] { accent-color: var(--accent); min-height: 32px; }
@@ -111,24 +119,61 @@ input[type=range] { accent-color: var(--accent); min-height: 32px; }
 .focusrow { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; }
 .btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
 .btnrow > * { flex: 1 1 auto; }
-
+.line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .status { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+.note { font-size: 12px; color: var(--dim); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* --- multiview --- */
+#mvgrid { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+#mvgrid.solo { grid-template-columns: 1fr; }
+.feed {
+  position: relative; background: #000; border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; aspect-ratio: 16 / 9; cursor: pointer;
+}
+.feed.recording { border-color: var(--rec); box-shadow: 0 0 0 2px var(--rec) inset; }
+.feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.feed .overlay {
+  position: absolute; left: 0; right: 0; top: 0; padding: 8px 10px;
+  display: flex; align-items: center; gap: 8px;
+  background: linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0));
+  font-size: 13px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.9);
+}
+.feed .placeholder {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 6px; color: var(--dim); font-size: 13px; text-align: center; padding: 20px;
+}
+
+/* --- setup --- */
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  margin: 12px; padding: 14px;
+}
+.card h3 { margin: 0 0 4px; font-size: 14px; }
+.card .sub { font-size: 12px; color: var(--dim); margin-bottom: 12px; }
+table.list { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.list th {
+  text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--dim); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line);
+}
+table.list td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.list tr:last-child td { border-bottom: none; }
+.formgrid { display: grid; grid-template-columns: 130px 1fr; gap: 8px; align-items: center; max-width: 560px; }
+
+dialog {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px; max-width: min(560px, 92vw); width: 100%;
+}
+dialog::backdrop { background: rgba(0,0,0,.62); }
+dialog h3 { margin: 0 0 4px; }
 
 details.tools { margin: 0 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-details.tools > summary {
-  cursor: pointer; padding: 10px 14px; font-weight: 600; list-style: none;
-}
+details.tools > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; list-style: none; }
 details.tools > summary::-webkit-details-marker { display: none; }
 details.tools > summary::before { content: "▸ "; color: var(--dim); }
 details.tools[open] > summary::before { content: "▾ "; }
 .tools .inner { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
 .tools h3 { font-size: 13px; margin: 0 0 6px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
-.tools .line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-input[type=text] {
-  font: inherit; background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-height: 40px;
-}
-.note { font-size: 12px; color: var(--dim); }
 
 #toasts { position: fixed; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 50; max-width: min(460px, 90vw); }
 .toast {
@@ -142,56 +187,102 @@ input[type=text] {
 </head>
 <body>
 
-<header>
+<header id="top">
   <h1>CamBridge</h1>
+  <nav class="tabs">
+    <button data-view="control" class="active">Control</button>
+    <button data-view="multiview">Multiview</button>
+    <button data-view="setup">Setup</button>
+  </nav>
   <span id="camd-pill" class="pill">connecting…</span>
-  <span id="backend-pill" class="pill"></span>
   <span class="spacer"></span>
   <button id="rec-all" class="danger">● Record all</button>
   <button id="stop-all">■ Stop all</button>
 </header>
 
 <div id="banner"></div>
-<main id="grid"></main>
 
-<details class="tools">
-  <summary>Presets, scenes, gang &amp; match</summary>
-  <div class="inner">
-    <div>
-      <h3>Scenes — recall all cameras at once</h3>
-      <div class="line">
-        <input type="text" id="scene-name" placeholder="Scene name, e.g. Worship">
-        <button class="small" id="scene-save">Save current as scene</button>
-        <select id="scene-list" style="max-width:220px"></select>
-        <button class="small primary" id="scene-recall">Recall</button>
-        <button class="small" id="scene-delete">Delete</button>
+<!-- ================= CONTROL ================= -->
+<section class="view active" id="view-control">
+  <main id="grid"></main>
+  <details class="tools">
+    <summary>Presets, scenes, gang &amp; match</summary>
+    <div class="inner">
+      <div>
+        <h3>Scenes — recall all cameras at once</h3>
+        <div class="line">
+          <input type="text" id="scene-name" placeholder="Scene name, e.g. Worship">
+          <button class="small" id="scene-save">Save current as scene</button>
+          <select id="scene-list" style="max-width:220px"></select>
+          <button class="small primary" id="scene-recall">Recall</button>
+          <button class="small" id="scene-delete">Delete</button>
+        </div>
       </div>
-    </div>
-
-    <div>
-      <h3>Match — copy exposure &amp; colour from one camera to the others</h3>
-      <div class="line">
-        <select id="match-ref" style="max-width:220px"></select>
-        <button class="small primary" id="match-go">Match others to this</button>
-        <span class="note" id="match-note"></span>
+      <div>
+        <h3>Match — copy exposure &amp; colour from one camera to the others</h3>
+        <div class="line">
+          <select id="match-ref" style="max-width:220px"></select>
+          <button class="small primary" id="match-go">Match others to this</button>
+          <span class="note" id="match-note"></span>
+        </div>
       </div>
-    </div>
-
-    <div>
-      <h3>Gang — link cameras so a change applies to all</h3>
-      <div class="line" id="gang-members"></div>
-      <div class="line">
-        <button class="small" id="gang-save">Link selected</button>
-        <button class="small" id="gang-clear">Unlink all</button>
-        <span class="note" id="gang-state"></span>
+      <div>
+        <h3>Gang — link cameras so a change applies to all</h3>
+        <div class="line" id="gang-members"></div>
+        <div class="line">
+          <button class="small" id="gang-save">Link selected</button>
+          <button class="small" id="gang-clear">Unlink all</button>
+          <span class="note" id="gang-state"></span>
+        </div>
       </div>
-      <div class="note">Offsets are per-camera steps along each body's own list, so
-        "one stop under" survives the FX3 and FX30 having different ISO tables.</div>
+      <div class="note" id="focus-note"></div>
     </div>
+  </details>
+</section>
 
-    <div class="note" id="focus-note"></div>
+<!-- ================= MULTIVIEW ================= -->
+<section class="view" id="view-multiview">
+  <div class="line" style="padding:12px 12px 0">
+    <button class="small" id="mv-refresh">Restart feeds</button>
+    <span class="note">Click a feed to enlarge. Live view must be enabled on the camera.</span>
   </div>
-</details>
+  <main id="mvgrid"></main>
+</section>
+
+<!-- ================= SETUP ================= -->
+<section class="view" id="view-setup">
+  <div class="card">
+    <h3>Cameras on the network</h3>
+    <div class="sub" id="discover-hint"></div>
+    <table class="list" id="discovered-table"></table>
+  </div>
+  <div class="card">
+    <h3>Adopted cameras</h3>
+    <div class="sub">These are saved and reconnect automatically. Removing one does not change the camera itself.</div>
+    <table class="list" id="adopted-table"></table>
+  </div>
+</section>
+
+<dialog id="adopt-dialog">
+  <h3 id="adopt-title">Adopt camera</h3>
+  <div class="sub note" id="adopt-sub"></div>
+  <div class="formgrid" style="margin-top:12px">
+    <label for="adopt-label">Name</label>
+    <input type="text" id="adopt-label" placeholder="e.g. Wide, Centre, Tight">
+    <label for="adopt-user">Username</label>
+    <input type="text" id="adopt-user" autocomplete="off" placeholder="from the camera screen">
+    <label for="adopt-pass">Password</label>
+    <input type="password" id="adopt-pass" autocomplete="off" placeholder="from the camera screen">
+  </div>
+  <p class="note" style="margin:12px 0 0">
+    On the camera: <strong>MENU → Network → Network Option → [Access Authen. Info]</strong>.
+    Each body has its own username and password — they are not shared.
+  </p>
+  <div class="line" style="margin-top:14px;justify-content:flex-end">
+    <button id="adopt-cancel" class="ghost">Cancel</button>
+    <button id="adopt-confirm" class="primary">Adopt</button>
+  </div>
+</dialog>
 
 <div id="toasts"></div>
 
@@ -212,8 +303,11 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 
 let view = { camdConnected: false, cameras: [], backend: '' };
-let presetsMeta = { focusNote: '', scenes: [] };
+let presetsMeta = { focusNote: '', scenes: [], presets: {} };
+let discovery = { discovered: [], credentialHint: '' };
 let gangSelection = new Set();
+let currentView = 'control';
+let soloFeed = null;
 // Suppresses repaint of a control the operator is actively dragging, so a slider
 // does not jump under the finger when an event arrives mid-gesture.
 let interacting = null;
@@ -239,7 +333,7 @@ async function api(method, path, body) {
   return data ?? {};
 }
 
-// --- rendering --------------------------------------------------------------
+// --- control view -----------------------------------------------------------
 
 function stateBadge(cam) {
   const map = {
@@ -264,7 +358,7 @@ function autoGateNotice(cam, propName) {
   const what = { irisMode: 'Iris', gainMode: 'ISO', shutterMode: 'Shutter' }[gate];
   return el('div', { class: 'row' },
     el('label', { text: '' }),
-    el('div', { class: 'line', style: 'display:flex;gap:6px;align-items:center;flex-wrap:wrap' },
+    el('div', { class: 'line' },
       el('span', { class: 'note', text: `${what} is on Auto` }),
       el('button', {
         class: 'small',
@@ -313,12 +407,9 @@ function rangeRow(cam, propName, labelText) {
   const value = el('span', { class: 'value', text: prop?.label ?? '—' });
   const key = `${cam.id}:${propName}`;
   const input = el('input', {
-    type: 'range',
-    disabled: !live,
-    min: prop?.range?.min ?? 0,
-    max: prop?.range?.max ?? 100,
-    step: prop?.range?.step || 1,
-    value: prop?.raw ?? 0,
+    type: 'range', disabled: !live,
+    min: prop?.range?.min ?? 0, max: prop?.range?.max ?? 100,
+    step: prop?.range?.step || 1, value: prop?.raw ?? 0,
     'data-key': key,
     oninput: (e) => { interacting = key; value.textContent = e.target.value; },
     onchange: async (e) => {
@@ -326,32 +417,27 @@ function rangeRow(cam, propName, labelText) {
       await api('PUT', `/api/cameras/${cam.id}/properties/${propName}`, { value: Number(e.target.value) });
     },
   });
-  return el('div', { class: 'row' }, el('label', { text: labelText }),
-    el('div', {}, input, value));
+  return el('div', { class: 'row' }, el('label', { text: labelText }), el('div', {}, input, value));
 }
 
 function focusRow(cam) {
   const prop = cam.properties?.focusPosition;
   const connected = cam.state === 'connected';
   const hasAbsolute = !!(prop && prop.writable && prop.range);
-  const key = `${cam.id}:focusPosition`;
-
   const slider = el('input', {
-    type: 'range',
-    disabled: !hasAbsolute,
-    min: prop?.range?.min ?? 0,
-    max: prop?.range?.max ?? 1000,
-    step: prop?.range?.step || 1,
-    value: prop?.raw ?? 0,
-    'data-key': key,
-    title: hasAbsolute ? 'Absolute focus position' : 'This lens does not report an absolute focus position',
-    oninput: () => { interacting = key; },
+    type: 'range', disabled: !hasAbsolute,
+    min: prop?.range?.min ?? 0, max: prop?.range?.max ?? 1000,
+    step: prop?.range?.step || 1, value: prop?.raw ?? 0,
+    'data-key': `${cam.id}:focusPosition`,
+    title: hasAbsolute
+      ? 'Absolute focus position'
+      : 'This lens or focus mode does not allow setting an absolute position — switch the camera to MF',
+    oninput: () => { interacting = `${cam.id}:focusPosition`; },
     onchange: async (e) => {
       interacting = null;
       await api('PUT', `/api/cameras/${cam.id}/properties/focusPosition`, { value: Number(e.target.value) });
     },
   });
-
   const nudge = (steps, text) => el('button', {
     class: 'small', disabled: !connected,
     title: 'Relative focus nudge — works on lenses without absolute positioning',
@@ -360,14 +446,31 @@ function focusRow(cam) {
 
   return el('div', { class: 'row' },
     el('label', { text: 'Focus' }),
-    el('div', { class: 'focusrow' },
-      slider,
-      nudge(-10, '◀'),
-      nudge(10, '▶'),
+    el('div', { class: 'focusrow' }, slider, nudge(-10, '◀'), nudge(10, '▶'),
       el('button', {
         class: 'small', disabled: !connected,
         onclick: () => api('POST', `/api/cameras/${cam.id}/actions/autofocus`),
       }, document.createTextNode('AF'))));
+}
+
+function presetPicker(cam) {
+  const names = Object.keys(presetsMeta.presets?.[cam.id] ?? {});
+  if (names.length === 0) return el('span', { class: 'note', text: 'no presets' });
+  const sel = el('select', { class: 'small', style: 'max-width:150px' });
+  sel.append(el('option', { value: '' }, document.createTextNode('Recall…')));
+  for (const n of names) sel.append(el('option', { value: n }, document.createTextNode(n)));
+  sel.addEventListener('change', async (e) => {
+    const name = e.target.value;
+    e.target.value = '';
+    if (!name) return;
+    const r = await api('POST', `/api/cameras/${cam.id}/presets/${encodeURIComponent(name)}`);
+    if (r.ok) toast(`Recalled "${name}" on ${cam.label}`);
+    else if (r.results) {
+      const bad = r.results.filter((x) => !x.ok).map((x) => x.prop);
+      toast(`Partly applied on ${cam.label}; failed: ${bad.join(', ')}`, 'warn', 9000);
+    }
+  });
+  return sel;
 }
 
 function cameraCard(cam) {
@@ -376,10 +479,8 @@ function cameraCard(cam) {
   const connected = cam.state === 'connected';
 
   const card = el('section', {
-    class: `cam${rec ? ' recording' : ''}${connected ? '' : ' offline'}`,
-    'data-id': cam.id,
+    class: `cam${rec ? ' recording' : ''}${connected ? '' : ' offline'}`, 'data-id': cam.id,
   });
-
   card.append(el('header', {},
     el('span', { class: `recdot${rec ? ' on' : ''}${failed ? ' failed' : ''}` }),
     el('div', {},
@@ -387,11 +488,10 @@ function cameraCard(cam) {
       el('div', { class: 'meta', text:
         `${cam.model || 'unknown model'} · ${cam.ip || 'no address'}` +
         (cam.properties?.exposureMode ? ` · ${cam.properties.exposureMode.label}` : '') })),
-    el('span', { class: 'spacer', style: 'flex:1' }),
+    el('span', { class: 'spacer' }),
     stateBadge(cam)));
 
   const body = el('div', { class: 'body' });
-
   if (!connected) {
     body.append(el('div', { class: 'note', text: cam.detail || 'No live values while this camera is disconnected.' }));
     body.append(el('div', { class: 'btnrow' },
@@ -406,7 +506,7 @@ function cameraCard(cam) {
   body.append(selectRow(cam, 'shutterSpeed', 'Shutter'));
   body.append(selectRow(cam, 'whiteBalance', 'WB'));
   body.append(rangeRow(cam, 'colorTemp', 'Kelvin'));
-  body.append(rangeRow(cam, 'wbTint', 'Tint'));
+  if (cam.properties?.wbTint) body.append(rangeRow(cam, 'wbTint', 'Tint'));
   body.append(focusRow(cam));
 
   body.append(el('div', { class: 'btnrow' },
@@ -435,77 +535,239 @@ function cameraCard(cam) {
   return card;
 }
 
-function presetPicker(cam) {
-  const names = Object.keys(presetsMeta.presets?.[cam.id] ?? {});
-  if (names.length === 0) return el('span', { class: 'note', text: 'no presets' });
-  const sel = el('select', { class: 'small', style: 'max-width:150px' });
-  sel.append(el('option', { value: '' }, document.createTextNode('Recall…')));
-  for (const n of names) sel.append(el('option', { value: n }, document.createTextNode(n)));
-  sel.addEventListener('change', async (e) => {
-    const name = e.target.value;
-    e.target.value = '';
-    if (!name) return;
-    const r = await api('POST', `/api/cameras/${cam.id}/presets/${encodeURIComponent(name)}`);
-    if (r.ok) toast(`Recalled "${name}" on ${cam.label}`);
-    else if (r.results) {
-      const bad = r.results.filter((x) => !x.ok).map((x) => x.prop);
-      toast(`Partly applied on ${cam.label}; failed: ${bad.join(', ')}`, 'warn', 9000);
-    }
-  });
-  return sel;
+function renderControl() {
+  const grid = $('#grid');
+  grid.textContent = '';
+  if (view.cameras.length === 0) {
+    // An empty grid reads as a broken page. Say which half is missing and point at
+    // the fix, rather than leaving a blank screen under a red banner.
+    grid.append(el('section', { class: 'cam' },
+      el('div', { class: 'body' },
+        el('div', { class: 'note', text: view.camdConnected
+          ? 'No cameras adopted yet.'
+          : 'The camera daemon is not running, so there is nothing to control yet.' }),
+        view.camdConnected
+          ? el('button', { class: 'primary', onclick: () => switchView('setup') },
+              document.createTextNode('Go to Setup and add a camera'))
+          : el('div', { class: 'mono', text: './scripts/start.sh' }))));
+  }
+  for (const cam of view.cameras) grid.append(cameraCard(cam));
 }
+
+// --- multiview --------------------------------------------------------------
+
+function feedTile(cam) {
+  const rec = cam.status?.recording;
+  const connected = cam.state === 'connected';
+  const tile = el('div', {
+    class: `feed${rec ? ' recording' : ''}`,
+    onclick: () => { soloFeed = soloFeed === cam.id ? null : cam.id; renderMultiview(); },
+    title: soloFeed === cam.id ? 'Click to show all' : 'Click to enlarge',
+  });
+
+  if (connected) {
+    // Cache-buster in the URL so a restarted feed is not served a dead stream from
+    // the browser's connection cache.
+    const img = el('img', {
+      src: `/api/cameras/${encodeURIComponent(cam.id)}/liveview?t=${Date.now()}`,
+      alt: `${cam.label} live view`,
+    });
+    const fallback = el('div', { class: 'placeholder' },
+      el('div', { text: 'No live view from this camera' }),
+      el('div', { class: 'note', text: 'Live view may need enabling on the body, or the camera may not stream while idle.' }));
+    fallback.style.display = 'none';
+    img.addEventListener('error', () => { img.style.display = 'none'; fallback.style.display = 'flex'; });
+    tile.append(img, fallback);
+  } else {
+    tile.append(el('div', { class: 'placeholder' },
+      el('div', { text: cam.state }),
+      el('div', { class: 'note', text: cam.detail ?? '' })));
+  }
+
+  tile.append(el('div', { class: 'overlay' },
+    el('span', { class: `recdot${rec ? ' on' : ''}` }),
+    el('span', { text: cam.label || cam.id }),
+    el('span', { class: 'spacer' }),
+    el('span', { class: 'note', text: cam.properties?.fNumber?.label ?? '' })));
+  return tile;
+}
+
+function renderMultiview() {
+  const grid = $('#mvgrid');
+  grid.textContent = '';
+  const cams = soloFeed ? view.cameras.filter((c) => c.id === soloFeed) : view.cameras;
+  grid.className = soloFeed ? 'solo' : '';
+  if (cams.length === 0) {
+    grid.append(el('div', { class: 'note', style: 'padding:12px', text: 'No cameras to show.' }));
+    return;
+  }
+  for (const cam of cams) grid.append(feedTile(cam));
+}
+
+// --- setup ------------------------------------------------------------------
+
+function renderSetup() {
+  $('#discover-hint').textContent = discovery.credentialHint ?? '';
+
+  const dt = $('#discovered-table');
+  dt.textContent = '';
+  dt.append(el('tr', {},
+    el('th', { text: 'Model' }), el('th', { text: 'Address' }),
+    el('th', { text: 'MAC' }), el('th', { text: '' })));
+
+  const list = discovery.discovered ?? [];
+  if (list.length === 0) {
+    dt.append(el('tr', {}, el('td', { colspan: '4', class: 'note',
+      text: 'No cameras seen on the network yet. Check that each body has USB-LAN Connection active and Remote Shooting on.' })));
+  }
+  for (const cam of list) {
+    dt.append(el('tr', {},
+      el('td', {}, el('div', { text: cam.model || 'unknown' }),
+        cam.accessAuthRequired ? el('div', { class: 'note', text: 'needs access authentication' }) : null),
+      el('td', { class: 'mono', text: cam.ip || '—' }),
+      el('td', { class: 'mono', text: cam.mac || '—' }),
+      el('td', {}, cam.adopted
+        ? el('span', { class: 'pill ok', text: `adopted as ${cam.adoptedAs?.label ?? cam.adoptedAs?.id}` })
+        : el('button', { class: 'small primary', onclick: () => openAdoptDialog(cam) },
+            document.createTextNode('Adopt')))));
+  }
+
+  const at = $('#adopted-table');
+  at.textContent = '';
+  at.append(el('tr', {},
+    el('th', { text: 'Name' }), el('th', { text: 'Model' }),
+    el('th', { text: 'State' }), el('th', { text: 'MAC' }), el('th', { text: '' })));
+  if (view.cameras.length === 0) {
+    at.append(el('tr', {}, el('td', { colspan: '5', class: 'note', text: 'Nothing adopted yet.' })));
+  }
+  for (const cam of view.cameras) {
+    at.append(el('tr', {},
+      el('td', { text: cam.label }),
+      el('td', { class: 'note', text: cam.model || '—' }),
+      el('td', {}, stateBadge(cam)),
+      el('td', { class: 'mono', text: cam.mac || '—' }),
+      el('td', {}, el('div', { class: 'line' },
+        el('button', { class: 'small', onclick: () => openEditDialog(cam) },
+          document.createTextNode('Edit')),
+        el('button', {
+          class: 'small', onclick: async () => {
+            if (!confirm(`Remove "${cam.label}" from CamBridge? The camera itself is not changed.`)) return;
+            const r = await api('DELETE', `/api/cameras/${encodeURIComponent(cam.id)}/adoption`);
+            if (r.ok) { toast(`Removed ${cam.label}`); refreshSetup(); }
+          },
+        }, document.createTextNode('Remove'))))));
+  }
+}
+
+let adoptTarget = null;
+let editTarget = null;
+
+function openAdoptDialog(cam) {
+  adoptTarget = cam;
+  editTarget = null;
+  $('#adopt-title').textContent = `Adopt ${cam.model || 'camera'}`;
+  $('#adopt-sub').textContent = `${cam.ip || 'unknown address'} · ${cam.mac}`;
+  $('#adopt-label').value = '';
+  $('#adopt-user').value = '';
+  $('#adopt-pass').value = '';
+  $('#adopt-confirm').textContent = 'Adopt';
+  $('#adopt-dialog').showModal();
+  $('#adopt-label').focus();
+}
+
+function openEditDialog(cam) {
+  editTarget = cam;
+  adoptTarget = null;
+  $('#adopt-title').textContent = `Edit ${cam.label}`;
+  $('#adopt-sub').textContent = `${cam.ip || 'unknown address'} · ${cam.mac}`;
+  $('#adopt-label').value = cam.label ?? '';
+  $('#adopt-user').value = '';
+  $('#adopt-pass').value = '';
+  // Credentials are never sent back to the browser, so blank means "leave alone".
+  $('#adopt-user').placeholder = 'leave blank to keep current';
+  $('#adopt-pass').placeholder = 'leave blank to keep current';
+  $('#adopt-confirm').textContent = 'Save';
+  $('#adopt-dialog').showModal();
+  $('#adopt-label').focus();
+}
+
+$('#adopt-cancel').addEventListener('click', () => $('#adopt-dialog').close());
+
+$('#adopt-confirm').addEventListener('click', async () => {
+  const label = $('#adopt-label').value.trim();
+  const username = $('#adopt-user').value.trim();
+  const password = $('#adopt-pass').value;
+
+  if (adoptTarget) {
+    if (adoptTarget.accessAuthRequired && (!username || !password)) {
+      toast('This camera requires a username and password from its Access Authen. Info screen', 'warn', 9000);
+      return;
+    }
+    const r = await api('POST', '/api/adopt', {
+      mac: adoptTarget.mac, model: adoptTarget.model, ip: adoptTarget.ip,
+      label, username, password,
+    });
+    if (r.ok) {
+      toast(`Adopted ${r.camera?.label ?? label}`);
+      $('#adopt-dialog').close();
+      refreshSetup();
+    }
+    return;
+  }
+
+  if (editTarget) {
+    const r = await api('PATCH', `/api/cameras/${encodeURIComponent(editTarget.id)}/adoption`,
+      { label, username, password });
+    if (r.ok) {
+      toast(`Updated ${label || editTarget.label}`);
+      $('#adopt-dialog').close();
+      refreshSetup();
+    }
+  }
+});
+
+async function refreshSetup() {
+  discovery = await api('GET', '/api/discovered');
+  renderSetup();
+}
+
+// --- shared -----------------------------------------------------------------
 
 function render() {
   const camdPill = $('#camd-pill');
   camdPill.textContent = view.camdConnected ? 'camd connected' : 'camd unreachable';
   camdPill.className = `pill ${view.camdConnected ? 'ok' : 'bad'}`;
-  $('#backend-pill').textContent = view.backend ?? '';
 
   const banner = $('#banner');
   if (!view.camdConnected) {
     banner.textContent = 'camd is not reachable — no camera control is possible. Check the daemon.';
     banner.classList.add('show');
   } else {
-    const bad = view.cameras.filter((c) => c.state !== 'connected');
     const failedRec = view.cameras.filter((c) => c.status?.recordingFailed);
+    const bad = view.cameras.filter((c) => c.state !== 'connected');
     if (failedRec.length) {
       banner.textContent = `RECORDING FAILED on ${failedRec.map((c) => c.label).join(', ')}`;
       banner.classList.add('show');
     } else if (bad.length) {
-      banner.textContent = `${bad.map((c) => `${c.label}: ${c.state}`).join('  ·  ')}`;
+      banner.textContent = bad.map((c) => `${c.label}: ${c.state}`).join('  ·  ');
       banner.classList.add('show');
     } else {
       banner.classList.remove('show');
     }
   }
 
-  // Preserve the control the operator is mid-gesture on.
   const active = document.activeElement;
   const activeKey = active?.dataset?.key ?? interacting;
 
-  const grid = $('#grid');
-  grid.textContent = '';
-  if (view.cameras.length === 0) {
-    // An empty grid reads as a broken page. Say which half is missing and give
-    // the command, rather than leaving a blank screen under a red banner.
-    grid.append(el('section', { class: 'cam' },
-      el('div', { class: 'body' },
-        el('div', { class: 'note', text: view.camdConnected
-          ? 'camd is running but has no cameras configured. Add them to config/cambridge.json — each camera needs its own MAC and its own access-authentication credentials.'
-          : 'The camd daemon is not running, so there is nothing to control yet.' }),
-        view.camdConnected ? null : el('div', { class: 'note', style: 'margin-top:8px' },
-          document.createTextNode('Start both halves together with:')),
-        view.camdConnected ? null : el('div', {
-          style: 'margin-top:6px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px',
-          text: './scripts/start.sh' }))));
-  }
-  for (const cam of view.cameras) grid.append(cameraCard(cam));
+  if (currentView === 'control') renderControl();
+  else if (currentView === 'setup') renderSetup();
+  // Multiview is deliberately not re-rendered on every state change: replacing an
+  // <img> restarts its MJPEG stream, which would make the feeds flicker constantly.
 
   if (activeKey) {
-    const restore = grid.querySelector(`[data-key="${CSS.escape(activeKey)}"]`);
+    const restore = document.querySelector(`[data-key="${CSS.escape(activeKey)}"]`);
     if (restore) restore.focus({ preventScroll: true });
   }
-
   renderTools();
 }
 
@@ -528,13 +790,9 @@ function renderTools() {
   const holder = $('#gang-members');
   holder.textContent = '';
   for (const c of view.cameras) {
-    const id = `gang-${c.id}`;
     const cb = el('input', {
-      type: 'checkbox', id,
-      checked: gangSelection.has(c.id),
-      onchange: (e) => {
-        if (e.target.checked) gangSelection.add(c.id); else gangSelection.delete(c.id);
-      },
+      type: 'checkbox', checked: gangSelection.has(c.id),
+      onchange: (e) => { e.target.checked ? gangSelection.add(c.id) : gangSelection.delete(c.id); },
     });
     holder.append(el('label', { class: 'note', style: 'display:flex;align-items:center;gap:5px' },
       cb, document.createTextNode(c.label)));
@@ -542,17 +800,26 @@ function renderTools() {
   $('#focus-note').textContent = presetsMeta.focusNote ?? '';
 }
 
-// --- wiring -----------------------------------------------------------------
-
-async function loadPresets() {
-  presetsMeta = await api('GET', '/api/presets');
-  const gangs = await api('GET', '/api/gangs');
-  const active = Object.entries(gangs.gangs ?? {}).filter(([, g]) => g.enabled);
-  $('#gang-state').textContent = active.length
-    ? `Linked: ${active.map(([n, g]) => `${n} (${Object.keys(g.members).join(', ')})`).join('; ')}`
-    : 'No cameras linked.';
-  renderTools();
+function switchView(name) {
+  currentView = name;
+  soloFeed = null;
+  for (const btn of document.querySelectorAll('nav.tabs button')) {
+    btn.classList.toggle('active', btn.dataset.view === name);
+  }
+  for (const section of document.querySelectorAll('.view')) {
+    section.classList.toggle('active', section.id === `view-${name}`);
+  }
+  if (name === 'multiview') renderMultiview();
+  if (name === 'setup') refreshSetup();
+  if (name === 'control') renderControl();
 }
+
+for (const btn of document.querySelectorAll('nav.tabs button')) {
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
+}
+$('#mv-refresh').addEventListener('click', renderMultiview);
+
+// --- actions ----------------------------------------------------------------
 
 $('#rec-all').addEventListener('click', async () => {
   const r = await api('POST', '/api/record-all', { start: true });
@@ -592,8 +859,7 @@ $('#scene-recall').addEventListener('click', async () => {
 
 $('#scene-delete').addEventListener('click', async () => {
   const name = $('#scene-list').value;
-  if (!name) return;
-  if (!confirm(`Delete scene "${name}"?`)) return;
+  if (!name || !confirm(`Delete scene "${name}"?`)) return;
   await api('DELETE', `/api/scenes/${encodeURIComponent(name)}`);
   loadPresets();
 });
@@ -627,6 +893,16 @@ $('#gang-clear').addEventListener('click', async () => {
   loadPresets();
 });
 
+async function loadPresets() {
+  presetsMeta = await api('GET', '/api/presets');
+  const gangs = await api('GET', '/api/gangs');
+  const active = Object.entries(gangs.gangs ?? {}).filter(([, g]) => g.enabled);
+  $('#gang-state').textContent = active.length
+    ? `Linked: ${active.map(([n, g]) => `${n} (${Object.keys(g.members).join(', ')})`).join('; ')}`
+    : 'No cameras linked.';
+  renderTools();
+}
+
 // SSE. EventSource reconnects by itself, which is exactly what a booth iPad
 // waking from sleep needs.
 function connectEvents() {
@@ -634,7 +910,17 @@ function connectEvents() {
   es.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'state') { view = msg.view; render(); }
+      if (msg.type === 'state') {
+        const cameraSetChanged =
+          msg.view.cameras.length !== view.cameras.length ||
+          msg.view.cameras.some((c, i) => c.id !== view.cameras[i]?.id ||
+                                          c.state !== view.cameras[i]?.state);
+        view = msg.view;
+        render();
+        // Only rebuild the feeds when the set of cameras or their connection state
+        // actually changes, so an iris tweak does not restart three video streams.
+        if (currentView === 'multiview' && cameraSetChanged) renderMultiview();
+      }
     } catch { /* ignore malformed frame */ }
   };
   es.onerror = () => {
@@ -645,6 +931,9 @@ function connectEvents() {
 
 loadPresets();
 connectEvents();
+// Keep the setup tab's discovery list fresh while it is open, so a camera powered
+// on mid-setup appears without a manual refresh.
+setInterval(() => { if (currentView === 'setup') refreshSetup(); }, 5000);
 </script>
 </body>
 </html>

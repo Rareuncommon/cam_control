@@ -161,8 +161,17 @@ public:
     void setSink(std::function<void(const std::string&)> sink);
     void publish(const std::string& jsonText) override;
 
-    CameraWorker* find(const std::string& id);
-    std::vector<CameraWorker*> all();
+    // Workers are shared_ptr rather than unique_ptr because cameras can now be
+    // removed while a request is in flight. A raw pointer handed to a REST handler
+    // could dangle the moment another thread forgets that camera; a shared_ptr
+    // keeps the worker alive until the handler is done with it.
+    std::shared_ptr<CameraWorker> find(const std::string& id);
+    std::vector<std::shared_ptr<CameraWorker>> all();
+
+    // Adding and removing at runtime, so adopting a camera never needs a restart
+    // — which matters because a restart drops the other cameras too.
+    bool addCamera(const CameraConfig& cc, std::string& err);
+    bool removeCamera(const std::string& id, std::string& err);
 
     // Bodies seen on the network, including ones no config entry claims — the
     // practical way to discover a camera's MAC when filling in the config.
@@ -176,7 +185,13 @@ private:
 
     Config cfg_;
     std::unique_ptr<Backend> backend_;
-    std::vector<std::unique_ptr<CameraWorker>> workers_;
+
+    // Guards workers_ and cfg_.cameras, both of which the discovery loop reads and
+    // the REST layer can now mutate. Held only for list operations, never across a
+    // camera call.
+    mutable std::mutex workersMu_;
+    std::vector<std::shared_ptr<CameraWorker>> workers_;
+
     std::thread discoveryThread_;
     std::atomic<bool> running_{false};
 

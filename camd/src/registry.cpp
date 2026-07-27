@@ -559,22 +559,93 @@ bool Registry::start(std::string& err) {
     if (!backend_->init(err)) return false;
     LOG_INFO("sdk", "backend ready: %s", backend_->versionString().c_str());
 
-    for (const auto& cc : cfg_.cameras) {
-        workers_.push_back(std::make_unique<CameraWorker>(cc, backend_.get(), this,
-                                                          cfg_.connection));
+    {
+        std::lock_guard<std::mutex> lock(workersMu_);
+        for (const auto& cc : cfg_.cameras) {
+            workers_.push_back(std::make_shared<CameraWorker>(cc, backend_.get(), this,
+                                                              cfg_.connection));
+        }
+        for (auto& w : workers_) w->start();
     }
-    for (auto& w : workers_) w->start();
 
     running_ = true;
     discoveryThread_ = std::thread([this] { discoveryLoop(); });
     return true;
 }
 
+bool Registry::addCamera(const CameraConfig& cc, std::string& err) {
+    if (cc.id.empty()) { err = "camera id is required"; return false; }
+    std::shared_ptr<CameraWorker> worker;
+    {
+        std::lock_guard<std::mutex> lock(workersMu_);
+        for (const auto& w : workers_) {
+            if (w->id() == cc.id) { err = "a camera with id '" + cc.id + "' already exists"; return false; }
+        }
+        for (const auto& existing : cfg_.cameras) {
+            if (!cc.mac.empty() && existing.mac == cc.mac) {
+                err = "camera " + cc.mac + " is already adopted as '" + existing.id + "'";
+                return false;
+            }
+        }
+        cfg_.cameras.push_back(cc);
+        worker = std::make_shared<CameraWorker>(cc, backend_.get(), this, cfg_.connection);
+        workers_.push_back(worker);
+    }
+    // Started outside the lock: start() spawns a thread, and holding the list
+    // mutex while doing so would let a slow start block every other camera's
+    // snapshot read.
+    worker->start();
+
+    // Hand it the discovery result we already have, instead of making it wait for
+    // the next sweep. Without this, a camera adopted through the UI sits at
+    // "offline" for up to a full discovery interval and the operator is shown a
+    // red banner for a camera that is in fact fine.
+    if (!cc.mac.empty()) {
+        std::lock_guard<std::mutex> lock(discMu_);
+        for (const auto& d : discovered_) {
+            if (upperMac(d.mac) == cc.mac) {
+                worker->offerDiscovery(d);
+                break;
+            }
+        }
+    }
+
+    LOG_INFO("registry", "adopted camera '%s' (%s)", cc.id.c_str(), cc.mac.c_str());
+    return true;
+}
+
+bool Registry::removeCamera(const std::string& id, std::string& err) {
+    std::shared_ptr<CameraWorker> victim;
+    {
+        std::lock_guard<std::mutex> lock(workersMu_);
+        auto it = std::find_if(workers_.begin(), workers_.end(),
+                               [&](const std::shared_ptr<CameraWorker>& w) { return w->id() == id; });
+        if (it == workers_.end()) { err = "no such camera: " + id; return false; }
+        victim = *it;
+        workers_.erase(it);
+        cfg_.cameras.erase(
+            std::remove_if(cfg_.cameras.begin(), cfg_.cameras.end(),
+                           [&](const CameraConfig& c) { return c.id == id; }),
+            cfg_.cameras.end());
+    }
+    // stop() joins the worker thread, which can take a moment if it is mid-connect.
+    // Doing that outside the lock keeps the rest of the system responsive, and the
+    // shared_ptr means any in-flight request still holding this worker stays valid.
+    victim->stop();
+    LOG_INFO("registry", "forgot camera '%s'", id.c_str());
+    return true;
+}
+
 void Registry::stop() {
     if (!running_.exchange(false)) return;
     if (discoveryThread_.joinable()) discoveryThread_.join();
-    for (auto& w : workers_) w->stop();
-    workers_.clear();
+    std::vector<std::shared_ptr<CameraWorker>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(workersMu_);
+        snapshot.swap(workers_);
+    }
+    for (auto& w : snapshot) w->stop();
+    snapshot.clear();
     if (backend_) backend_->shutdown();
 }
 
@@ -592,18 +663,17 @@ void Registry::publish(const std::string& jsonText) {
     if (sink) sink(jsonText);
 }
 
-CameraWorker* Registry::find(const std::string& id) {
+std::shared_ptr<CameraWorker> Registry::find(const std::string& id) {
+    std::lock_guard<std::mutex> lock(workersMu_);
     for (auto& w : workers_) {
-        if (w->id() == id) return w.get();
+        if (w->id() == id) return w;
     }
     return nullptr;
 }
 
-std::vector<CameraWorker*> Registry::all() {
-    std::vector<CameraWorker*> out;
-    out.reserve(workers_.size());
-    for (auto& w : workers_) out.push_back(w.get());
-    return out;
+std::vector<std::shared_ptr<CameraWorker>> Registry::all() {
+    std::lock_guard<std::mutex> lock(workersMu_);
+    return workers_;
 }
 
 std::vector<DiscoveredCamera> Registry::lastDiscovered() const {
@@ -624,6 +694,16 @@ void Registry::discoveryLoop() {
             discovered_ = found;
         }
 
+        // Snapshot the worker list and their configs together, so a camera adopted
+        // or forgotten mid-sweep cannot invalidate an index halfway through.
+        std::vector<std::shared_ptr<CameraWorker>> workers;
+        std::vector<CameraConfig> configs;
+        {
+            std::lock_guard<std::mutex> lock(workersMu_);
+            workers = workers_;
+            configs = cfg_.cameras;
+        }
+
         // Match discovered bodies to configured cameras.
         //
         // Matching runs in strength order across ALL cameras — every MAC match is
@@ -635,17 +715,23 @@ void Registry::discoveryLoop() {
         // actually gone. That produces two cards pointing at one body, which is
         // both wrong and very hard to spot mid-service.
         std::vector<bool> claimed(found.size(), false);
-        std::vector<bool> assigned(workers_.size(), false);
+        std::vector<bool> assigned(workers.size(), false);
 
+        auto configFor = [&](const std::string& id) -> const CameraConfig* {
+            for (const auto& c : configs) {
+                if (c.id == id) return &c;
+            }
+            return nullptr;
+        };
         auto claim = [&](std::size_t widx, std::size_t fidx) {
             claimed[fidx] = true;
             assigned[widx] = true;
-            workers_[widx]->offerDiscovery(found[fidx]);
+            workers[widx]->offerDiscovery(found[fidx]);
         };
 
         // Pass 1 — MAC. Authoritative.
-        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
-            const CameraConfig* cc = cfg_.findById(workers_[wi]->id());
+        for (std::size_t wi = 0; wi < workers.size(); ++wi) {
+            const CameraConfig* cc = configFor(workers[wi]->id());
             if (!cc || cc->mac.empty()) continue;
             for (std::size_t i = 0; i < found.size(); ++i) {
                 if (!claimed[i] && upperMac(found[i].mac) == cc->mac) { claim(wi, i); break; }
@@ -653,9 +739,9 @@ void Registry::discoveryLoop() {
         }
 
         // Pass 2 — IP, for entries with no MAC recorded yet.
-        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
+        for (std::size_t wi = 0; wi < workers.size(); ++wi) {
             if (assigned[wi]) continue;
-            const CameraConfig* cc = cfg_.findById(workers_[wi]->id());
+            const CameraConfig* cc = configFor(workers[wi]->id());
             // A config entry that names a MAC is pinned to that body. Never fall
             // back for it: binding "FX30 — Center" to whatever FX30 happens to be
             // reachable is worse than leaving it offline and saying so.
@@ -666,9 +752,9 @@ void Registry::discoveryLoop() {
         }
 
         // Pass 3 — model, only when it is unambiguous and the entry is unpinned.
-        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
+        for (std::size_t wi = 0; wi < workers.size(); ++wi) {
             if (assigned[wi]) continue;
-            const CameraConfig* cc = cfg_.findById(workers_[wi]->id());
+            const CameraConfig* cc = configFor(workers[wi]->id());
             if (!cc || !cc->mac.empty() || cc->model.empty()) continue;
             int matches = 0;
             int candidate = -1;
@@ -691,14 +777,14 @@ void Registry::discoveryLoop() {
         }
         // Tell the unmatched workers they are missing, so that when their body does
         // come back the transition is detected and any pending backoff is cancelled.
-        for (std::size_t wi = 0; wi < workers_.size(); ++wi) {
-            if (!assigned[wi]) workers_[wi]->offerMissing();
+        for (std::size_t wi = 0; wi < workers.size(); ++wi) {
+            if (!assigned[wi]) workers[wi]->offerMissing();
         }
 
         // Poll faster while something we expect is missing; idle back once
         // everything is connected so we are not scanning during a service.
-        bool allConnected = true;
-        for (auto& w : workers_) {
+        bool allConnected = !workers.empty();
+        for (auto& w : workers) {
             auto s = w->snapshot();
             if (s.state != ConnState::Connected) { allConnected = false; break; }
         }

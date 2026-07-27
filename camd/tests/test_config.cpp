@@ -89,11 +89,22 @@ TEST(config_rejects_nonsense_heartbeat_window) {
     CHECK(found);
 }
 
-TEST(config_requires_at_least_one_camera) {
+TEST(config_accepts_an_empty_camera_list) {
+    // First run has no cameras: they are adopted through the UI. Refusing to start
+    // without one would mean never being able to reach the UI to adopt the first.
     Config c;
     std::vector<std::string> errs;
-    CHECK(!Config::loadString(R"({"cameras": []})", c, errs));
-    CHECK(!Config::loadString(R"({})", c, errs));
+    CHECK(Config::loadString(R"({"cameras": []})", c, errs));
+    CHECK_EQ(c.cameras.size(), static_cast<std::size_t>(0));
+
+    Config c2;
+    CHECK(Config::loadString(R"({})", c2, errs));
+    CHECK_EQ(c2.cameras.size(), static_cast<std::size_t>(0));
+
+    // A cameras key of the wrong type is still an error, since that is a typo
+    // rather than an intentional empty setup.
+    Config c3;
+    CHECK(!Config::loadString(R"({"cameras": "nope"})", c3, errs));
 }
 
 TEST(config_rejects_invalid_json_with_position) {

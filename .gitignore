@@ -37,3 +37,6 @@ run/
 .vscode/
 .idea/
 *.swp
+
+# Generated macOS app bundle
+CamBridge.app/
