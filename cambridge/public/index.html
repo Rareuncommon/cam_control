@@ -485,6 +485,20 @@ function render() {
 
   const grid = $('#grid');
   grid.textContent = '';
+  if (view.cameras.length === 0) {
+    // An empty grid reads as a broken page. Say which half is missing and give
+    // the command, rather than leaving a blank screen under a red banner.
+    grid.append(el('section', { class: 'cam' },
+      el('div', { class: 'body' },
+        el('div', { class: 'note', text: view.camdConnected
+          ? 'camd is running but has no cameras configured. Add them to config/cambridge.json — each camera needs its own MAC and its own access-authentication credentials.'
+          : 'The camd daemon is not running, so there is nothing to control yet.' }),
+        view.camdConnected ? null : el('div', { class: 'note', style: 'margin-top:8px' },
+          document.createTextNode('Start both halves together with:')),
+        view.camdConnected ? null : el('div', {
+          style: 'margin-top:6px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px',
+          text: './scripts/start.sh' }))));
+  }
   for (const cam of view.cameras) grid.append(cameraCard(cam));
 
   if (activeKey) {

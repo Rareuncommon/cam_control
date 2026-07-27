@@ -25,12 +25,14 @@ Run it now, with no hardware:
 
 ```sh
 cmake -S camd -B camd/build && cmake --build camd/build
-./camd/build/camd --config config/cambridge.json --fake &
-node cambridge/src/server.js --config config/cambridge.json
+cp config/cambridge.example.json config/cambridge.json
+./scripts/start.sh --fake
 ```
 
-`cambridge` prints the URLs to open — `http://localhost:8088` on the control
-Mac, plus the machine's LAN address for the booth iPad.
+`start.sh` runs both halves as a pair, waits for `camd` to answer before
+bringing up the UI, and stops both on Ctrl-C. It prints the URLs to open —
+`http://localhost:8088` on the control Mac, plus the machine's LAN addresses for
+the booth iPad. Drop `--fake` to drive real cameras.
 
 | Phase | Scope | Status |
 |---|---|---|
