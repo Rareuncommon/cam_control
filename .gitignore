@@ -47,5 +47,12 @@ run/
 .idea/
 *.swp
 
-# Generated macOS app bundle
+# Generated macOS app bundle and DMG. The DMG embeds Sony's SDK, so it must
+# never be committed — it is licensed per developer and not redistributable.
 CamBridge.app/
+dist/
+*.dmg
+
+# Atomic config writes leave a .bak alongside the real file. It holds the same
+# camera credentials, so it is ignored for the same reason.
+config/*.bak

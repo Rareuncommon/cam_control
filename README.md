@@ -21,9 +21,17 @@ whole stack has been run end to end against a simulated three-camera setup.
 What only real cameras can settle is listed in
 [`docs/phases-1-5.md`](docs/phases-1-5.md).
 
-**Setting up a Mac from scratch?** Start at
-[`docs/install.md`](docs/install.md) — every step in order, from Xcode command
-line tools to a double-clickable app.
+**Setting up a Mac?** Start at [`docs/setup.md`](docs/setup.md) — it points you
+at the DMG (five minutes, nothing to install) or the full source build
+([`docs/install.md`](docs/install.md)), and covers turning the camera passwords
+off so there is nothing to type.
+
+```sh
+./scripts/make-dmg.sh
+```
+
+builds a self-contained `dist/CamBridge-<version>.dmg` carrying the daemon, the
+Sony SDK, the panel and Node. Drag onto Applications on any Mac in the company.
 
 It runs as a **double-clickable macOS app** with no terminal use:
 [`docs/running-the-app.md`](docs/running-the-app.md).

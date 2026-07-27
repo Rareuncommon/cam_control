@@ -356,13 +356,22 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
             suggestedId: owner ? owner.id : suggestId(cam.model, mac, takenIds),
           };
         });
+        // The hint tracks what is actually on the network. Telling an operator to
+        // go and read credentials off three screens, when none of the cameras
+        // wants any, is how a setup page trains people to ignore it.
+        const needAuth = list.filter((c) => c.accessAuthRequired && !c.adopted);
+        const credentialHint = needAuth.length === 0
+          ? (list.length
+            ? 'None of these cameras uses a password — give each one a name and add it.'
+            : 'No cameras seen yet. Check USB-LAN Connection and Remote Shooting on each body.')
+          : `${needAuth.length} of these ${needAuth.length === 1 ? 'needs a password' : 'need passwords'}, ` +
+            'shown on the camera at MENU → Network → Network Option → [Access Authen. Info]. ' +
+            'Turning [Access Authen. Settings] off on a body removes its password entirely.';
+
         return sendJson(res, 200, {
           discovered: list,
           adoptedCount: adopted.length,
-          // Adopting needs credentials the operator has to read off the body.
-          credentialHint:
-            'Each camera generates its own username and password. Read them on the ' +
-            'camera: MENU → Network → Network Option → [Access Authen. Info].',
+          credentialHint,
         });
       }
 
