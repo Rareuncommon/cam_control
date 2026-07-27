@@ -12,9 +12,19 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-CONFIG="./config/cambridge.json"
-LOG_DIR="./logs"
-mkdir -p "${LOG_DIR}"
+# The same locations the DMG app uses. They used to differ — this app wrote the
+# repo's config while the DMG app wrote Application Support — so adopting cameras
+# under one and launching the other looked exactly like "it forgot my cameras".
+SUPPORT="${HOME}/Library/Application Support/CamBridge"
+LOG_DIR="${HOME}/Library/Logs/CamBridge"
+CONFIG="${SUPPORT}/cambridge.json"
+mkdir -p "${SUPPORT}" "${LOG_DIR}"
+
+# Carry across a config from the old location so nobody re-adopts their cameras.
+if [[ ! -f "${CONFIG}" && -f ./config/cambridge.json ]]; then
+    cp ./config/cambridge.json "${CONFIG}"
+    chmod 600 "${CONFIG}"
+fi
 LAUNCH_LOG="${LOG_DIR}/launch.log"
 
 say() { echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "${LAUNCH_LOG}"; }

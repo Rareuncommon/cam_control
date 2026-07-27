@@ -27,6 +27,7 @@ const add = (parent, ...kids) => { for (const k of kids) if (k) parent.append(k)
 let view = { camdConnected: false, cameras: [], backend: '' };
 let meta = { focusNote: '', scenes: [], presets: {}, groups: {} };
 let discovery = { discovered: [], credentialHint: '' };
+let health = {};
 let currentView = 'control';
 let soloFeed = null;
 let gangSelection = new Set();
@@ -433,6 +434,14 @@ function renderMultiview() {
 
 function renderSetup() {
   $('#discover-hint').textContent = discovery.credentialHint ?? '';
+  // Where this instance actually reads and writes. Invisible paths turned a
+  // wrong config file into "the app forgot my cameras".
+  const paths = $('#paths');
+  if (paths) {
+    paths.textContent = health.configPath
+      ? `Cameras saved in ${health.configPath} · logs in ${health.logDir}`
+      : '';
+  }
   const dt = $('#discovered-table');
   dt.textContent = '';
   dt.append(el('tr', {}, el('th', { text: 'Model' }), el('th', { text: 'Address' }),
@@ -862,6 +871,7 @@ $('#pad-close').addEventListener('click', () => $('#pad-dialog').close());
 
 async function loadMeta() {
   meta = await api('GET', '/api/presets');
+  health = await api('GET', '/api/health');
   const gangs = await api('GET', '/api/gangs');
   const active = Object.entries(gangs.gangs ?? {}).filter(([, g]) => g.enabled);
   $('#gang-state').textContent = active.length

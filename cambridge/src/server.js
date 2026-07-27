@@ -136,8 +136,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
 
   const state = new StateModel();
+  // Presets live beside the config, not beside the logs. Deriving this from
+  // logging.dir happened to work when both sat in the repo and broke the moment
+  // logs moved to ~/Library/Logs.
   const store = new JsonStore(
-    join(cfg.logging.dir, '..', 'config', 'cambridge-presets.json'),
+    join(dirname(resolve(configPath)), 'cambridge-presets.json'),
     { presets: {}, scenes: {}, gangs: {} },
     (level, msg) => log.write(level, 'store', msg),
   );
@@ -332,6 +335,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           camdReachable: health.ok,
           camd: health.body ?? null,
           sseClients: sseClients.size,
+          // Surfaced because two builds once used different config files, and an
+          // invisible path made that look like lost data rather than a wrong path.
+          configPath: resolve(configPath),
+          logDir: resolve(cfg.logging.dir),
         });
       }
 
