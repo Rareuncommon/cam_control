@@ -21,12 +21,16 @@ whole stack has been run end to end against a simulated three-camera setup.
 What only real cameras can settle is listed in
 [`docs/phases-1-5.md`](docs/phases-1-5.md).
 
+**Setting up a Mac from scratch?** Start at
+[`docs/install.md`](docs/install.md) — every step in order, from Xcode command
+line tools to a double-clickable app.
+
 It runs as a **double-clickable macOS app** with no terminal use:
 [`docs/running-the-app.md`](docs/running-the-app.md).
 
 ```sh
 cmake -S camd -B camd/build && cmake --build camd/build
-./scripts/make-app.sh /Applications      # once
+./scripts/make-app.sh /Applications
 ```
 
 Then double-click **CamBridge**. Cameras are added from the **Setup** tab — no

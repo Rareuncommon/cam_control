@@ -56,20 +56,22 @@ Copy the two pieces we need into the repo.
 > it, and the `cp` commands will *succeed* so there is no error to warn you.
 > `./scripts/preflight.sh` catches this, including spotting a stray `~/vendor`.
 
+Set `UNPACKED` to wherever you unzipped it, and run this from the repo root.
+There are deliberately no comments inside the block: macOS zsh does not enable
+interactive comments, so a pasted `#` line errors instead of being ignored.
+
 ```sh
-cd ~/cam_control                        # or wherever you cloned it
-UNPACKED=~/Downloads/RemoteCli          # wherever you unzipped it
+cd ~/cam_control
+UNPACKED=~/Downloads/RemoteCli
 mkdir -p vendor/CrSDK/include vendor/CrSDK/lib
-
-# Headers — the whole CRSDK folder.
 cp -R "$UNPACKED/app/CRSDK" vendor/CrSDK/include/
-
-# Libraries — the entire contents of external/crsdk, including CrAdapter/.
 cp -R "$UNPACKED/external/crsdk/." vendor/CrSDK/lib/
-
-# Clear Gatekeeper quarantine, or macOS 26 will refuse to load the dylibs.
 xattr -dr com.apple.quarantine vendor/CrSDK
 ```
+
+Line by line: the first `cp` takes the headers, the second takes the entire
+contents of `external/crsdk` including `CrAdapter/`, and `xattr` clears the
+Gatekeeper quarantine flag — without it macOS refuses to load the dylibs.
 
 Resulting layout:
 
