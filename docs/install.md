@@ -234,6 +234,21 @@ On **each** camera:
 Every camera generates its own — they are not shared, and they are not anything
 you choose. You will type them in during step 9.
 
+> **Or skip passwords entirely.** Turning
+> `[Access Authen. Settings]` **off** on each body removes them. CamBridge asks
+> each camera whether it wants credentials and connects with none when it does
+> not, so there is nothing to configure and the Setup tab stops asking.
+>
+> The trade-off: anything that can reach the camera on the network can then
+> control it. That is fine on a dedicated production VLAN with no internet route
+> — and is how the rest of a broadcast rack already works, since VISCA, NDI and
+> ATEM control have no authentication at all. It is not fine on a shared office
+> or church-wide network. If you are unsure the VLAN is genuinely isolated, leave
+> it on: it is a one-time cost per body.
+>
+> Either way the password cannot be discovered over the network — it is shown on
+> the camera's screen and nowhere else, by design.
+
 Full detail, including the IP plan and the power-saving settings that will
 otherwise drop a camera mid-service:
 [`docs/camera-setup.md`](camera-setup.md).

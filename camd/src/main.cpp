@@ -108,7 +108,10 @@ int main(int argc, char** argv) {
             d.model = models[i];
             d.ip = "127.0.0." + std::to_string(51 + i);
             d.name = models[i];
-            d.sshRequired = true;
+            // The third body models a camera with Access Authentication turned
+            // off, so --fake exercises both adoption paths: the one that needs
+            // credentials and the one that must not ask for them.
+            d.sshRequired = (i != 2);
             present.push_back(d);
         }
         // Let the config's own MACs win when they are filled in, so --fake can be

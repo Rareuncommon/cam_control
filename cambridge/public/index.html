@@ -131,14 +131,33 @@
   <div class="formgrid" style="margin-top:12px">
     <label for="adopt-label">Name</label>
     <input type="text" id="adopt-label" placeholder="e.g. Wide, Centre, Tight">
-    <label for="adopt-user">Username</label>
-    <input type="text" id="adopt-user" autocomplete="off" placeholder="from the camera screen">
-    <label for="adopt-pass">Password</label>
-    <input type="password" id="adopt-pass" autocomplete="off" placeholder="from the camera screen">
   </div>
-  <p class="note" style="margin:12px 0 0">
-    On the camera: <strong>MENU → Network → Network Option → [Access Authen. Info]</strong>.
-    Each body has its own username and password — they are not shared.
+
+  <!-- Only shown when the camera itself says it wants credentials. Asking for a
+       password the body does not use is how an operator concludes the app is
+       broken when it is working perfectly. -->
+  <div id="adopt-auth">
+    <div class="formgrid" style="margin-top:9px">
+      <label for="adopt-user">Username</label>
+      <input type="text" id="adopt-user" autocomplete="off" placeholder="from the camera screen">
+      <label for="adopt-pass">Password</label>
+      <input type="password" id="adopt-pass" autocomplete="off" placeholder="from the camera screen">
+    </div>
+    <p class="note" style="margin:12px 0 0">
+      On the camera: <strong>MENU → Network → Network Option → [Access Authen. Info]</strong>.
+      Each body has its own username and password — they are not shared, and they
+      cannot be read over the network.
+    </p>
+    <p class="note" style="margin:6px 0 0">
+      Tired of typing these? Turning
+      <strong>[Access Authen. Settings]</strong> off on each body removes them
+      entirely. Only do that on a private production network.
+    </p>
+  </div>
+
+  <p class="note" id="adopt-noauth" style="display:none;margin:12px 0 0">
+    ✓ This camera has access authentication turned off, so there is no username
+    or password to enter. Just give it a name and add it.
   </p>
   <div class="line" style="margin-top:14px;justify-content:flex-end">
     <button id="adopt-cancel" class="ghost">Cancel</button>

@@ -444,8 +444,11 @@ function renderSetup() {
   }
   for (const cam of list) {
     dt.append(el('tr', {},
+      // Say which cameras want a password before the operator opens the dialog,
+      // so a rack of bodies can be triaged at a glance.
       el('td', {}, el('div', { text: cam.model || 'unknown' }),
-        cam.accessAuthRequired ? el('div', { class: 'note', text: 'needs password' }) : null),
+        el('div', { class: 'note', text: cam.accessAuthRequired
+          ? 'needs a password from its screen' : 'no password needed' })),
       el('td', { class: 'mono', text: cam.ip || '—' }),
       el('td', { class: 'mono', text: cam.mac || '—' }),
       el('td', {}, cam.adopted
@@ -483,6 +486,25 @@ function renderSetup() {
 let adoptTarget = null;
 let editTarget = null;
 
+/** Shows or hides the credential fields according to what the body asks for. */
+function setAuthVisible(needsAuth) {
+  $('#adopt-auth').style.display = needsAuth ? '' : 'none';
+  $('#adopt-noauth').style.display = needsAuth ? 'none' : '';
+}
+
+/**
+ * Whether a camera wants credentials, by MAC.
+ *
+ * Adopted cameras do not carry the flag — it comes from discovery — so an
+ * already-added camera is looked up in the discovery list. Unknown means assume
+ * it does need them: asking unnecessarily is a nuisance, but hiding the fields
+ * from a camera that needs them is a dead end with no way out.
+ */
+function needsAuthFor(mac) {
+  const found = (discovery.discovered ?? []).find((d) => d.mac && d.mac === mac);
+  return found ? found.accessAuthRequired !== false : true;
+}
+
 function openAdopt(cam) {
   adoptTarget = cam; editTarget = null;
   $('#adopt-title').textContent = `Add ${cam.model || 'camera'}`;
@@ -490,6 +512,7 @@ function openAdopt(cam) {
   $('#adopt-label').value = ''; $('#adopt-user').value = ''; $('#adopt-pass').value = '';
   $('#adopt-user').placeholder = 'from the camera screen';
   $('#adopt-pass').placeholder = 'from the camera screen';
+  setAuthVisible(cam.accessAuthRequired !== false);
   $('#adopt-confirm').textContent = 'Add camera';
   $('#adopt-dialog').showModal();
   $('#adopt-label').focus();
@@ -504,6 +527,7 @@ function openEdit(cam) {
   // Credentials are never sent to the browser, so blank means "leave alone".
   $('#adopt-user').placeholder = 'leave blank to keep current';
   $('#adopt-pass').placeholder = 'leave blank to keep current';
+  setAuthVisible(needsAuthFor(cam.mac));
   $('#adopt-confirm').textContent = 'Save';
   $('#adopt-dialog').showModal();
   $('#adopt-label').focus();

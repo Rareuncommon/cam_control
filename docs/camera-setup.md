@@ -128,6 +128,46 @@ global setting, and why Sony's own `RemoteCli` sample cannot connect unpatched
 
 The screen shows: **MAC address, username, password, and fingerprint.**
 
+### If you would rather not deal with passwords at all
+
+Turn access authentication **off** on each body:
+
+`MENU → (Network) → [Network Option] → [Access Authen. Settings] → Off`
+
+CamBridge handles this on its own. It asks each camera whether it wants
+credentials — the SDK's `GetSSHsupport()` — and connects with none when the
+answer is no. The Setup tab shows **"no password needed"** against those cameras
+and does not display the username and password fields at all. Nothing to
+configure, and nothing to re-enter when a body is reinitialised.
+
+**The trade-off, stated plainly:** with it off, anything that can reach the
+camera on the network can control it — start and stop recording, change
+exposure, drive the menus. There is no password to get wrong and none to stop
+anyone either.
+
+Whether that is acceptable depends entirely on the network, not on the camera:
+
+- **Reasonable** on a dedicated production VLAN with no route to the internet
+  and no guest access — which is what this studio runs. It is also the normal
+  posture for the rest of a broadcast rack: VISCA, NDI, ATEM control and most
+  switcher protocols have no authentication whatsoever, so the cameras would not
+  be the weak point.
+- **Not reasonable** on a shared office or church-wide network, on anything with
+  guest Wi-Fi bridged to it, or if the production VLAN is not actually isolated.
+
+If you are unsure whether the VLAN is genuinely isolated, leave authentication
+on. It is a one-time cost per body, and CamBridge remembers the credentials by
+MAC address afterwards.
+
+### Why CamBridge cannot just find the password for you
+
+It is displayed on the camera's screen and nowhere else. It is not published
+over the network, and no SDK call returns it — which is the entire point of it.
+A password that could be read remotely would not be protecting anything.
+
+What CamBridge *can* do, and does: detect which cameras want one, ask only for
+those, store it once keyed to the body's MAC address, and never ask again.
+
 > **Credentials do not live in this repo.** Read them off each body straight into
 > `config/cambridge.json`, which is git-ignored. Do not fill them into a table
 > here, and do not paste them into chat or tickets — treat the whole screen as
