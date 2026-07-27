@@ -102,7 +102,7 @@ export class ViscaServer {
           this.sockets.add(socket);
           socket.on('close', () => this.sockets.delete(socket));
           // A controller that goes away mid-command must not take the server
-          // with it; a booth joystick unplugged during a service is routine.
+          // with it; a booth joystick unplugged during a shoot is routine.
           socket.on('error', (err) => this.log('debug', `VISCA TCP client: ${err.message}`));
           socket.on('data', async (data) => {
             const reply = await this.handlePacket(data);

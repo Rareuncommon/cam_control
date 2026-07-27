@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
 
     if (!configOk) {
         // Report every problem at once: fixing config one error per restart at 8am
-        // on a Sunday is not a workflow anyone should have to use.
+        // between takes is not a workflow anyone should have to use.
         std::cerr << "camd: configuration problems in " << configPath << ":\n";
         for (const auto& e : errors) {
             std::cerr << "  - " << e << "\n";

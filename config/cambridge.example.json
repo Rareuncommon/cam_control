@@ -19,7 +19,7 @@
       "heartbeatTimeoutMs": 6000,
       "reconnectBackoffMs": [1000, 2000, 4000, 8000, 15000],
       "reconnectBackoffMaxMs": 15000,
-      "$comment_backoff": "Caps at 15s so a camera that comes back mid-service rejoins fast. The brief's target is reconnect within ~10s of link restore."
+      "$comment_backoff": "Caps at 15s so a camera that comes back mid-take rejoins fast. The brief's target is reconnect within ~10s of link restore."
     }
   },
 
@@ -31,7 +31,7 @@
   },
 
   "logging": {
-    "$comment": "Every state change, timestamped, to a rotating file. This is what we read on Monday morning when something went wrong on Sunday.",
+    "$comment": "Every state change, timestamped, to a rotating file. This is what we read the morning after something went wrong on a shoot.",
     "dir": "./logs",
     "level": "info",
     "rotate": {

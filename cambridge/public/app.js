@@ -3,7 +3,7 @@ import { createGamepadControl } from './gamepad.js';
 // CamBridge control panel.
 //
 // Vanilla JS, no build step. The organising idea for the UI is that a booth
-// operator during a service should never have to hunt: the controls they touch
+// operator during a shoot should never have to hunt: the controls they touch
 // most are big, always visible, and show their value without opening anything.
 // Everything else lives behind "More".
 
@@ -93,7 +93,7 @@ function stateBadge(cam) {
  * A stepper beats a dropdown here for three reasons — the current value is
  * always readable without opening anything, the targets are big enough for a
  * finger, and stepping one stop at a time is what an operator actually wants
- * mid-service. Tapping the value itself opens the full list for a big jump.
+ * mid-take. Tapping the value itself opens the full list for a big jump.
  */
 function stepper(cam, propName, name, opts = {}) {
   const prop = cam.properties?.[propName];
@@ -254,7 +254,7 @@ function cameraCard(cam) {
     return card;
   }
 
-  // The four an operator touches during a service, plus ND when the body has it.
+  // The four an operator touches during a shoot, plus ND when the body has it.
   add(body, stepper(cam, 'fNumber', 'Iris', { invert: true }), autoGate(cam, 'fNumber'));
   add(body, stepper(cam, 'isoSensitivity', 'ISO'), autoGate(cam, 'isoSensitivity'));
   add(body, stepper(cam, 'shutterSpeed', 'Shutter'), autoGate(cam, 'shutterSpeed'));

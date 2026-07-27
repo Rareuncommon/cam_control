@@ -70,7 +70,7 @@ If a camera does not appear in the list, it is not reachable. Check on the body:
 
 ### Control
 
-Each camera is a card. The controls you touch during a service are at the top,
+Each camera is a card. The controls you touch during a shoot are at the top,
 always visible, in the order you actually reach for them: **iris, ISO, shutter,
 ND** (on the FX30s) and **Kelvin**, then the record button.
 
@@ -104,7 +104,7 @@ Below the cards, **Scenes, match & linked cameras**:
   - **Recall only** — leave all three chips off to recall the whole scene, or
     turn on *Exposure*, *White balance* or *Look* to restore just that part.
     Recalling white balance without disturbing exposure is the common one
-    mid-service.
+    mid-take.
   - **Ramp over** — recall instantly, or glide over 1–8 seconds. An instant iris
     change is visible on air; a two-second ramp is not. The ramp is computed
     here and sent as ordinary property writes, so the daemon stays dumb.
@@ -135,7 +135,7 @@ Adoption, as above.
 
 Three simulated bodies, including a colour-bar feed in multiview and the same
 Flexible Exposure gating a real FX30 has. Useful for showing someone the panel,
-or for rehearsing a service without the rig.
+or for rehearsing a shoot without the rig.
 
 You can also rehearse a camera dropping out:
 

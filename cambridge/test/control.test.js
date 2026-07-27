@@ -81,7 +81,7 @@ test('capture takes exposure and colour but never focus', () => {
   assert.ok('fNumber' in values);
   assert.ok('colorTemp' in values);
   // Focus is deliberately excluded: absolute position is lens-dependent and a
-  // preset that racks focus unpredictably is a service-time hazard.
+  // preset that racks focus unpredictably is an on-set hazard.
   assert.ok(!('focusPosition' in values));
   assert.deepEqual(Object.keys(values).sort(), PRESET_PROPS.filter((p) => p in values).sort());
 });
@@ -109,7 +109,7 @@ test('preset save refuses a disconnected camera instead of storing junk', () => 
 test('scene captures connected cameras and reports which were skipped', () => {
   const state = makeState();
   const presets = new Presets(newStore(), state, quietLog);
-  const r = presets.saveScene('worship');
+  const r = presets.saveScene('interview');
   assert.equal(r.ok, true);
   assert.deepEqual(r.cameras.sort(), ['cam1', 'cam2']);
   // The offline camera must be reported, not silently dropped — otherwise
@@ -120,13 +120,13 @@ test('scene captures connected cameras and reports which were skipped', () => {
 test('scene recall applies to every camera and reports partial failure', async () => {
   const state = makeState();
   const presets = new Presets(newStore(), state, quietLog);
-  presets.saveScene('worship');
+  presets.saveScene('interview');
 
   state.get('cam1').properties.fNumber.value = 280;
   state.get('cam2').properties.fNumber.value = 280;
 
   const apply = makeApplyFn(state, { failOn: (id, prop) => id === 'cam2' && prop === 'colorTemp' });
-  const r = await presets.recallScene('worship', apply);
+  const r = await presets.recallScene('interview', apply);
   assert.equal(r.ok, false);
   assert.equal(state.get('cam1').properties.fNumber.value, 400);
   const cam2 = r.cameras.find((c) => c.cameraId === 'cam2');
@@ -352,7 +352,7 @@ test('recalling only white balance leaves exposure untouched', async () => {
     { only: PROP_GROUPS.colour.props });
 
   assert.equal(cam.properties.colorTemp.value, 3200, 'the selected group must be applied');
-  assert.equal(cam.properties.fNumber.value, 400, 'iris must not move mid-service');
+  assert.equal(cam.properties.fNumber.value, 400, 'iris must not move mid-take');
   assert.ok(!apply.calls.some((c) => c.prop === 'fNumber'));
 });
 

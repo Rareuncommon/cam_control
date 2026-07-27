@@ -1,7 +1,7 @@
 # Camera setup — FX3 / FX30 over wired Ethernet
 
 Living document. Every setting we discover during bring-up gets recorded here,
-so a future you (or a volunteer at 8am on a Sunday) can reconfigure a body from
+so a future you (or an operator at call time) can reconfigure a body from
 scratch without guessing.
 
 **Bodies:** 1× ILME-FX3, 2× ILME-FX30
@@ -82,7 +82,7 @@ no CIDR notation — enter a dotted subnet mask.
 ✅ `MENU → (Network) → [USB-LAN/Tethering] → [USB-LAN Connection]`
 *(requires firmware Ver. 3.00 or later)*
 
-Then — and this one is the difference between a system that survives a service
+Then — and this one is the difference between a system that survives a shoot
 and one that does not:
 
 ✅ `MENU → (Network) → [USB-LAN/Tethering] → [USB-LAN Cnct. Launch] → [On]`
@@ -93,7 +93,7 @@ and one that does not:
 > has to walk to the camera and re-select `USB-LAN Connection` from the menu
 > every single time the body is power-cycled. That makes the Phase 2
 > power-cycle test unpassable by design, and it would mean a dead camera
-> mid-service needs a human at the tripod rather than a reconnect from the
+> mid-take needs a human at the tripod rather than a reconnect from the
 > booth. Set it to `On` on all three bodies and verify it survives a reboot.
 
 To tear down deliberately: `[USB-LAN Disconnection]` under the same menu. ✅
@@ -152,7 +152,7 @@ Whether that is acceptable depends entirely on the network, not on the camera:
   posture for the rest of a broadcast rack: VISCA, NDI, ATEM control and most
   switcher protocols have no authentication whatsoever, so the cameras would not
   be the weak point.
-- **Not reasonable** on a shared office or church-wide network, on anything with
+- **Not reasonable** on a shared office or company-wide network, on anything with
   guest Wi-Fi bridged to it, or if the production VLAN is not actually isolated.
 
 If you are unsure whether the VLAN is genuinely isolated, leave authentication
@@ -192,7 +192,7 @@ Track *which* bodies are configured here; the values themselves go in the config
 ## 6. Power / sleep settings
 
 🔍 A camera that sleeps drops its network connection, which will read to us as
-a disconnect mid-service. Before the Phase 2 kill tests, find and disable auto
+a disconnect mid-take. Before the Phase 2 kill tests, find and disable auto
 power-off — expected around `MENU → (Setup) → [Power Setting Option]`
 (`Power Save Start Time`, `Auto Power OFF Temp.`). Document exact paths and the
 values we settle on here once confirmed.

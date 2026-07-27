@@ -88,7 +88,7 @@ void Logger::write(LogLevel l, std::string_view subject, std::string_view messag
     if (!enabled(l)) return;
 
     // Millisecond-resolution local timestamp with UTC offset, so log lines can be
-    // correlated against a service running clock without ambiguity.
+    // correlated against a shoot running clock without ambiguity.
     struct timeval tv{};
     gettimeofday(&tv, nullptr);
     std::time_t secs = tv.tv_sec;

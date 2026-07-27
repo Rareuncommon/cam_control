@@ -3,7 +3,7 @@
 // Separate from camd's log on purpose: this one records operator intent — who
 // pressed what, which scene was recalled, which gang applied — while camd's
 // records what the cameras did. Reading them side by side is how a Monday
-// postmortem reconstructs a Sunday.
+// postmortem reconstructs a shoot.
 
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

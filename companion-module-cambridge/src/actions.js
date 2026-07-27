@@ -61,7 +61,7 @@ export function buildActions(self) {
         if (camera === '__all__') {
           // "Toggle all" is ambiguous when cameras disagree. Treat any camera
           // already rolling as "we are recording", so the button stops
-          // everything rather than starting the stragglers — on a service that
+          // everything rather than starting the stragglers — on a shoot that
           // is the safer reading of a single press.
           const anyRolling = self.cameras.some((c) => c.status?.recording);
           const start = mode === 'start' ? true : mode === 'stop' ? false : !anyRolling;

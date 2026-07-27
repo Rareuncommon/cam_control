@@ -22,7 +22,7 @@ camera control, live view, multiview and multi-operator are all **Pro** features
 
 Worth stating plainly: it is a mature product — five years of development,
 claimed 10,000+ productions — and CamBridge is days old and has not been through
-a service. The gap list below is what to build, not a claim that we have caught
+a shoot. The gap list below is what to build, not a claim that we have caught
 up.
 
 ## How it appears to be built
@@ -76,10 +76,10 @@ Two of those are worth noting. Automatic discovery arrived in Middle Control
 Multi-operator is a licensed tier for them and free for us, because a web UI has
 no seat concept.
 
-### Missing, ranked for a church service
+### Missing, ranked for a live multi-camera shoot
 
 **1. ND filter control.** The FX30 has an internal variable ND, and light
-through windows changes across a service. This is the single most useful missing
+through windows changes across a shoot. This is the single most useful missing
 control. SDK: `CrDeviceProperty_NDFilter`, `NDFilterModeSetting`,
 `NDFilterValue`, `NDFilterOpticalDensityValue`. Straightforward — a mode switch
 plus a value, same shape as the iris control we already have.
@@ -115,7 +115,7 @@ and WB — a genuine extension of our Match mode.
 **7. Remote menu navigation.** Driving the camera's own menu from the booth.
 The SDK has the full key set — `CrCommandId_RemoteKeyUp/Down/Left/Right/Set`,
 `RemoteKeyMenuButton`, `RemoteKeyDisplayButton`. Combined with live view this
-means never walking to a tripod mid-service. More work than it looks, because it
+means never walking to a tripod mid-take. More work than it looks, because it
 is only usable with the live view showing the menu.
 
 **8. Subject tracking.** `CrDeviceProperty_SubjectRecognitionAF` and the
@@ -163,7 +163,7 @@ Worth being clear about, because it is the justification for the build:
 
 ## Suggested order of work
 
-If the goal is closing the gap where it matters for a Sunday:
+If the goal is closing the gap where it matters on a live shoot:
 
 1. **ND filter** — biggest practical win, low effort
 2. **Preset transition duration** — no SDK work, very visible on air

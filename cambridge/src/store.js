@@ -1,7 +1,7 @@
 // Small JSON-file store for presets, scenes and gang definitions.
 //
 // Writes are atomic (temp file + rename) so a crash mid-save cannot leave an
-// unreadable file where the Sunday scene list used to be. A corrupt or missing
+// unreadable file where the scene list used to be. A corrupt or missing
 // file degrades to empty rather than refusing to start.
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
@@ -25,7 +25,7 @@ export class JsonStore {
       this.data = { ...defaults, ...parsed };
     } catch (err) {
       // Keep going with defaults and say so loudly. Losing presets is bad; failing
-      // to start a service because of it is worse.
+      // to start a shoot because of it is worse.
       this.log('error', `store ${this.path} is unreadable (${err.message}) — starting empty`);
     }
   }

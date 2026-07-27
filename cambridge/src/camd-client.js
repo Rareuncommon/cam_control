@@ -2,7 +2,7 @@
 //
 // Uses Node 22's built-in WebSocket and fetch, so cambridge has no npm
 // dependencies at all. That is not minimalism for its own sake — it means no
-// install step before a Sunday service, and nothing to break on a Node upgrade.
+// install step before a shoot, and nothing to break on a Node upgrade.
 //
 // The connection to camd is itself treated as unreliable. camd may be restarted
 // under launchd while cambridge keeps running, so this reconnects with backoff

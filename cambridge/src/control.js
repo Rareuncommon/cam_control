@@ -31,7 +31,7 @@ export const PROP_GROUPS = {
  *
  * Absolute focus position is only meaningful on lenses that report it, and a
  * preset that silently recalls nothing — or worse, racks focus on a lens that
- * happens to report a position — is a trap during a service. Focus stays a live
+ * happens to report a position — is a trap during a shoot. Focus stays a live
  * control. This is the consequence of the both-absolute-and-relative decision
  * taken at project start, and it belongs in the UI copy too.
  */
@@ -245,7 +245,7 @@ export class Presets {
       `saved scene "${name}" covering ${Object.keys(scene).join(', ')}` +
       (skipped.length ? ` (skipped offline: ${skipped.join(', ')})` : ''));
     // Skipped cameras are reported rather than silently omitted — recalling a
-    // scene that is missing a camera should never be a surprise mid-service.
+    // scene that is missing a camera should never be a surprise mid-take.
     return { ok: true, name, cameras: Object.keys(scene), skipped };
   }
 
@@ -263,7 +263,7 @@ export class Presets {
     const scene = this.store.data.scenes[name];
     if (!scene) return { ok: false, error: `no scene "${name}"` };
 
-    // Fire all cameras concurrently: a scene recall during a service should take
+    // Fire all cameras concurrently: a scene recall during a shoot should take
     // as long as the slowest camera, not the sum of all three.
     const entries = Object.entries(scene);
     const settled = await Promise.all(entries.map(async ([cameraId, values]) => {

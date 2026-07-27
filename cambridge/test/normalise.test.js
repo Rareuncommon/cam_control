@@ -48,7 +48,7 @@ test('recording state names the failure case explicitly', () => {
 
 test('labellers never throw on unexpected values', () => {
   // A surprising raw value should degrade to something printable, not crash the
-  // panel mid-service.
+  // panel mid-take.
   for (const v of [undefined, null, NaN, -1, 999999, 'x']) {
     assert.doesNotThrow(() => label('fNumber', v));
     assert.doesNotThrow(() => label('isoSensitivity', v));

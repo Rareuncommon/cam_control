@@ -1,8 +1,8 @@
 # CamBridge
 
-Multi-camera control for Sony cinema bodies over wired Ethernet. Built for one
-church studio, one operator, three cameras. Internal use only — not for
-redistribution.
+Multi-camera control for Sony cinema bodies over wired Ethernet. Built in-house
+at a media production company for one studio, one operator, three cameras.
+Internal use only — not for redistribution.
 
 **Cameras:** 1× ILME-FX3, 2× ILME-FX30
 **Transport:** USB-C → gigabit Ethernet adapters (RTL8153 / AX88179), dedicated
@@ -44,7 +44,7 @@ To try it without hardware, or to run it from a terminal:
 
 ### What the panel does
 
-The controls a service actually needs are on the face of each camera card —
+The controls a shoot actually needs are on the face of each camera card —
 **iris, ISO, shutter, ND, Kelvin** — each as a big `−  value  +` stepper rather
 than a dropdown, so the current value is readable without opening anything and
 the targets suit a finger on an iPad. Tapping the value opens the full list for
@@ -128,11 +128,11 @@ and the operator-facing log. See [`cambridge/README.md`](cambridge/README.md).
 
 ### Why the split
 
-The daemon is the part that must never die during a service. Keeping it free of
+The daemon is the part that must never die during a shoot. Keeping it free of
 features means the code that has to survive a camera vanishing mid-song is
 small enough to reason about completely. Everything that changes often lives in
 the layer written in the language this repo's author actually enjoys debugging
-at 9am on a Sunday.
+at the start of a shoot day.
 
 ---
 
@@ -195,12 +195,12 @@ vendor/CrSDK/    where the Sony SDK goes; git-ignored except the placement guide
 
 Carried from the project brief. These override convenience.
 
-- **Reliability over features.** This runs Sunday services.
+- **Reliability over features.** This runs live productions.
 - **Fail loud in the UI, fail soft in the daemon.** A camera dropping is a
   banner in the browser, never a crashed process.
 - **One dead camera affects nothing else.** Non-negotiable, and the thing
   Phase 2's kill tests exist to prove.
-- **Everything logged, timestamped, rotating.** Postmortems happen on Monday.
+- **Everything logged, timestamped, rotating.** Postmortems happen after wrap.
 - **No cloud.** Everything runs on the studio LAN.
 - **Config in one file.** IPs, credentials, ports.
 

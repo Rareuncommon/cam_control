@@ -228,7 +228,7 @@ TEST(record_start_is_verified_against_camera_state) {
 
 TEST(record_start_twice_does_not_stop_a_running_recording) {
     // The failure this guards against is the worst one the system can produce: the
-    // FX30 has no toggle command, so a second blind REC press mid-service would
+    // FX30 has no toggle command, so a second blind REC press mid-take would
     // stop the take. A redundant start must be a no-op.
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
@@ -445,7 +445,7 @@ TEST(snapshot_is_readable_while_a_camera_is_wedged) {
 
 TEST(a_camera_can_be_adopted_while_the_daemon_runs) {
     // Adoption must never restart the daemon: a restart would drop the cameras
-    // already live, so adding a third body would interrupt the two mid-service.
+    // already live, so adding a third body would interrupt the two mid-take.
     Config cfg = makeTestConfig();
     cfg.cameras.resize(1);  // start with only cam1 configured
     Registry registry(cfg, makeFakeBackend(makePresent()));

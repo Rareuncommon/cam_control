@@ -61,7 +61,7 @@ export class Adoption {
    * Atomic write with a one-generation backup.
    *
    * This file holds every camera's credentials. A half-written config would mean
-   * re-reading three Access Authen. Info screens on a Sunday morning, so: write a
+   * re-reading three Access Authen. Info screens before a shoot, so: write a
    * temp file, keep the previous version as .bak, then rename into place.
    */
   writeConfig(cfg) {

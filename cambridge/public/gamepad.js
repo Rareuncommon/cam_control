@@ -1,8 +1,8 @@
 'use strict';
 // Gamepad control.
 //
-// A cheap USB gamepad is the closest thing to a real CCU panel a church budget
-// usually reaches, and a thumbstick beats tapping a stepper for the slow iris
+// A cheap USB gamepad is the closest thing to a real CCU panel without
+// buying one, and a thumbstick beats tapping a stepper for the slow iris
 // ride through a song.
 //
 // Two rules shape everything here:

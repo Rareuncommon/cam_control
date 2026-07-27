@@ -713,7 +713,7 @@ void Registry::discoveryLoop() {
         // unclaimed body of its model, and whichever config entry is examined first
         // would take it — including the entry belonging to the camera that is
         // actually gone. That produces two cards pointing at one body, which is
-        // both wrong and very hard to spot mid-service.
+        // both wrong and very hard to spot mid-take.
         std::vector<bool> claimed(found.size(), false);
         std::vector<bool> assigned(workers.size(), false);
 
@@ -782,7 +782,7 @@ void Registry::discoveryLoop() {
         }
 
         // Poll faster while something we expect is missing; idle back once
-        // everything is connected so we are not scanning during a service.
+        // everything is connected so we are not scanning during a shoot.
         bool allConnected = !workers.empty();
         for (auto& w : workers) {
             auto s = w->snapshot();

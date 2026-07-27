@@ -243,14 +243,14 @@ you choose. You will type them in during step 9.
 > control it. That is fine on a dedicated production VLAN with no internet route
 > — and is how the rest of a broadcast rack already works, since VISCA, NDI and
 > ATEM control have no authentication at all. It is not fine on a shared office
-> or church-wide network. If you are unsure the VLAN is genuinely isolated, leave
+> or company-wide network. If you are unsure the VLAN is genuinely isolated, leave
 > it on: it is a one-time cost per body.
 >
 > Either way the password cannot be discovered over the network — it is shown on
 > the camera's screen and nowhere else, by design.
 
 Full detail, including the IP plan and the power-saving settings that will
-otherwise drop a camera mid-service:
+otherwise drop a camera mid-take:
 [`docs/camera-setup.md`](camera-setup.md).
 
 ---
@@ -321,7 +321,7 @@ connected before anyone opens anything; for most booths the app icon is enough.
 ## Optional — Stream Deck, tally, joystick, gamepad
 
 Everything in [`docs/integrations.md`](integrations.md) is off until you switch
-it on, and none of it is needed to run a service:
+it on, and none of it is needed to run a shoot:
 
 - **Bitfocus Companion** — a Stream Deck module. Needs one `npm install` inside
   `companion-module-cambridge/`; it is the only part of this project with an npm

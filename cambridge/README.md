@@ -5,7 +5,7 @@ logic, and serves the browser control panel.
 
 **Status: built.** Phases 3–5. Zero npm dependencies — Node 22's built-in
 WebSocket client talks to camd, and the browser is fed by Server-Sent Events, so
-there is no install step before a service and nothing to break on a Node upgrade.
+there is no install step before a shoot and nothing to break on a Node upgrade.
 
 ```sh
 node src/server.js --config ../config/cambridge.json

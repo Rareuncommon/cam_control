@@ -1,7 +1,7 @@
 // cambridge — application server and web UI host.
 //
 // Node's built-in http plus Server-Sent Events for push. No npm dependencies:
-// nothing to install before a service, nothing to break on a Node upgrade. SSE
+// nothing to install before a shoot, nothing to break on a Node upgrade. SSE
 // rather than a WebSocket server because the browser channel is one-way — the UI
 // posts actions over ordinary fetch — and EventSource reconnects on its own.
 
@@ -431,7 +431,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         });
       }
 
-      // --- record all (a service-time convenience worth having) ---
+      // --- record all (an on-set convenience worth having) ---
       if (path === '/api/record-all' && req.method === 'POST') {
         const body = await readBody(req);
         const want = body?.start !== false;

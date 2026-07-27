@@ -1,6 +1,6 @@
 // Companion feedbacks — what the buttons *show*.
 //
-// This is the half that matters during a service. Pressing record is easy; the
+// This is the half that matters during a shoot. Pressing record is easy; the
 // question an operator actually has, mid-song, glancing down, is "is that camera
 // rolling, and is it still alive". A button that answers that without being
 // pressed is worth more than any action here.

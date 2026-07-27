@@ -222,7 +222,7 @@ test('"toggle all" stops everything when any camera is already rolling', async (
 
   await captured.actions.record.callback({ options: { camera: '__all__', mode: 'toggle' } });
   assert.equal(sent[0].path, '/api/record-all');
-  // Safer reading of one press mid-service: stop, rather than start the stragglers.
+  // Safer reading of one press mid-take: stop, rather than start the stragglers.
   assert.equal(sent[0].body.start, false);
 });
 
@@ -268,15 +268,15 @@ test('scene recall passes the ramp and the selected groups through', async () =>
   inst.applyState(sampleView());
 
   await captured.actions.sceneRecall.callback({
-    options: { scene: 'Worship', ramp: 2000, groups: ['colour'] },
+    options: { scene: 'Interview', ramp: 2000, groups: ['colour'] },
   });
-  assert.equal(sent[0].path, '/api/scenes/Worship');
+  assert.equal(sent[0].path, '/api/scenes/Interview');
   assert.equal(sent[0].body.transitionMs, 2000);
   assert.deepEqual(sent[0].body.only, ['whiteBalance', 'colorTemp']);
 
   // No groups selected means the whole scene, which the API expects as null.
   await captured.actions.sceneRecall.callback({
-    options: { scene: 'Worship', ramp: 0, groups: [] },
+    options: { scene: 'Interview', ramp: 0, groups: [] },
   });
   assert.equal(sent[1].body.only, null);
 });

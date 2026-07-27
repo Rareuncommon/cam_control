@@ -67,7 +67,7 @@ TEST(config_reports_every_problem_at_once) {
     Config c;
     std::vector<std::string> errs;
     CHECK(!Config::loadString(text, c, errs));
-    // Fixing config one error per restart is not an acceptable Sunday workflow, so
+    // Fixing config one error per restart is not an acceptable on-set workflow, so
     // every distinct problem must be listed in a single pass.
     CHECK(errs.size() >= 5);
 }
@@ -81,7 +81,7 @@ TEST(config_rejects_nonsense_heartbeat_window) {
     std::vector<std::string> errs;
     CHECK(!Config::loadString(text, c, errs));
     // A timeout shorter than the interval would declare a healthy camera dead on
-    // the first beat, which is exactly the false-alarm we cannot have mid-service.
+    // the first beat, which is exactly the false-alarm we cannot have mid-take.
     bool found = false;
     for (const auto& e : errs) {
         if (e.find("heartbeatTimeoutMs") != std::string::npos) found = true;

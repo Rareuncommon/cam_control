@@ -92,7 +92,7 @@ switcher.
 
 **This is read-only.** CamBridge completes the ATEM handshake and then only
 listens. It never sends a switcher command, so no bug here can cut a source
-mid-service.
+mid-take.
 
 If the switcher goes quiet for five seconds the connection is torn down and
 tally is cleared. Stale tally is worse than none — a red light on a camera that
@@ -182,7 +182,7 @@ deadzone, up to five a second at full deflection.
 
 **Control is off until you switch it on**, and off again on every page load. A
 controller left plugged in over the week cannot move a camera when someone opens
-the panel on Sunday morning.
+the panel at the start of a shoot.
 
 Which camera the sticks drive is shown on its card with a 🎮 badge, and picked in
 the gamepad dialog or with the shoulder buttons.

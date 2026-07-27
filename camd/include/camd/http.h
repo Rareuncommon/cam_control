@@ -3,7 +3,7 @@
 // Thread per connection. The client count here is a handful (one Node bridge,
 // maybe a curl or a browser tab), so a thread each is simpler to reason about
 // than an event loop — and simple is the priority for code that has to stay up
-// through a service.
+// through a shoot.
 //
 // Read timeouts are set on every accepted socket so a stalled client cannot hold
 // a thread indefinitely.

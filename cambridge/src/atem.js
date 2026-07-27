@@ -2,7 +2,7 @@
 //
 // Talks just enough of Blackmagic's switcher protocol to learn which input is on
 // program and which is on preview. It never sends a command — this is read-only
-// by design. A bug here should be incapable of cutting a source mid-service.
+// by design. A bug here should be incapable of cutting a source mid-take.
 //
 // The protocol, as much of it as we need:
 //

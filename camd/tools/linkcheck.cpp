@@ -2,7 +2,7 @@
 //
 // Initialises the Sony Camera Remote SDK, prints the version it reports, and
 // shuts down. It does not enumerate, connect to, or touch any camera; it is
-// safe to run at any time, including mid-service.
+// safe to run at any time, including mid-take.
 //
 // The point is to isolate one question: can we compile against these headers,
 // link against this dylib, and have it load at runtime with the SDK runtime
