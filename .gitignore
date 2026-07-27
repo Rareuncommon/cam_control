@@ -11,6 +11,11 @@ vendor/RemoteCli/
 config/cambridge.json
 config/*.local.json
 
+# Presets, scenes and gangs the operator saves at runtime. Per-installation
+# state, not source — and it is written by the app, so tracking it would show a
+# dirty tree after every service.
+config/cambridge-presets.json
+
 # --- Build output -----------------------------------------------------------
 build/
 camd/build/

@@ -159,6 +159,44 @@ export function readOnlyReason(propName, properties) {
   return { gate, message: `${what} is set to Auto on the camera`, fixTo: MANUAL };
 }
 
+// ND filter. Sony reports the variable ND as a value across its range; the
+// optical density readout is the number an operator actually thinks in.
+export function ndValueToLabel(raw) {
+  if (!Number.isFinite(raw)) return '—';
+  return `${raw}`;
+}
+export function ndDensityToLabel(raw) {
+  if (!Number.isFinite(raw) || raw <= 0) return 'Clear';
+  // Reported in hundredths of a density unit on the bodies we have seen.
+  const d = raw / 100;
+  return `ND ${d.toFixed(1)} (${Math.round(2 ** (d / 0.301))}x)`;
+}
+
+const ON_OFF = { 0: 'Off', 1: 'On' };
+export function onOffToLabel(raw) {
+  return ON_OFF[raw] ?? (raw ? 'On' : 'Off');
+}
+
+const ND_MODES = { 1: 'Preset', 2: 'Variable' };
+export function ndModeToLabel(raw) {
+  return ND_MODES[raw] ?? `Mode ${raw}`;
+}
+
+// CrFocusArea, CrDeviceProperty.h:1456.
+const FOCUS_AREAS = {
+  1: 'Wide', 2: 'Zone', 3: 'Centre',
+  4: 'Flexible S', 5: 'Flexible M', 6: 'Flexible L',
+};
+export function focusAreaToLabel(raw) {
+  return FOCUS_AREAS[raw] ?? `Area ${raw}`;
+}
+
+/** Signed image parameters print with an explicit sign, like the camera menu. */
+export function signedToLabel(raw) {
+  if (!Number.isFinite(raw)) return '—';
+  return raw > 0 ? `+${raw}` : String(raw);
+}
+
 export const RECORDING_STATE = {
   NOT_RECORDING: 0x0000,
   RECORDING: 0x0001,
@@ -192,6 +230,20 @@ const LABELLERS = {
   gainMode: autoManualToLabel,
   recordingState: recordingStateToLabel,
   batteryLevel: (raw) => (Number.isFinite(raw) && raw >= 0 ? `${raw}%` : '—'),
+  ndFilter: onOffToLabel,
+  ndMode: ndModeToLabel,
+  ndValue: ndValueToLabel,
+  ndDensity: ndDensityToLabel,
+  contrast: signedToLabel,
+  saturation: signedToLabel,
+  sharpness: signedToLabel,
+  blackLevel: signedToLabel,
+  zebraDisplay: onOffToLabel,
+  peakingDisplay: onOffToLabel,
+  gammaDisplayAssist: onOffToLabel,
+  subjectRecognitionAF: onOffToLabel,
+  steadyShotMovie: onOffToLabel,
+  focusArea: focusAreaToLabel,
 };
 
 export function label(propName, raw) {
@@ -232,7 +284,9 @@ export function decorate(propName, prop) {
 export function sharesRawScale(propName) {
   // Aperture, temperature and tint are absolute physical quantities; ISO lists are
   // per-sensor and shutter is expressed identically but limited per frame rate.
-  return ['fNumber', 'colorTemp', 'wbTint', 'whiteBalance', 'exposureMode'].includes(propName);
+  return ['fNumber', 'colorTemp', 'wbTint', 'whiteBalance', 'exposureMode',
+          'contrast', 'saturation', 'sharpness', 'blackLevel',
+          'ndFilter', 'ndMode', 'ndValue'].includes(propName);
 }
 
 /**

@@ -43,6 +43,40 @@ inline constexpr const char* kFocusDistance = "focusDistance";
 // Zoom, when the lens supports it
 inline constexpr const char* kZoomPosition  = "zoomPosition";
 
+// ND filter. The FX30 has an internal variable ND, which is the most useful
+// control on a body pointed at a window across a two-hour service.
+inline constexpr const char* kNdFilter      = "ndFilter";       // on/off
+inline constexpr const char* kNdMode        = "ndMode";         // preset vs variable
+inline constexpr const char* kNdValue       = "ndValue";
+inline constexpr const char* kNdDensity     = "ndDensity";      // optical density readout
+
+// Look and image parameters. Sony exposes these through Creative Look, and
+// separately through Picture Profile when one is active.
+inline constexpr const char* kContrast      = "contrast";
+inline constexpr const char* kSaturation    = "saturation";
+inline constexpr const char* kSharpness     = "sharpness";
+inline constexpr const char* kPictureProfile = "pictureProfile";
+inline constexpr const char* kBlackLevel    = "blackLevel";
+
+// Monitoring assists. These change what the camera's own monitor shows, so they
+// help whoever is at the tripod more than the booth — but being able to flip
+// zebra on remotely while judging exposure is genuinely useful.
+inline constexpr const char* kZebraDisplay  = "zebraDisplay";
+inline constexpr const char* kZebraLevel    = "zebraLevel";
+inline constexpr const char* kPeakingDisplay = "peakingDisplay";
+inline constexpr const char* kPeakingLevel  = "peakingLevel";
+inline constexpr const char* kPeakingColor  = "peakingColor";
+inline constexpr const char* kGammaAssist   = "gammaDisplayAssist";
+
+// Autofocus behaviour, including the area used by tap-to-focus.
+inline constexpr const char* kSubjectRecognition = "subjectRecognitionAF";
+inline constexpr const char* kAfAreaPositionC    = "afAreaPositionAFC";
+inline constexpr const char* kAfAreaPositionS    = "afAreaPositionAFS";
+inline constexpr const char* kFocusArea          = "focusArea";
+
+// Stabilisation
+inline constexpr const char* kSteadyShotMovie = "steadyShotMovie";
+
 // Read-mostly state
 inline constexpr const char* kRecordingState = "recordingState";
 inline constexpr const char* kBatteryLevel   = "batteryLevel";

@@ -1,5 +1,6 @@
 #include "camd/api.h"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -259,8 +260,11 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         const int nudge = parsed.isObject() && parsed["steps"].isNumber()
                               ? static_cast<int>(parsed["steps"].asInt())
                               : 0;
+        const std::string keyName = parsed.isObject() ? parsed["key"].asString() : std::string{};
+        const double tapX = parsed.isObject() ? parsed["x"].asNumber(0.5) : 0.5;
+        const double tapY = parsed.isObject() ? parsed["y"].asNumber(0.5) : 0.5;
 
-        const bool completed = w->run([out, action, nudge, w](CameraSession* s) {
+        const bool completed = w->run([out, action, nudge, keyName, tapX, tapY, w](CameraSession* s) {
             if (!s) {
                 out->status = 503;
                 out->error = "camera not connected";
@@ -285,6 +289,57 @@ void Api::install(http::Server& server, const std::string& wsPath) {
                 out->body.set("action", json::Value(action));
                 out->body.set("recordingState", json::Value(finalState));
                 out->body.set("recording", json::Value(finalState == kRecordingRecording));
+                return;
+            }
+            if (action == "key") {
+                // Menu navigation and stills capture. The key name comes from the
+                // request body so adding a button never needs a new route.
+                if (keyName.empty()) {
+                    out->status = 400;
+                    out->error = "key action requires {\"key\": \"menu|up|down|left|right|set|back|display|capture\"}";
+                    return;
+                }
+                if (!s->sendKey(keyName, err)) { out->status = 502; out->error = err; return; }
+                out->ok = true;
+                out->status = 200;
+                out->body = json::Value::makeObject();
+                out->body.set("action", json::Value(action));
+                out->body.set("key", json::Value(keyName));
+                return;
+            }
+            if (action == "tapFocus") {
+                // Point-to-focus from the live view. Coordinates arrive normalised
+                // 0..1 so the caller does not need to know the sensor's AF grid.
+                //
+                // CONFIRM ON HARDWARE: the packing below assumes the SDK's AF area
+                // position is x<<16|y over a 0..639 by 0..479 grid, which is the
+                // long-standing Sony convention but is not stated in the headers.
+                // If tapping lands focus in the wrong place, this is the one line
+                // to change — and the property is writable directly meanwhile.
+                const int gx = static_cast<int>(tapX * 639.0 + 0.5);
+                const int gy = static_cast<int>(tapY * 479.0 + 0.5);
+                const std::int64_t packed =
+                    (static_cast<std::int64_t>(std::clamp(gx, 0, 639)) << 16) |
+                    static_cast<std::int64_t>(std::clamp(gy, 0, 479));
+
+                // Which property applies depends on the focus mode in use, so try
+                // the continuous one first and fall back to single-shot.
+                std::int64_t applied = packed;
+                if (!s->setProperty(prop::kAfAreaPositionC, packed, applied, err) &&
+                    !s->setProperty(prop::kAfAreaPositionS, packed, applied, err)) {
+                    out->status = 502;
+                    out->error = "camera would not accept an AF area position: " + err;
+                    return;
+                }
+                std::string aferr;
+                s->autofocus(aferr);  // nudge AF to act on the new area
+                out->ok = true;
+                out->status = 200;
+                out->body = json::Value::makeObject();
+                out->body.set("action", json::Value(action));
+                out->body.set("x", json::Value(tapX));
+                out->body.set("y", json::Value(tapY));
+                out->body.set("packed", json::Value(applied));
                 return;
             }
             if (action == "autofocus") {

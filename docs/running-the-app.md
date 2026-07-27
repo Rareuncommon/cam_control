@@ -68,15 +68,64 @@ If a camera does not appear in the list, it is not reachable. Check on the body:
 
 ## The three tabs
 
-**Control** — per-camera iris, ISO, shutter, white balance, focus and record.
-If iris or ISO is greyed out with "Iris is on Auto", that is the camera's
-Flexible Exposure mode; the button next to it switches that parameter to Manual.
+### Control
 
-**Multiview** — live feeds from every connected camera. Click one to enlarge,
-click again to go back. Live view has to be enabled on the body; a camera that
-is not streaming shows a message rather than a black rectangle.
+Each camera is a card. The controls you touch during a service are at the top,
+always visible, in the order you actually reach for them: **iris, ISO, shutter,
+ND** (on the FX30s) and **Kelvin**, then the record button.
 
-**Setup** — adoption, as above.
+Every one of those is a **stepper** — a big minus, the current value, a big
+plus:
+
+```
+IRIS   [ − ]  [  f/4.0  ]  [ + ]
+```
+
+- **−** and **+** move one stop at a time. On iris, **+** means *more light*,
+  which is the direction your hand expects, not a rising f-number.
+- **Tap the value in the middle** to open the full list and jump straight to
+  something far away.
+- A greyed-out stepper is not broken. If iris, ISO or shutter is locked you will
+  see "Iris is on Auto" underneath with a **Set Manual** button — that is the
+  camera's Flexible Exposure mode, and the button unlocks it.
+
+Everything else is behind **More controls** on each card: white balance mode and
+tint, focus (slider, nudge, AF), AF mode, ND mode, contrast, saturation,
+sharpness, zebra, peaking, subject tracking, SteadyShot, per-camera presets, and
+a **menu pad** that drives the camera's own on-screen menu with the Multiview
+feed as your monitor.
+
+**More controls** in the top bar opens that section on *every* card at once and
+remembers the choice, so a booth iPad comes back the way you left it.
+
+Below the cards, **Scenes, match & linked cameras**:
+
+- **Scenes** capture every camera at once and recall them together.
+  - **Recall only** — leave all three chips off to recall the whole scene, or
+    turn on *Exposure*, *White balance* or *Look* to restore just that part.
+    Recalling white balance without disturbing exposure is the common one
+    mid-service.
+  - **Ramp over** — recall instantly, or glide over 1–8 seconds. An instant iris
+    change is visible on air; a two-second ramp is not. The ramp is computed
+    here and sent as ordinary property writes, so the daemon stays dumb.
+- **Match** copies exposure and colour from one camera to the others. Values
+  that cannot cross sensor sizes exactly are approximated, and you are told how
+  many.
+- **Link** gangs cameras so one change drives all of them.
+
+### Multiview
+
+Live feeds from every connected camera.
+
+- **Tap anywhere on a picture to focus there.** The tap is sent as a normalised
+  position, so the browser never needs to know the camera's AF grid.
+- Each feed has **AF**, a **record** button and **Enlarge**.
+- Live view has to be enabled on the body; a camera that is not streaming shows
+  a message rather than a black rectangle.
+
+### Setup
+
+Adoption, as above.
 
 ## Trying it without cameras
 

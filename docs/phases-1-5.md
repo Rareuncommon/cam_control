@@ -119,6 +119,17 @@ sizes rather than pretending it is exact.
 5. **Media and battery property codes.** `MediaSLOT1_RemainingTime` and
    `BatteryRemain` are plausible but unconfirmed; the status line will show
    whatever they actually return.
+6. **Tap-to-focus coordinate packing.** `tapFocus` normalises the touch to
+   0.0–1.0 in the browser and packs it in `camd/src/api.cpp` as
+   `x << 16 | y` over a 640 × 480 grid, which is the shape Sony's samples imply
+   but which is **not confirmed on a body**. If a tap focuses the wrong part of
+   the frame, that packing is where to look — the normalised values in
+   `cambridge.log` tell you what the browser actually sent, so you can compare
+   intent against result. Everything else on the Multiview tab works regardless.
+7. **`wbTint`.** This property never appeared in the FX30 property dump, so the
+   code it is mapped to may simply be wrong for these bodies. The tint slider
+   only renders when the camera reports the property, so a wrong code shows up
+   as a missing control rather than a broken one.
 
 ## First hardware bring-up
 

@@ -38,6 +38,29 @@ To try it without hardware, or to run it from a terminal:
 ./scripts/start.sh --fake
 ```
 
+### What the panel does
+
+The controls a service actually needs are on the face of each camera card —
+**iris, ISO, shutter, ND, Kelvin** — each as a big `−  value  +` stepper rather
+than a dropdown, so the current value is readable without opening anything and
+the targets suit a finger on an iPad. Tapping the value opens the full list for
+a big jump. On iris, **+** means more light.
+
+Behind **More controls**, per camera: white balance and tint, focus (absolute,
+relative nudge, AF), AF mode, ND mode, contrast, saturation, sharpness, zebra,
+peaking, subject tracking, SteadyShot, presets, and a **menu pad** that drives
+the camera's own on-screen menu using the Multiview feed as the monitor.
+
+Across all cameras: **scenes** with selectable recall (restore just white
+balance and leave exposure alone) and an optional **1–8 second ramp** so a
+change is not visible on air, **match** to copy a look from one body to the
+others, **link** to gang cameras, and record-all / stop-all.
+
+**Multiview** streams every camera, with **tap-to-focus** — touch the picture
+where you want focus and the normalised position goes to the camera.
+
+Full walkthrough: [`docs/running-the-app.md`](docs/running-the-app.md).
+
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Toolchain + SDK + one camera over Ethernet via Sony's own sample | ✅ **passed** |
@@ -48,6 +71,7 @@ To try it without hardware, or to run it from a terminal:
 | 5 | Presets, scenes, gang control, match mode | built; **you define the acceptance tests** |
 | 6 | Live multiview | ✅ built |
 | — | Camera adoption from the UI, macOS app | ✅ built (beyond the original brief) |
+| — | Expanded control set + touch-first UI rework | built; **two items need a real body, below** |
 | 6+ | Companion, ATEM tally, Q-SYS | backlog, not built |
 
 Phases 1–5 were built in one pass at your request, rather than gated one at a

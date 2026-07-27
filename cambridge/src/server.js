@@ -16,7 +16,7 @@ import { CamdClient } from './camd-client.js';
 import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
-import { Presets, Gangs, matchFrom, PRESET_PROPS, FOCUS_EXCLUDED_REASON } from './control.js';
+import { Presets, Gangs, matchFrom, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId } from './adopt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -401,6 +401,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           scenes: Object.keys(store.data.scenes),
           focusNote: FOCUS_EXCLUDED_REASON,
           capturedProps: PRESET_PROPS,
+          groups: PROP_GROUPS,
         });
       }
 
@@ -410,7 +411,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (req.method === 'PUT')    return sendJson(res, 200, presets.savePreset(cameraId, name));
         if (req.method === 'DELETE') return sendJson(res, 200, presets.deletePreset(cameraId, name));
         if (req.method === 'POST') {
-          const r = await presets.recallPreset(cameraId, name, applyFn);
+          const body = await readBody(req);
+          const r = await presets.recallPreset(cameraId, name, applyFn, {
+            transitionMs: Number(body?.transitionMs) || 0,
+            only: Array.isArray(body?.only) && body.only.length ? body.only : null,
+          });
           if (r.ok) await refreshProperties(cameraId);
           return sendJson(res, r.ok ? 200 : 409, r);
         }
@@ -423,7 +428,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (req.method === 'PUT')    return sendJson(res, 200, presets.saveScene(name));
         if (req.method === 'DELETE') return sendJson(res, 200, presets.deleteScene(name));
         if (req.method === 'POST') {
-          const r = await presets.recallScene(name, applyFn);
+          const body = await readBody(req);
+          const r = await presets.recallScene(name, applyFn, {
+            transitionMs: Number(body?.transitionMs) || 0,
+            only: Array.isArray(body?.only) && body.only.length ? body.only : null,
+          });
           await refreshAllProperties();
           return sendJson(res, r.ok ? 200 : 409, r);
         }

@@ -6,7 +6,9 @@ import { join } from 'node:path';
 
 import { StateModel } from '../src/state.js';
 import { JsonStore } from '../src/store.js';
-import { Presets, Gangs, matchFrom, capture, PRESET_PROPS } from '../src/control.js';
+import {
+  Presets, Gangs, matchFrom, capture, applyValues, rampPath, PRESET_PROPS, PROP_GROUPS,
+} from '../src/control.js';
 
 const quietLog = {
   trace() {}, debug() {}, info() {}, warn() {}, error() {}, write() {},
@@ -274,4 +276,92 @@ test('MAC normalisation accepts the formats a human might type', async () => {
   assert.equal(normaliseMac('not a mac'), null);
   assert.equal(normaliseMac(''), null);
   assert.equal(normaliseMac(undefined), null);
+});
+
+// --- ramping and selective recall -------------------------------------------
+
+test('rampPath walks an option list one legal stop at a time', () => {
+  const iris = { value: 280, writable: true, allowed: [280, 320, 400, 560, 800] };
+  const path = rampPath(iris, 800, 4);
+
+  // Every intermediate value must be a real stop — a camera cannot be parked
+  // halfway between f/4 and f/5.6 on the way somewhere.
+  for (const v of path) assert.ok(iris.allowed.includes(v), `${v} is not a legal stop`);
+  assert.equal(path[path.length - 1], 800, 'a ramp must finish exactly on target');
+  assert.ok(path.length > 1, 'a four-step ramp across five stops should not jump');
+  // Monotonic: an iris ramp that backs up mid-move is visible on air.
+  for (let i = 1; i < path.length; i++) assert.ok(path[i] > path[i - 1]);
+});
+
+test('rampPath interpolates a continuous range and never overshoots', () => {
+  const kelvin = { value: 3200, writable: true, range: { min: 2500, max: 9900, step: 100 } };
+  const path = rampPath(kelvin, 5600, 6);
+
+  assert.equal(path[path.length - 1], 5600);
+  for (const v of path) {
+    assert.ok(v >= 3200 && v <= 5600, `${v} is outside the ramp`);
+    assert.equal(v % 100, 0, `${v} is not on the camera's 100K step`);
+  }
+});
+
+test('rampPath degrades to a single jump when there is nowhere to ramp', () => {
+  const iris = { value: 400, writable: true, allowed: [280, 320, 400, 560, 800] };
+  // No transition requested.
+  assert.deepEqual(rampPath(iris, 800, 1), [800]);
+  // Already there.
+  assert.deepEqual(rampPath(iris, 400, 8), [400]);
+});
+
+test('a ramped recall sends intermediate writes and lands on the stored value', async () => {
+  const state = makeState();
+  const presets = new Presets(newStore(), state, quietLog);
+  presets.savePreset('cam1', 'wide');
+
+  const apply = makeApplyFn(state);
+  state.get('cam1').properties.fNumber.value = 800;
+  const r = await presets.recallPreset('cam1', 'wide', apply, { transitionMs: 400 });
+
+  assert.equal(r.ok, true);
+  assert.equal(state.get('cam1').properties.fNumber.value, 400);
+  const irisWrites = apply.calls.filter((c) => c.prop === 'fNumber');
+  assert.ok(irisWrites.length > 1, 'a ramp should be more than one write');
+  assert.equal(irisWrites[irisWrites.length - 1].raw, 400);
+});
+
+test('an unramped recall is exactly one write per property', async () => {
+  const state = makeState();
+  const presets = new Presets(newStore(), state, quietLog);
+  presets.savePreset('cam1', 'wide');
+
+  const apply = makeApplyFn(state);
+  state.get('cam1').properties.fNumber.value = 800;
+  state.get('cam1').properties.colorTemp.value = 3200;
+  await presets.recallPreset('cam1', 'wide', apply);
+
+  for (const prop of ['fNumber', 'colorTemp']) {
+    assert.equal(apply.calls.filter((c) => c.prop === prop).length, 1, `${prop} was written twice`);
+  }
+});
+
+test('recalling only white balance leaves exposure untouched', async () => {
+  const state = makeState();
+  const cam = state.get('cam1');
+  const apply = makeApplyFn(state);
+
+  await applyValues(cam, { fNumber: 800, colorTemp: 3200 }, apply,
+    { only: PROP_GROUPS.colour.props });
+
+  assert.equal(cam.properties.colorTemp.value, 3200, 'the selected group must be applied');
+  assert.equal(cam.properties.fNumber.value, 400, 'iris must not move mid-service');
+  assert.ok(!apply.calls.some((c) => c.prop === 'fNumber'));
+});
+
+test('recall groups only name properties presets actually store', () => {
+  // A chip that selects a property no preset captures would silently do nothing.
+  for (const [name, group] of Object.entries(PROP_GROUPS)) {
+    assert.ok(group.props.length > 0, `${name} has no properties`);
+    for (const prop of group.props) {
+      assert.ok(PRESET_PROPS.includes(prop), `${name}.${prop} is not captured in presets`);
+    }
+  }
 });

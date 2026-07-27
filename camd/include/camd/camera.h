@@ -105,6 +105,12 @@ public:
     virtual bool autofocus(std::string& err) = 0;
     virtual bool focusNudge(int steps, std::string& err) = 0;
 
+    // Presses a named camera button: menu navigation keys, and stills capture.
+    // One method rather than one per key, so adding a button is a table entry in
+    // the backend rather than a change to this interface and every implementation.
+    // Unknown names must be rejected, not silently ignored.
+    virtual bool sendKey(const std::string& key, std::string& err) = 0;
+
     // Single JPEG frame, or false with err set. Empty jpeg means "no frame yet".
     virtual bool liveviewFrame(std::string& jpeg, std::string& err) = 0;
 

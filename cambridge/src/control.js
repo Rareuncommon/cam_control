@@ -9,9 +9,22 @@
 import { nearestOption, sharesRawScale, label } from './normalise.js';
 
 /** The properties a preset or a match captures. Focus is deliberately excluded. */
-export const EXPOSURE_PROPS = ['fNumber', 'isoSensitivity', 'shutterSpeed', 'exposureMode'];
+export const EXPOSURE_PROPS = [
+  'fNumber', 'isoSensitivity', 'shutterSpeed', 'exposureMode',
+  // ND belongs with exposure: on an FX30 it is the third lever alongside iris
+  // and gain, and a preset that restores iris but not ND is half a preset.
+  'ndFilter', 'ndMode', 'ndValue',
+];
 export const COLOUR_PROPS = ['whiteBalance', 'colorTemp', 'wbTint'];
-export const PRESET_PROPS = [...EXPOSURE_PROPS, ...COLOUR_PROPS];
+export const LOOK_PROPS = ['contrast', 'saturation', 'sharpness', 'blackLevel'];
+export const PRESET_PROPS = [...EXPOSURE_PROPS, ...COLOUR_PROPS, ...LOOK_PROPS];
+
+/** Named groups the UI offers when choosing what a preset should restore. */
+export const PROP_GROUPS = {
+  exposure: { label: 'Exposure', props: EXPOSURE_PROPS },
+  colour: { label: 'White balance', props: COLOUR_PROPS },
+  look: { label: 'Look', props: LOOK_PROPS },
+};
 
 /**
  * Focus is not captured by presets.
@@ -38,15 +51,72 @@ export function capture(camera, props = PRESET_PROPS) {
 }
 
 /**
+ * Builds the intermediate values for ramping one property from where it is now to
+ * where it should end up.
+ *
+ * Enumerated properties (iris, ISO, shutter) walk their own option list step by
+ * step, so a ramp passes through legal stops rather than jumping. Continuous ones
+ * (Kelvin, tint) interpolate linearly. The final value is always the exact
+ * target, so a ramp can never leave a camera one step off.
+ */
+export function rampPath(prop, targetRaw, steps) {
+  if (!prop || steps <= 1) return [targetRaw];
+  const options = (prop.allowed ?? prop.options?.map((o) => o.raw) ?? [])
+    .slice().sort((a, b) => a - b);
+
+  if (options.length > 1) {
+    const fromIdx = options.indexOf(nearestOption(prop, prop.value ?? prop.raw));
+    const toIdx = options.indexOf(nearestOption(prop, targetRaw));
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return [targetRaw];
+    const path = [];
+    for (let i = 1; i <= steps; i++) {
+      const idx = Math.round(fromIdx + ((toIdx - fromIdx) * i) / steps);
+      const v = options[Math.min(Math.max(idx, 0), options.length - 1)];
+      if (path[path.length - 1] !== v) path.push(v);
+    }
+    if (path[path.length - 1] !== targetRaw) path.push(targetRaw);
+    return path;
+  }
+
+  const from = prop.value ?? prop.raw;
+  if (!Number.isFinite(from) || from === targetRaw) return [targetRaw];
+  const path = [];
+  for (let i = 1; i <= steps; i++) {
+    const v = nearestOption(prop, Math.round(from + ((targetRaw - from) * i) / steps));
+    if (path[path.length - 1] !== v) path.push(v);
+  }
+  if (path[path.length - 1] !== targetRaw) path.push(targetRaw);
+  return path;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
  * Applies raw values to one camera, snapping each to a legal option first.
  *
  * `applyFn` is the injected setter (cameraId, prop, raw) => Promise<result>, so
  * this is testable without a daemon.
+ *
+ * With `transitionMs` set, values are ramped rather than jumped. On air an
+ * instant iris change is visible and ugly; a couple of seconds is not. Ramping
+ * happens entirely here — the daemon still only ever sees ordinary property
+ * writes, so nothing about this weakens the thin-daemon rule.
+ *
+ * `only` restricts which properties are applied, so a preset can restore just
+ * the white balance and leave exposure alone.
  */
-export async function applyValues(camera, values, applyFn) {
+export async function applyValues(camera, values, applyFn, opts = {}) {
+  const { transitionMs = 0, only = null } = opts;
   const results = [];
   if (!camera) return results;
-  for (const [prop, wantRaw] of Object.entries(values)) {
+
+  const entries = Object.entries(values)
+    .filter(([prop]) => !only || only.includes(prop));
+
+  // Work out each property's path first, then walk all of them together, so a
+  // ramp moves every parameter in step instead of one after another.
+  const plans = [];
+  for (const [prop, wantRaw] of entries) {
     const current = camera.properties?.[prop];
     if (!current) {
       results.push({ prop, ok: false, error: 'property not available on this body' });
@@ -57,14 +127,38 @@ export async function applyValues(camera, values, applyFn) {
       continue;
     }
     const target = nearestOption(current, wantRaw);
-    const res = await applyFn(camera.id, prop, target);
+    // ~10 steps a second is smooth enough to look deliberate without flooding
+    // the camera with writes it has to acknowledge one at a time.
+    const steps = transitionMs > 0 ? Math.max(1, Math.min(30, Math.round(transitionMs / 100))) : 1;
+    plans.push({ prop, wantRaw, target, path: rampPath(current, target, steps) });
+  }
+  if (plans.length === 0) return results;
+
+  const longest = Math.max(...plans.map((p) => p.path.length));
+  const gap = transitionMs > 0 ? Math.round(transitionMs / longest) : 0;
+
+  const lastResult = new Map();
+  for (let step = 0; step < longest; step++) {
+    await Promise.all(plans.map(async (plan) => {
+      // A property whose path is shorter has already arrived; holding its final
+      // value would just re-send the same write.
+      if (step >= plan.path.length) return;
+      const res = await applyFn(camera.id, plan.prop, plan.path[step]);
+      lastResult.set(plan.prop, res);
+    }));
+    if (gap > 0 && step < longest - 1) await sleep(gap);
+  }
+
+  for (const plan of plans) {
+    const res = lastResult.get(plan.prop) ?? { ok: false, body: { error: 'not applied' } };
     results.push({
-      prop,
+      prop: plan.prop,
       ok: !!res.ok,
-      requested: wantRaw,
-      sent: target,
+      requested: plan.wantRaw,
+      sent: plan.target,
       applied: res.body?.applied ?? null,
       exact: res.body?.exact ?? null,
+      ramped: plan.path.length > 1,
       error: res.ok ? null : (res.body?.error ?? 'failed'),
     });
   }
@@ -117,7 +211,7 @@ export class Presets {
     return { ok: true };
   }
 
-  async recallPreset(cameraId, name, applyFn) {
+  async recallPreset(cameraId, name, applyFn, opts = {}) {
     const values = this.store.data.presets[cameraId]?.[name];
     if (!values) return { ok: false, error: `no preset "${name}" for ${cameraId}` };
     const cam = this.state.get(cameraId);
@@ -125,10 +219,11 @@ export class Presets {
     if (cam.state !== 'connected') {
       return { ok: false, error: `${cameraId} is ${cam.state}` };
     }
-    const results = await applyValues(cam, values, applyFn);
+    const results = await applyValues(cam, values, applyFn, opts);
     const failed = results.filter((r) => !r.ok);
     this.log.info('presets',
-      `recalled "${name}" on ${cameraId}: ${results.length - failed.length}/${results.length} applied`);
+      `recalled "${name}" on ${cameraId}: ${results.length - failed.length}/${results.length} applied` +
+      (opts.transitionMs ? ` over ${opts.transitionMs}ms` : ''));
     return { ok: failed.length === 0, cameraId, name, results };
   }
 
@@ -164,7 +259,7 @@ export class Presets {
     return { ok: true };
   }
 
-  async recallScene(name, applyFn) {
+  async recallScene(name, applyFn, opts = {}) {
     const scene = this.store.data.scenes[name];
     if (!scene) return { ok: false, error: `no scene "${name}"` };
 
@@ -177,7 +272,7 @@ export class Presets {
       if (cam.state !== 'connected') {
         return { cameraId, ok: false, error: `camera is ${cam.state}`, results: [] };
       }
-      const results = await applyValues(cam, values, applyFn);
+      const results = await applyValues(cam, values, applyFn, opts);
       return { cameraId, ok: results.every((r) => r.ok), results, error: null };
     }));
 

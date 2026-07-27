@@ -86,6 +86,36 @@ const std::map<std::string, PropSpec>& nameToCode() {
         {prop::kMediaFree,         {SDK::CrDeviceProperty_MediaSLOT1_RemainingTime, Shape::Enum}},
         {prop::kRecToggleSupported,
              {SDK::CrDeviceProperty_MovieRecButtonToggleEnableStatus, Shape::Enum}},
+
+        // ND filter
+        {prop::kNdFilter,          {SDK::CrDeviceProperty_NDFilter, Shape::Enum}},
+        {prop::kNdMode,            {SDK::CrDeviceProperty_NDFilterModeSetting, Shape::Enum}},
+        {prop::kNdValue,           {SDK::CrDeviceProperty_NDFilterValue, Shape::Range}},
+        {prop::kNdDensity,         {SDK::CrDeviceProperty_NDFilterOpticalDensityValue, Shape::Enum}},
+
+        // Look and image parameters
+        {prop::kContrast,          {SDK::CrDeviceProperty_CreativeLook_Contrast, Shape::Range}},
+        {prop::kSaturation,        {SDK::CrDeviceProperty_CreativeLook_Saturation, Shape::Range}},
+        {prop::kSharpness,         {SDK::CrDeviceProperty_CreativeLook_Sharpness, Shape::Range}},
+        {prop::kPictureProfile,    {SDK::CrDeviceProperty_PictureProfile, Shape::Enum}},
+        {prop::kBlackLevel,        {SDK::CrDeviceProperty_PictureProfile_BlackLevel, Shape::Range}},
+
+        // Monitoring assists
+        {prop::kZebraDisplay,      {SDK::CrDeviceProperty_ZebraDisplay, Shape::Enum}},
+        {prop::kZebraLevel,        {SDK::CrDeviceProperty_ZebraLevel, Shape::Enum}},
+        {prop::kPeakingDisplay,    {SDK::CrDeviceProperty_PeakingDisplay, Shape::Enum}},
+        {prop::kPeakingLevel,      {SDK::CrDeviceProperty_PeakingLevel, Shape::Enum}},
+        {prop::kPeakingColor,      {SDK::CrDeviceProperty_PeakingColor, Shape::Enum}},
+        {prop::kGammaAssist,       {SDK::CrDeviceProperty_GammaDisplayAssist, Shape::Enum}},
+
+        // Autofocus behaviour and the area tap-to-focus drives
+        {prop::kSubjectRecognition, {SDK::CrDeviceProperty_SubjectRecognitionAF, Shape::Enum}},
+        {prop::kAfAreaPositionC,   {SDK::CrDeviceProperty_AFAreaPositionAF_C, Shape::Range}},
+        {prop::kAfAreaPositionS,   {SDK::CrDeviceProperty_AFAreaPositionAF_S, Shape::Range}},
+        {prop::kFocusArea,         {SDK::CrDeviceProperty_FocusArea, Shape::Enum}},
+
+        // Stabilisation
+        {prop::kSteadyShotMovie,   {SDK::CrDeviceProperty_Movie_ImageStabilizationSteadyShot, Shape::Enum}},
     };
     return m;
 }
@@ -379,6 +409,37 @@ public:
                              SDK::CrCommandParam_Up);
         if (e != SDK::CrError_None) {
             err = "SendCommand(S1andRelease, Up) failed " + hexError(e);
+            return false;
+        }
+        return true;
+    }
+
+    bool sendKey(const std::string& key, std::string& err) override {
+        if (!handle_) { err = "not connected"; return false; }
+        static const std::map<std::string, CrInt32u> keys = {
+            {"menu",    SDK::CrCommandId_RemoteKeyMenuButton},
+            {"up",      SDK::CrCommandId_RemoteKeyUp},
+            {"down",    SDK::CrCommandId_RemoteKeyDown},
+            {"left",    SDK::CrCommandId_RemoteKeyLeft},
+            {"right",   SDK::CrCommandId_RemoteKeyRight},
+            {"set",     SDK::CrCommandId_RemoteKeySet},
+            {"back",    SDK::CrCommandId_RemoteKeyCancelBackButton},
+            {"display", SDK::CrCommandId_RemoteKeyDisplayButton},
+            {"capture", SDK::CrCommandId_Release},
+        };
+        auto it = keys.find(key);
+        if (it == keys.end()) { err = "unknown key: " + key; return false; }
+
+        // A key is a press and a release. Unlike the record button, these are
+        // genuinely momentary, so both halves are sent.
+        SDK::CrError e = SDK::SendCommand(handle_, it->second, SDK::CrCommandParam_Down);
+        if (e != SDK::CrError_None) {
+            err = "key '" + key + "' down failed " + hexError(e);
+            return false;
+        }
+        e = SDK::SendCommand(handle_, it->second, SDK::CrCommandParam_Up);
+        if (e != SDK::CrError_None) {
+            err = "key '" + key + "' up failed " + hexError(e);
             return false;
         }
         return true;

@@ -197,6 +197,27 @@ public:
         props_[prop::kBatteryLevel] = ranged(87, 0, 100, 1, false);
         // Matches the FX30 finding: the toggle command is not available.
         props_[prop::kRecToggleSupported] = enumerated(super35 ? 0 : 0, {0, 1}, false);
+
+        // ND: the FX30 has an internal variable ND, the FX3 does not. Modelling
+        // that difference means the UI's "this body has no ND" path is exercised.
+        if (super35) {
+            props_[prop::kNdFilter] = enumerated(1, {0, 1});
+            props_[prop::kNdMode] = enumerated(2, {1, 2});
+            props_[prop::kNdValue] = ranged(30, 0, 100, 1);
+            props_[prop::kNdDensity] = enumerated(60, {}, false);
+        }
+
+        props_[prop::kContrast] = ranged(0, -15, 15, 1);
+        props_[prop::kSaturation] = ranged(0, -15, 15, 1);
+        props_[prop::kSharpness] = ranged(0, -7, 7, 1);
+        props_[prop::kZebraDisplay] = enumerated(0, {0, 1});
+        props_[prop::kZebraLevel] = enumerated(70, {70, 75, 80, 85, 90, 95, 100});
+        props_[prop::kPeakingDisplay] = enumerated(0, {0, 1});
+        props_[prop::kPeakingLevel] = enumerated(1, {0, 1, 2, 3});
+        props_[prop::kSubjectRecognition] = enumerated(1, {0, 1});
+        props_[prop::kSteadyShotMovie] = enumerated(1, {0, 1});
+        props_[prop::kFocusArea] = enumerated(1, {1, 2, 3, 4, 5, 6});
+        props_[prop::kAfAreaPositionC] = ranged(0, 0, 0x027F01DF, 1);
     }
 
     bool getProperties(PropertyMap& out, std::string& err) override {
@@ -287,6 +308,18 @@ public:
         return true;
     }
 
+    bool sendKey(const std::string& key, std::string& err) override {
+        if (!check(err)) return false;
+        static const std::vector<std::string> known = {
+            "menu", "up", "down", "left", "right", "set", "back", "display", "capture"};
+        if (std::find(known.begin(), known.end(), key) == known.end()) {
+            err = "unknown key: " + key;
+            return false;
+        }
+        lastKey_ = key;
+        return true;
+    }
+
     bool focusNudge(int steps, std::string& err) override {
         if (!check(err)) return false;
         std::lock_guard<std::mutex> lock(mu_);
@@ -331,6 +364,7 @@ private:
     std::mutex mu_;
     PropertyMap props_;
     bool recording_ = false;
+    std::string lastKey_;
     bool disconnected_ = false;
     bool notified_ = false;
 };
