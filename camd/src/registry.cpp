@@ -48,6 +48,11 @@ const char* connStateName(ConnState s) {
     return "unknown";
 }
 
+// Minimum gap between full property refreshes. Shared by the connected-state
+// step and the wait predicate below: if the predicate woke on propertyDirty_
+// while the step declined to act on it, the worker would spin at 100% CPU.
+static constexpr auto kPropertyRefreshFloor = std::chrono::milliseconds(250);
+
 // --- event sink -------------------------------------------------------------
 
 // Receives SDK callbacks on SDK-owned threads. Does nothing but set flags: any
@@ -376,8 +381,18 @@ void CameraWorker::stepConnected() {
         return;
     }
 
-    if (propertyDirty_.exchange(false)) {
-        refreshAndPublishProperties();
+    // Coalesce property refreshes rather than tracking every callback. A body
+    // that is rolling fires onPropertyChanged constantly, and getProperties() is
+    // a real round trip to the camera — answering each one turns this loop into
+    // a hot spin that leaves no time for the heartbeat or for a queued REC stop.
+    // 250ms is far faster than an operator can perceive and bounds the cost.
+    if (propertyDirty_.load()) {
+        const auto sinceRefresh = clock_t_::now() - lastPropertyRefresh_;
+        if (sinceRefresh >= kPropertyRefreshFloor) {
+            propertyDirty_ = false;
+            lastPropertyRefresh_ = clock_t_::now();
+            refreshAndPublishProperties();
+        }
     }
 
     const auto now = clock_t_::now();
@@ -454,8 +469,11 @@ void CameraWorker::threadMain() {
         // to keep the heartbeat honest.
         std::unique_lock<std::mutex> lock(jobMu_);
         jobCv_.wait_for(lock, std::chrono::milliseconds(200), [this] {
-            return !jobs_.empty() || !running_ || propertyDirty_ || sdkDisconnected_ ||
-                   reconnectRequested_;
+            // Deliberately does NOT wake on propertyDirty_ alone. While a camera
+            // is rolling that flag is essentially always set, so waking on it
+            // would spin; wake only once the refresh floor has actually expired.
+            return !jobs_.empty() || !running_ || sdkDisconnected_ || reconnectRequested_ ||
+                   (propertyDirty_ && clock_t_::now() - lastPropertyRefresh_ >= kPropertyRefreshFloor);
         });
     }
 

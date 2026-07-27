@@ -146,6 +146,11 @@ private:
     std::chrono::steady_clock::time_point nextAttempt_{};
     std::chrono::steady_clock::time_point lastHeartbeatOk_{};
     std::chrono::steady_clock::time_point lastHeartbeatSent_{};
+    // A recording camera emits property-changed callbacks continuously (timecode,
+    // media remaining, battery). Without a floor between refreshes the worker
+    // spends every iteration inside a full getProperties(), which starves both
+    // the heartbeat and any queued operator command.
+    std::chrono::steady_clock::time_point lastPropertyRefresh_{};
     PropertyMap lastProps_;
 };
 
