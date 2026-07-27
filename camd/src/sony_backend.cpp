@@ -46,34 +46,59 @@ std::string hexError(CrInt32u e) {
     return buf;
 }
 
+// How a property's value array should be read.
+//
+// This distinction is not derivable from the data, and getting it wrong is
+// silently wrong rather than loudly wrong. An FX30 returns colorTemp as
+// [2500, 9900, 100] and recordingState as [0, 2, 1] — both three elements, but
+// the first is min/max/step and the second is three legal values. Reading the
+// first as an enumeration offers the operator a colour temperature slider with
+// exactly three positions; reading the second as a range is harmless but wrong.
+// So the shape is declared per property rather than guessed.
+enum class Shape { Enum, Range };
+
+struct PropSpec {
+    CrInt32u code;
+    Shape shape;
+};
+
 // Maps camd's stable API names onto Sony device property codes. Adding a
 // property is a one-line change here; the name is what the Node layer and the UI
 // speak, so it must not drift.
-const std::map<std::string, CrInt32u>& nameToCode() {
-    static const std::map<std::string, CrInt32u> m = {
-        {prop::kFNumber,           SDK::CrDeviceProperty_FNumber},
-        {prop::kIso,               SDK::CrDeviceProperty_IsoSensitivity},
-        {prop::kShutterSpeed,      SDK::CrDeviceProperty_ShutterSpeed},
-        {prop::kExposureMode,      SDK::CrDeviceProperty_ExposureProgramMode},
-        {prop::kWhiteBalance,      SDK::CrDeviceProperty_WhiteBalance},
-        {prop::kColorTemp,         SDK::CrDeviceProperty_Colortemp},
-        {prop::kWbTint,            SDK::CrDeviceProperty_WhiteBalanceTint},
-        {prop::kFocusMode,         SDK::CrDeviceProperty_FocusMode},
-        {prop::kFocusPosition,     SDK::CrDeviceProperty_FocusPositionCurrentValue},
-        {prop::kZoomPosition,      SDK::CrDeviceProperty_Zoom_Scale},
-        {prop::kRecordingState,    SDK::CrDeviceProperty_RecordingState},
-        {prop::kBatteryLevel,      SDK::CrDeviceProperty_BatteryRemain},
-        {prop::kMediaFree,         SDK::CrDeviceProperty_MediaSLOT1_RemainingTime},
+const std::map<std::string, PropSpec>& nameToCode() {
+    static const std::map<std::string, PropSpec> m = {
+        {prop::kFNumber,           {SDK::CrDeviceProperty_FNumber, Shape::Enum}},
+        {prop::kIso,               {SDK::CrDeviceProperty_IsoSensitivity, Shape::Enum}},
+        {prop::kShutterSpeed,      {SDK::CrDeviceProperty_ShutterSpeed, Shape::Enum}},
+        {prop::kExposureMode,      {SDK::CrDeviceProperty_ExposureProgramMode, Shape::Enum}},
+        {prop::kExposureCtrlType,  {SDK::CrDeviceProperty_ExposureCtrlType, Shape::Enum}},
+        {prop::kIrisMode,          {SDK::CrDeviceProperty_IrisModeSetting, Shape::Enum}},
+        {prop::kShutterMode,       {SDK::CrDeviceProperty_ShutterModeSetting, Shape::Enum}},
+        {prop::kGainMode,          {SDK::CrDeviceProperty_GainControlSetting, Shape::Enum}},
+        {prop::kWhiteBalance,      {SDK::CrDeviceProperty_WhiteBalance, Shape::Enum}},
+        {prop::kColorTemp,         {SDK::CrDeviceProperty_Colortemp, Shape::Range}},
+        {prop::kWbTint,            {SDK::CrDeviceProperty_WhiteBalanceTint, Shape::Range}},
+        {prop::kFocusMode,         {SDK::CrDeviceProperty_FocusMode, Shape::Enum}},
+        {prop::kFocusPosition,     {SDK::CrDeviceProperty_FocusPositionCurrentValue, Shape::Range}},
+        {prop::kZoomPosition,      {SDK::CrDeviceProperty_Zoom_Scale, Shape::Range}},
+        {prop::kRecordingState,    {SDK::CrDeviceProperty_RecordingState, Shape::Enum}},
+        {prop::kBatteryLevel,      {SDK::CrDeviceProperty_BatteryRemain, Shape::Enum}},
+        {prop::kMediaFree,         {SDK::CrDeviceProperty_MediaSLOT1_RemainingTime, Shape::Enum}},
         {prop::kRecToggleSupported,
-             SDK::CrDeviceProperty_MovieRecButtonToggleEnableStatus},
+             {SDK::CrDeviceProperty_MovieRecButtonToggleEnableStatus, Shape::Enum}},
     };
     return m;
 }
 
-const std::map<CrInt32u, std::string>& codeToName() {
-    static const std::map<CrInt32u, std::string> m = [] {
-        std::map<CrInt32u, std::string> out;
-        for (const auto& [name, code] : nameToCode()) out[code] = name;
+struct CodeInfo {
+    std::string name;
+    Shape shape;
+};
+
+const std::map<CrInt32u, CodeInfo>& codeToName() {
+    static const std::map<CrInt32u, CodeInfo> m = [] {
+        std::map<CrInt32u, CodeInfo> out;
+        for (const auto& [name, spec] : nameToCode()) out[spec.code] = {name, spec.shape};
         return out;
     }();
     return m;
@@ -214,14 +239,27 @@ public:
             const bool isSigned = (p.GetValueType() & SDK::CrDataType_SignBit) != 0;
             const CrInt8u* values = p.GetValues();
             const CrInt32u byteCount = p.GetValueSize();
+            std::vector<std::int64_t> decoded;
             if (values && width > 0 && byteCount >= width) {
                 const std::size_t n = byteCount / width;
-                v.allowed.reserve(n);
+                decoded.reserve(n);
                 for (std::size_t k = 0; k < n; ++k) {
-                    v.allowed.push_back(readElement(values + k * width, width, isSigned));
+                    decoded.push_back(readElement(values + k * width, width, isSigned));
                 }
             }
-            out[it->second] = std::move(v);
+
+            if (it->second.shape == Shape::Range && decoded.size() == 3) {
+                v.hasRange = true;
+                v.min = decoded[0];
+                v.max = decoded[1];
+                v.step = decoded[2] != 0 ? decoded[2] : 1;
+            } else {
+                // Includes a Range-shaped property that came back with an
+                // unexpected element count: report what we were given rather than
+                // inventing a range from it.
+                v.allowed = std::move(decoded);
+            }
+            out[it->second.name] = std::move(v);
         }
 
         SDK::ReleaseDeviceProperties(handle_, props);
@@ -250,7 +288,7 @@ public:
         bool found = false;
         bool writable = false;
         for (CrInt32 i = 0; i < count; ++i) {
-            if (props[i].GetCode() == codeIt->second) {
+            if (props[i].GetCode() == codeIt->second.code) {
                 type = props[i].GetValueType();
                 const auto flag = props[i].GetPropertyEnableFlag();
                 writable = (flag == SDK::CrEnableValue_True ||
@@ -272,7 +310,7 @@ public:
         }
 
         SDK::CrDeviceProperty setter;
-        setter.SetCode(codeIt->second);
+        setter.SetCode(codeIt->second.code);
         setter.SetValueType(type);
         setter.SetCurrentValue(static_cast<CrInt64u>(value));
         e = SDK::SetDeviceProperty(handle_, &setter);

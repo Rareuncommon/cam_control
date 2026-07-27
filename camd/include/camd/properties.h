@@ -17,6 +17,19 @@ inline constexpr const char* kIso           = "isoSensitivity"; // ISO / gain
 inline constexpr const char* kShutterSpeed  = "shutterSpeed";
 inline constexpr const char* kExposureMode  = "exposureMode";
 
+// Flexible Exposure Mode's per-parameter auto/manual switches.
+//
+// Confirmed on an FX30: it ships in CrExposure_Movie_F (0x8055), where iris,
+// shutter and gain each have their own Automatic/Manual setting. With iris and
+// gain on Automatic, fNumber and isoSensitivity come back read-only with no
+// value list at all — which looks exactly like "the SDK cannot control iris"
+// until you know to check these. Exposing them makes the panel able to say why a
+// control is greyed out, and to fix it.
+inline constexpr const char* kExposureCtrlType = "exposureCtrlType";
+inline constexpr const char* kIrisMode         = "irisMode";
+inline constexpr const char* kShutterMode      = "shutterMode";
+inline constexpr const char* kGainMode         = "gainMode";
+
 // Colour
 inline constexpr const char* kWhiteBalance  = "whiteBalance";   // preset mode
 inline constexpr const char* kColorTemp     = "colorTemp";      // Kelvin

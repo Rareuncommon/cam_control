@@ -96,3 +96,58 @@ test('sharesRawScale distinguishes physical from per-sensor properties', () => {
   assert.equal(sharesRawScale('isoSensitivity'), false);
   assert.equal(sharesRawScale('shutterSpeed'), false);
 });
+
+// --- values read off a real ILME-FX30, 2026-07-26 --------------------------
+
+test('decodes the exposure mode a real FX30 reported', async () => {
+  const { exposureModeToLabel } = await import('../src/normalise.js');
+  // 32853 = 0x8055. The camera arrived in Movie Flexible Exposure, which is why
+  // iris and ISO came back read-only.
+  assert.equal(exposureModeToLabel(32853), 'Movie Flexible');
+  assert.equal(exposureModeToLabel(0x8053), 'Movie M');
+  assert.equal(exposureModeToLabel(1), 'M');
+  assert.equal(exposureModeToLabel(0x8000), 'Auto');
+  // Unknown values must print recognisably, not silently as decimal.
+  assert.match(exposureModeToLabel(0x9999), /0x9999/);
+});
+
+test('decodes the white balance values a real FX30 offered', async () => {
+  const { whiteBalanceToLabel } = await import('../src/normalise.js');
+  assert.equal(whiteBalanceToLabel(256), 'Colour Temp.');  // what it was set to
+  assert.equal(whiteBalanceToLabel(17), 'Daylight');
+  assert.equal(whiteBalanceToLabel(20), 'Tungsten');
+  assert.equal(whiteBalanceToLabel(33), 'Fluor. Warm White');
+  assert.equal(whiteBalanceToLabel(257), 'Custom 1');
+});
+
+test('focus modes are one-indexed, not zero-indexed', async () => {
+  const { focusModeToLabel } = await import('../src/normalise.js');
+  // The FX30 reported focusMode 3 with [3, 1] available. An earlier zero-indexed
+  // guess would have called AF-C "AF-A" and MF "AF-S".
+  assert.equal(focusModeToLabel(3), 'AF-C');
+  assert.equal(focusModeToLabel(1), 'MF');
+});
+
+test('shutter values from the real camera decode correctly', async () => {
+  const { shutterToLabel } = await import('../src/normalise.js');
+  // Straight from the FX30's reported list.
+  assert.equal(shutterToLabel(65596), '1/60');   // what it was set to
+  assert.equal(shutterToLabel(65540), '1/4');
+  assert.equal(shutterToLabel(73536), '1/8000');
+});
+
+test('auto/manual gates decode and explain a read-only control', async () => {
+  const { autoManualToLabel, readOnlyReason, AUTO, MANUAL } = await import('../src/normalise.js');
+  assert.equal(autoManualToLabel(1), 'Auto');
+  assert.equal(autoManualToLabel(2), 'Manual');
+
+  // With iris on Auto, the UI should explain rather than just grey out.
+  const props = { irisMode: { raw: AUTO }, gainMode: { raw: MANUAL } };
+  const reason = readOnlyReason('fNumber', props);
+  assert.ok(reason);
+  assert.match(reason.message, /Iris is set to Auto/);
+  assert.equal(reason.fixTo, MANUAL);
+  // Gain is already Manual, so there is nothing to explain there.
+  assert.equal(readOnlyReason('isoSensitivity', props), null);
+  assert.equal(readOnlyReason('colorTemp', props), null);
+});

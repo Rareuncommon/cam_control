@@ -250,6 +250,27 @@ function stateBadge(cam) {
   return el('span', { class: `pill ${kind}`, text, title: cam.detail ?? '' });
 }
 
+// Iris/ISO/shutter can be read-only simply because the camera has that parameter
+// on Auto in Flexible Exposure mode. Greying the control out and saying nothing
+// would look like a broken app; this offers the switch instead.
+function autoGateNotice(cam, propName) {
+  const gate = { fNumber: 'irisMode', isoSensitivity: 'gainMode', shutterSpeed: 'shutterMode' }[propName];
+  if (!gate) return null;
+  const gateProp = cam.properties?.[gate];
+  if (!gateProp || gateProp.raw !== 1 /* Auto */) return null;
+  const what = { irisMode: 'Iris', gainMode: 'ISO', shutterMode: 'Shutter' }[gate];
+  return el('div', { class: 'row' },
+    el('label', { text: '' }),
+    el('div', { class: 'line', style: 'display:flex;gap:6px;align-items:center;flex-wrap:wrap' },
+      el('span', { class: 'note', text: `${what} is on Auto` }),
+      el('button', {
+        class: 'small',
+        disabled: !gateProp.writable,
+        title: gateProp.writable ? '' : 'The camera will not allow this to be changed remotely right now',
+        onclick: () => api('PUT', `/api/cameras/${cam.id}/properties/${gate}`, { value: 2 }),
+      }, document.createTextNode('Switch to Manual'))));
+}
+
 function selectRow(cam, propName, labelText) {
   const prop = cam.properties?.[propName];
   const live = cam.state === 'connected' && prop && prop.writable && prop.options?.length;
@@ -275,7 +296,12 @@ function selectRow(cam, propName, labelText) {
   } else {
     sel.append(el('option', {}, document.createTextNode(prop?.label ?? '—')));
   }
-  return el('div', { class: 'row' }, el('label', { text: labelText }), sel);
+  const row = el('div', { class: 'row' }, el('label', { text: labelText }), sel);
+  const notice = autoGateNotice(cam, propName);
+  if (!notice) return row;
+  const wrap = el('div', {});
+  wrap.append(row, notice);
+  return wrap;
 }
 
 function rangeRow(cam, propName, labelText) {
@@ -355,7 +381,9 @@ function cameraCard(cam) {
     el('span', { class: `recdot${rec ? ' on' : ''}${failed ? ' failed' : ''}` }),
     el('div', {},
       el('h2', { text: cam.label || cam.id }),
-      el('div', { class: 'meta', text: `${cam.model || 'unknown model'} · ${cam.ip || 'no address'}` })),
+      el('div', { class: 'meta', text:
+        `${cam.model || 'unknown model'} · ${cam.ip || 'no address'}` +
+        (cam.properties?.exposureMode ? ` · ${cam.properties.exposureMode.label}` : '') })),
     el('span', { class: 'spacer', style: 'flex:1' }),
     stateBadge(cam)));
 

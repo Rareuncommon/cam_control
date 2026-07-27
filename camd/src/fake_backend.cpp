@@ -78,7 +78,10 @@ const std::vector<std::int64_t> kShutter{
     packShutter(1, 50),  packShutter(1, 60),   packShutter(1, 100),
     packShutter(1, 120), packShutter(1, 250),  packShutter(1, 500),
     packShutter(1, 1000), packShutter(1, 2000), packShutter(1, 4000)};
-const std::vector<std::int64_t> kWbPresets{0, 1, 2, 3, 4, 5};
+// The values a real FX30 offers: daylight group, fluorescent group, then colour
+// temperature and the custom slots.
+const std::vector<std::int64_t> kWbPresets{
+    0x11, 0x12, 0x13, 0x14, 0x21, 0x22, 0x23, 0x24, 0x100, 0x101, 0x102, 0x103};
 
 std::int64_t snapTo(const std::vector<std::int64_t>& allowed, std::int64_t want) {
     if (allowed.empty()) return want;
@@ -96,14 +99,25 @@ public:
     FakeSession(DiscoveredCamera info, EventSink* sink)
         : info_(std::move(info)), sink_(sink) {
         const bool super35 = info_.model.find("FX30") != std::string::npos;
-        props_[prop::kFNumber] = enumerated(400, kFNumbers);
-        props_[prop::kIso] = enumerated(super35 ? 800 : 640, super35 ? kIsoSuper35 : kIsoFull);
+        // Iris and gain start gated by their Auto setting, exactly as a real FX30
+        // arrives: value present, no list, not writable. applyExposureGates() below
+        // flips them when the operator switches the gate to Manual.
+        props_[prop::kFNumber] = enumerated(400, {}, false);
+        props_[prop::kIso] = enumerated(super35 ? 800 : 640, {}, false);
+        fullIso_ = super35 ? kIsoSuper35 : kIsoFull;
         props_[prop::kShutterSpeed] = enumerated(packShutter(1, 50), kShutter);
-        props_[prop::kExposureMode] = enumerated(1, {0, 1, 2, 3});
-        props_[prop::kWhiteBalance] = enumerated(2, kWbPresets);
+        // Mirrors a real FX30 as observed: Movie Flexible Exposure (0x8055), with
+        // iris and gain on Auto — which is why fNumber and ISO come back
+        // read-only until the operator switches them to Manual.
+        props_[prop::kExposureMode] = enumerated(0x8055, {0x8000, 2, 3, 4, 1, 0x8055, 0x805E});
+        props_[prop::kExposureCtrlType] = enumerated(0x02, {0x01, 0x02});
+        props_[prop::kIrisMode] = enumerated(0x01, {0x01, 0x02});
+        props_[prop::kShutterMode] = enumerated(0x02, {0x01, 0x02});
+        props_[prop::kGainMode] = enumerated(0x01, {0x01, 0x02});
+        props_[prop::kWhiteBalance] = enumerated(0x0100, kWbPresets);
         props_[prop::kColorTemp] = ranged(5600, 2500, 9900, 100);
         props_[prop::kWbTint] = ranged(0, -7, 7, 1);
-        props_[prop::kFocusMode] = enumerated(1, {0, 1, 2});
+        props_[prop::kFocusMode] = enumerated(0x03, {0x03, 0x01});  // AF-C, MF
         props_[prop::kFocusPosition] = ranged(500, 0, 1000, 1);
         props_[prop::kZoomPosition] = ranged(0, 0, 1000, 1);
         props_[prop::kRecordingState] = enumerated(kRecordingNotRecording, {}, false);
@@ -146,8 +160,25 @@ public:
             applied = value;
         }
         it->second.current = applied;
+        applyExposureGates();
         if (sink_) sink_->onPropertyChanged();
         return true;
+    }
+
+    // Iris and gain become settable only when their Flexible Exposure gate is
+    // Manual. Modelling this is the difference between a fake that always works
+    // and one that reproduces the first thing a real camera did to us.
+    void applyExposureGates() {
+        const bool irisManual = props_[prop::kIrisMode].current == 0x02;
+        props_[prop::kFNumber].writable = irisManual;
+        props_[prop::kFNumber].allowed = irisManual ? kFNumbers : std::vector<std::int64_t>{};
+
+        const bool gainManual = props_[prop::kGainMode].current == 0x02;
+        props_[prop::kIso].writable = gainManual;
+        props_[prop::kIso].allowed = gainManual ? fullIso_ : std::vector<std::int64_t>{};
+
+        const bool shutterManual = props_[prop::kShutterMode].current == 0x02;
+        props_[prop::kShutterSpeed].writable = shutterManual;
     }
 
     bool getStatus(CameraStatus& out, std::string& err) override {
@@ -223,6 +254,7 @@ private:
 
     DiscoveredCamera info_;
     EventSink* sink_;
+    std::vector<std::int64_t> fullIso_;
     std::mutex mu_;
     PropertyMap props_;
     bool recording_ = false;

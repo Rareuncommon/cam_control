@@ -63,6 +63,21 @@ std::vector<DiscoveredCamera> makePresent() {
     return present;
 }
 
+// Switches a camera's Flexible Exposure gates to Manual, which is what makes
+// iris and gain writable. A real FX30 arrives with them on Auto, so any test that
+// wants to drive exposure has to do this first — exactly like the operator does.
+inline void makeExposureManual(CameraWorker* w) {
+    auto ok = std::make_shared<bool>(false);
+    w->run([ok](CameraSession* s) {
+        if (!s) return;
+        std::int64_t applied = 0;
+        std::string err;
+        s->setProperty(prop::kIrisMode, 0x02, applied, err);
+        s->setProperty(prop::kGainMode, 0x02, applied, err);
+        *ok = true;
+    }, 2000);
+}
+
 // Spins until `pred` holds or the budget expires. Returns whether it held.
 template <typename Pred>
 bool waitFor(Pred pred, int timeoutMs) {
@@ -119,6 +134,7 @@ TEST(worker_reads_properties_with_ranges_and_allowed_values) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
     auto* w = rig.registry->find("cam1");
+    makeExposureManual(w);
 
     auto props = std::make_shared<PropertyMap>();
     CHECK(w->run([props](CameraSession* s) {
@@ -139,6 +155,7 @@ TEST(worker_reports_actual_applied_value_not_the_request) {
     Rig rig;
     CHECK(rig.waitConnected("cam1"));
     auto* w = rig.registry->find("cam1");
+    makeExposureManual(w);
 
     auto applied = std::make_shared<std::int64_t>(0);
     auto ok = std::make_shared<bool>(false);
@@ -149,6 +166,34 @@ TEST(worker_reports_actual_applied_value_not_the_request) {
     }, 2000));
     CHECK(*ok);
     CHECK_EQ(*applied, static_cast<std::int64_t>(400));
+}
+
+TEST(iris_is_read_only_until_its_auto_gate_is_switched_to_manual) {
+    // This is the first thing a real FX30 did to us: in Flexible Exposure mode it
+    // reports fNumber with a value but no option list and writable=false, which is
+    // indistinguishable from "unsupported" unless you check irisMode.
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+    auto* w = rig.registry->find("cam1");
+
+    auto before = std::make_shared<PropertyMap>();
+    CHECK(w->run([before](CameraSession* s) {
+        std::string err;
+        if (s) s->getProperties(*before, err);
+    }, 2000));
+    CHECK_EQ(before->at(prop::kFNumber).writable, false);
+    CHECK(before->at(prop::kFNumber).allowed.empty());
+    CHECK_EQ(before->at(prop::kIrisMode).current, static_cast<std::int64_t>(0x01));
+
+    makeExposureManual(w);
+
+    auto after = std::make_shared<PropertyMap>();
+    CHECK(w->run([after](CameraSession* s) {
+        std::string err;
+        if (s) s->getProperties(*after, err);
+    }, 2000));
+    CHECK_EQ(after->at(prop::kFNumber).writable, true);
+    CHECK(!after->at(prop::kFNumber).allowed.empty());
 }
 
 TEST(worker_rejects_write_to_read_only_property) {
@@ -227,6 +272,7 @@ TEST(one_camera_going_offline_does_not_affect_the_others) {
     // answering promptly.
     Rig rig;
     CHECK(rig.waitAllConnected());
+    for (const char* id : {"cam1", "cam3"}) makeExposureManual(rig.registry->find(id));
 
     fakeBackendSetLinkDown("AA:BB:CC:00:00:02", true);
 

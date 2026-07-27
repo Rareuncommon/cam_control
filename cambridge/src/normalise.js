@@ -74,30 +74,89 @@ export function tintToLabel(raw) {
   return raw > 0 ? `+${raw}` : String(raw);
 }
 
+// CrWhiteBalanceSetting, CrDeviceProperty.h:1116. Verified against an FX30,
+// which reports [17-20, 33-36, 256-259] and sits on 256 (Colour Temp.).
 const WB_PRESETS = {
-  0: 'Auto',
-  1: 'Daylight',
-  2: 'Shade',
-  3: 'Cloudy',
-  4: 'Incandescent',
-  5: 'Fluorescent',
-  6: 'Flash',
-  7: 'Colour Temp.',
-  8: 'Custom',
+  0x0000: 'Auto',
+  0x0001: 'Underwater Auto',
+  0x0011: 'Daylight',
+  0x0012: 'Shade',
+  0x0013: 'Cloudy',
+  0x0014: 'Tungsten',
+  0x0020: 'Fluorescent',
+  0x0021: 'Fluor. Warm White',
+  0x0022: 'Fluor. Cool White',
+  0x0023: 'Fluor. Day White',
+  0x0024: 'Fluor. Daylight',
+  0x0030: 'Flash',
+  0x0100: 'Colour Temp.',
+  0x0101: 'Custom 1',
+  0x0102: 'Custom 2',
+  0x0103: 'Custom 3',
+  0x0104: 'Custom',
 };
-// CONFIRM against the camera's own menu ordering on hardware.
 export function whiteBalanceToLabel(raw) {
-  return WB_PRESETS[raw] ?? `Mode ${raw}`;
+  return WB_PRESETS[raw] ?? `WB ${raw}`;
 }
 
-const FOCUS_MODES = { 0: 'MF', 1: 'AF-S', 2: 'AF-C', 3: 'AF-A', 4: 'DMF' };
+// CrFocusMode, CrDeviceProperty.h:1138. One-indexed — an earlier zero-indexed
+// guess mislabelled every mode by one.
+const FOCUS_MODES = {
+  0x0001: 'MF', 0x0002: 'AF-S', 0x0003: 'AF-C',
+  0x0004: 'AF-A', 0x0005: 'AF-D', 0x0006: 'DMF', 0x0007: 'PF',
+};
 export function focusModeToLabel(raw) {
-  return FOCUS_MODES[raw] ?? `Mode ${raw}`;
+  return FOCUS_MODES[raw] ?? `Focus ${raw}`;
 }
 
-const EXPOSURE_MODES = { 0: 'M', 1: 'P', 2: 'A', 3: 'S', 4: 'Auto' };
+// CrExposureProgram, CrDeviceProperty.h:1018. The movie modes live at 0x8050+,
+// which is where an FX30 actually sits — it shipped to us on 0x8055, Movie
+// Flexible Exposure.
+const EXPOSURE_MODES = {
+  0x0001: 'M', 0x0002: 'P', 0x0003: 'A', 0x0004: 'S',
+  0x8000: 'Auto',
+  0x8050: 'Movie P', 0x8051: 'Movie A', 0x8052: 'Movie S',
+  0x8053: 'Movie M', 0x8054: 'Movie Auto', 0x8055: 'Movie Flexible',
+  0x8059: 'S&Q P', 0x805a: 'S&Q A', 0x805b: 'S&Q S',
+  0x805c: 'S&Q M', 0x805d: 'S&Q Auto', 0x805e: 'S&Q Flexible',
+};
 export function exposureModeToLabel(raw) {
-  return EXPOSURE_MODES[raw] ?? `Mode ${raw}`;
+  return EXPOSURE_MODES[raw] ?? `Mode 0x${(raw >>> 0).toString(16)}`;
+}
+
+// Flexible Exposure Mode's per-parameter auto/manual switches.
+// CrIrisModeSetting / CrShutterModeSetting / CrGainControlSetting, all 1=Auto,
+// 2=Manual (CrDeviceProperty.h:2158+).
+const AUTO_MANUAL = { 0x01: 'Auto', 0x02: 'Manual' };
+export function autoManualToLabel(raw) {
+  return AUTO_MANUAL[raw] ?? `Mode ${raw}`;
+}
+
+// CrExposureCtrlType, CrDeviceProperty.h:2172.
+const EXPOSURE_CTRL_TYPE = { 0x01: 'P/A/S/M', 0x02: 'Flexible Exposure' };
+export function exposureCtrlTypeToLabel(raw) {
+  return EXPOSURE_CTRL_TYPE[raw] ?? `Type ${raw}`;
+}
+
+export const AUTO = 0x01;
+export const MANUAL = 0x02;
+
+/**
+ * Explains why an exposure control is read-only, when the reason is recoverable.
+ *
+ * On an FX30 in Flexible Exposure mode, iris and gain default to Automatic, and
+ * the SDK then reports fNumber and isoSensitivity as read-only with no value
+ * list at all. That is indistinguishable from "this camera cannot do it" unless
+ * you know to look at irisMode and gainMode — so the UI says so, and offers the
+ * switch, rather than just greying out a control.
+ */
+export function readOnlyReason(propName, properties) {
+  const gate = { fNumber: 'irisMode', isoSensitivity: 'gainMode', shutterSpeed: 'shutterMode' }[propName];
+  if (!gate) return null;
+  const gateProp = properties?.[gate];
+  if (!gateProp || gateProp.raw !== AUTO) return null;
+  const what = { irisMode: 'Iris', gainMode: 'Gain/ISO', shutterMode: 'Shutter' }[gate];
+  return { gate, message: `${what} is set to Auto on the camera`, fixTo: MANUAL };
 }
 
 export const RECORDING_STATE = {
@@ -127,6 +186,10 @@ const LABELLERS = {
   whiteBalance: whiteBalanceToLabel,
   focusMode: focusModeToLabel,
   exposureMode: exposureModeToLabel,
+  exposureCtrlType: exposureCtrlTypeToLabel,
+  irisMode: autoManualToLabel,
+  shutterMode: autoManualToLabel,
+  gainMode: autoManualToLabel,
   recordingState: recordingStateToLabel,
   batteryLevel: (raw) => (Number.isFinite(raw) && raw >= 0 ? `${raw}%` : '—'),
 };
