@@ -27,8 +27,10 @@ Run it now, with no hardware:
 cmake -S camd -B camd/build && cmake --build camd/build
 ./camd/build/camd --config config/cambridge.json --fake &
 node cambridge/src/server.js --config config/cambridge.json
-# then open http://localhost:8088
 ```
+
+`cambridge` prints the URLs to open — `http://localhost:8088` on the control
+Mac, plus the machine's LAN address for the booth iPad.
 
 | Phase | Scope | Status |
 |---|---|---|

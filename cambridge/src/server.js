@@ -8,6 +8,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { dirname, join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -67,6 +68,27 @@ function sendJson(res, status, body) {
     'Cache-Control': 'no-store',
   });
   res.end(text);
+}
+
+/**
+ * Turns a bind address into URLs a human can actually open.
+ *
+ * Printing the bind address is useless when it is 0.0.0.0 — that is a listening
+ * wildcard, not a destination, and browsers on macOS will not load it. What the
+ * operator needs is localhost for this machine and the LAN address for the booth
+ * iPad, so print both.
+ */
+function browsableUrls(bindAddr, port) {
+  if (bindAddr && bindAddr !== '0.0.0.0' && bindAddr !== '::') {
+    return [`http://${bindAddr}:${port}`];
+  }
+  const urls = [`http://localhost:${port}`];
+  for (const [, addrs] of Object.entries(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === 'IPv4' && !a.internal) urls.push(`http://${a.address}:${port}`);
+    }
+  }
+  return urls;
 }
 
 async function readBody(req, limitBytes = 1024 * 1024) {
@@ -448,11 +470,27 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     gangs,
     start() {
       camd.start();
-      return new Promise((resolvePromise) => {
+      return new Promise((resolvePromise, rejectPromise) => {
+        // Without this, a port clash surfaces as an unhandled 'error' event and a
+        // raw stack trace — which reads like a crash of unknown cause rather than
+        // "something is already on this port". camd says it plainly; so should this.
+        server.once('error', (err) => {
+          if (err.code === 'EADDRINUSE') {
+            process.stderr.write(
+              `\ncambridge: port ${cfg.cambridge.port} is already in use — ` +
+              'is another cambridge already running?\n' +
+              `  Find it:  lsof -ti:${cfg.cambridge.port}\n` +
+              `  Stop it:  lsof -ti:${cfg.cambridge.port} | xargs kill\n\n`);
+          } else {
+            process.stderr.write(`\ncambridge: cannot listen: ${err.message}\n\n`);
+          }
+          camd.stop();
+          rejectPromise(err);
+        });
         server.listen(cfg.cambridge.port, cfg.cambridge.bind, () => {
-          log.info('cambridge',
-            `listening on http://${cfg.cambridge.bind}:${cfg.cambridge.port}, camd at ${camdBase}`);
-          resolvePromise(server.address());
+          const urls = browsableUrls(cfg.cambridge.bind, cfg.cambridge.port);
+          log.info('cambridge', `listening on ${urls.join('  ')}, camd at ${camdBase}`);
+          resolvePromise({ ...server.address(), urls });
         });
       });
     },
@@ -469,9 +507,22 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const argIndex = process.argv.indexOf('--config');
   const configPath = argIndex > -1 ? process.argv[argIndex + 1] : './config/cambridge.json';
+  const portIndex = process.argv.indexOf('--port');
   const app = createApp({ configPath });
-  const addr = await app.start();
-  process.stdout.write(`cambridge ready on http://${addr.address}:${addr.port}\n`);
+  if (portIndex > -1) app.cfg.cambridge.port = Number(process.argv[portIndex + 1]);
+  let addr;
+  try {
+    addr = await app.start();
+  } catch {
+    // start() has already explained the problem in plain language.
+    process.exit(1);
+  }
+  const [primary, ...lan] = addr.urls;
+  process.stdout.write(`\ncambridge ready\n\n  Open:      ${primary}\n`);
+  for (const url of lan) {
+    process.stdout.write(`  On iPad:   ${url}\n`);
+  }
+  process.stdout.write('\n');
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, async () => {
       app.log.info('cambridge', `${sig} received, shutting down`);
