@@ -1,6 +1,7 @@
 #include "camd/config.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -155,7 +156,18 @@ bool Config::loadFile(const std::string& path, Config& out,
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         errors.clear();
-        errors.push_back("cannot open config file: " + path);
+        // A wrong --config path and a genuinely first run look identical once the
+        // daemon has started with no cameras, and the difference matters most
+        // when someone is running camd by hand to diagnose a connection problem:
+        // they get a log with no connection attempts in it at all. Name the two
+        // places a real config actually lives.
+        std::string home = std::getenv("HOME") ? std::getenv("HOME") : "~";
+        errors.push_back(
+            "cannot open config file: " + path +
+            "\n      The app keeps its config at " + home +
+            "/Library/Application Support/CamBridge/cambridge.json"
+            "\n      A source checkout keeps it at ./config/cambridge.json"
+            "\n      Pass the right one with --config, or camd starts with no cameras");
         return false;
     }
     std::ostringstream ss;

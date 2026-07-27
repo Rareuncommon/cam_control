@@ -234,20 +234,15 @@ On **each** camera:
 Every camera generates its own — they are not shared, and they are not anything
 you choose. You will type them in during step 9.
 
-> **Or skip passwords entirely.** Turning
-> `[Access Authen. Settings]` **off** on each body removes them. CamBridge asks
-> each camera whether it wants credentials and connects with none when it does
-> not, so there is nothing to configure and the Setup tab stops asking.
+> **Do not turn access authentication off to avoid this.** Confirmed on all
+> three bodies: with `[Access Authen. Settings]` **Off** the cameras are
+> discovered but refuse remote control, connecting and dropping in a loop.
+> `[Access Authen. Settings]` must be **On**.
 >
-> The trade-off: anything that can reach the camera on the network can then
-> control it. That is fine on a dedicated production VLAN with no internet route
-> — and is how the rest of a broadcast rack already works, since VISCA, NDI and
-> ATEM control have no authentication at all. It is not fine on a shared office
-> or company-wide network. If you are unsure the VLAN is genuinely isolated, leave
-> it on: it is a one-time cost per body.
->
-> Either way the password cannot be discovered over the network — it is shown on
-> the camera's screen and nowhere else, by design.
+> This is the camera, not CamBridge — the SDK's no-credential call is exactly
+> what CamBridge already makes when a camera says it needs none. It is also a
+> one-time cost: each password is entered once and stored against that camera's
+> MAC address.
 
 Full detail, including the IP plan and the power-saving settings that will
 otherwise drop a camera mid-take:

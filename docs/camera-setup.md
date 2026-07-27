@@ -128,36 +128,32 @@ global setting, and why Sony's own `RemoteCli` sample cannot connect unpatched
 
 The screen shows: **MAC address, username, password, and fingerprint.**
 
-### If you would rather not deal with passwords at all
+### ⚠️ Access authentication must stay ON
 
-Turn access authentication **off** on each body:
+❌ **Confirmed on hardware — do not turn `[Access Authen. Settings]` off.**
 
-`MENU → (Network) → [Network Option] → [Access Authen. Settings] → Off`
+With it off, all three bodies were still discovered on the network, with the
+right MAC and IP, and then refused remote control: `Connect` returns, the SDK
+immediately reports a disconnect, and the worker loops
+connecting → disconnected → reconnecting indefinitely. Turning it back On and
+re-entering the credentials fixed all three at once.
 
-CamBridge handles this on its own. It asks each camera whether it wants
-credentials — the SDK's `GetSSHsupport()` — and connects with none when the
-answer is no. The Setup tab shows **"no password needed"** against those cameras
-and does not display the username and password fields at all. Nothing to
-configure, and nothing to re-enter when a body is reinitialised.
+This is the camera's decision, not something CamBridge can work around:
 
-**The trade-off, stated plainly:** with it off, anything that can reach the
-camera on the network can control it — start and stop recording, change
-exposure, drive the menus. There is no password to get wrong and none to stop
-anyone either.
+- CamBridge already asks each body whether it wants credentials
+  (`GetSSHsupport()`) and connects with none when the answer is no.
+- Sony's SDK has a **single** `Connect`, whose `userId`, `userPassword` and
+  `fingerprint` arguments all default to null. The no-authentication call is
+  therefore exactly the call CamBridge already makes — there is no separate
+  no-auth path being missed.
 
-Whether that is acceptable depends entirely on the network, not on the camera:
+The bodies simply decline SDK control over LAN unless access authentication is
+on. If a future firmware changes that, nothing here needs changing: the Setup
+tab already adapts to what each camera reports, and warns when a camera is in
+this state.
 
-- **Reasonable** on a dedicated production VLAN with no route to the internet
-  and no guest access — which is what this studio runs. It is also the normal
-  posture for the rest of a broadcast rack: VISCA, NDI, ATEM control and most
-  switcher protocols have no authentication whatsoever, so the cameras would not
-  be the weak point.
-- **Not reasonable** on a shared office or company-wide network, on anything with
-  guest Wi-Fi bridged to it, or if the production VLAN is not actually isolated.
-
-If you are unsure whether the VLAN is genuinely isolated, leave authentication
-on. It is a one-time cost per body, and CamBridge remembers the credentials by
-MAC address afterwards.
+The cost of leaving it on is one password per body, entered once, stored against
+that body's MAC address.
 
 ### Why CamBridge cannot just find the password for you
 

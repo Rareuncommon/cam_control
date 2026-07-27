@@ -149,6 +149,7 @@ input[type=range] { accent-color: var(--accent); min-height: 34px; }
 .line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .status { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
 .note { font-size: 12px; color: var(--dim); }
+.note.warnnote { color: var(--warn); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
 details.more { border-top: 1px solid var(--line); margin-top: 2px; }

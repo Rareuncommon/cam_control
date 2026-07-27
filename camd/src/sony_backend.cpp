@@ -10,7 +10,21 @@
 //   CameraRemote_SDK.h:51   bool Release()
 //   CameraRemote_SDK.h:56   CrError EnumCameraObjects(ICrEnumCameraObjectInfo**, CrInt8u)
 //   CameraRemote_SDK.h:78   CrError GetFingerprint(ICrCameraObjectInfo*, char*, CrInt32u*)
-//   CameraRemote_SDK.h:83   CrError Connect(..., userId, userPassword, fingerprint, size, ...)
+//   CameraRemote_SDK.h:83   CrError Connect(ICrCameraObjectInfo*, IDeviceCallback*,
+//                             CrDeviceHandle*,
+//                             CrSdkControlMode openMode = CrSdkControlMode_Remote,
+//                             CrReconnectingSet reconnect = CrReconnecting_ON,
+//                             const char* userId = 0, const char* userPassword = 0,
+//                             const char* fingerprint = 0, CrInt32u fingerprintSize = 0,
+//                             const CrInt16u* pairingDisplayName = nullptr)
+//
+//     There is exactly one Connect, and every credential argument defaults to
+//     null. Passing nullptr for an unauthenticated camera is therefore identical
+//     to Sony's own no-authentication call — there is no second overload to
+//     reach for, which was worth confirming when passwordless cameras would not
+//     stay connected. That turned out to be the bodies refusing SDK control over
+//     LAN with [Access Authen. Settings] off, not a wrong call here. See
+//     docs/camera-setup.md.
 //   CameraRemote_SDK.h:97   CrError GetDeviceProperties(handle, CrDeviceProperty**, CrInt32*)
 //   CameraRemote_SDK.h:109  CrError SetDeviceProperty(handle, CrDeviceProperty*)
 //   CameraRemote_SDK.h:113  CrError SendCommand(handle, CrInt32u, CrCommandParam)

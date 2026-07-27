@@ -360,13 +360,23 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         // go and read credentials off three screens, when none of the cameras
         // wants any, is how a setup page trains people to ignore it.
         const needAuth = list.filter((c) => c.accessAuthRequired && !c.adopted);
-        const credentialHint = needAuth.length === 0
-          ? (list.length
-            ? 'None of these cameras uses a password — give each one a name and add it.'
-            : 'No cameras seen yet. Check USB-LAN Connection and Remote Shooting on each body.')
-          : `${needAuth.length} of these ${needAuth.length === 1 ? 'needs a password' : 'need passwords'}, ` +
-            'shown on the camera at MENU → Network → Network Option → [Access Authen. Info]. ' +
-            'Turning [Access Authen. Settings] off on a body removes its password entirely.';
+        const noAuth = list.filter((c) => !c.accessAuthRequired);
+        // A camera reporting no access authentication is a warning, not a
+        // convenience: on FX3/FX30 firmware the body then refuses SDK control
+        // over the network entirely, connecting and dropping in a loop. Say so
+        // here, where someone is looking at the camera that will do it.
+        const credentialHint = noAuth.length
+          ? `${noAuth.length === 1 ? 'A camera has' : `${noAuth.length} cameras have`} ` +
+            'access authentication turned OFF. These bodies will not accept remote ' +
+            'control in that state — turn [Access Authen. Settings] back On, then ' +
+            'enter the username and password from [Access Authen. Info].'
+          : needAuth.length
+            ? `${needAuth.length} of these ${needAuth.length === 1 ? 'needs its password' : 'need their passwords'}, ` +
+              'shown on the camera at MENU → Network → Network Option → [Access Authen. Info]. ' +
+              'Each body has its own; you only enter them once.'
+            : (list.length
+              ? 'Every camera here is already added.'
+              : 'No cameras seen yet. Check USB-LAN Connection and Remote Shooting on each body.');
 
         return sendJson(res, 200, {
           discovered: list,

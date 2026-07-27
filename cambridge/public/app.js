@@ -444,11 +444,15 @@ function renderSetup() {
   }
   for (const cam of list) {
     dt.append(el('tr', {},
-      // Say which cameras want a password before the operator opens the dialog,
-      // so a rack of bodies can be triaged at a glance.
+      // Triage a rack at a glance. A camera with authentication off is called
+      // out as a problem rather than a convenience: these bodies refuse remote
+      // control in that state, so "no password needed" would read as good news
+      // about a camera that is never going to connect.
       el('td', {}, el('div', { text: cam.model || 'unknown' }),
-        el('div', { class: 'note', text: cam.accessAuthRequired
-          ? 'needs a password from its screen' : 'no password needed' })),
+        el('div', { class: cam.accessAuthRequired ? 'note' : 'note warnnote', text:
+          cam.accessAuthRequired
+            ? 'needs a password from its screen'
+            : '⚠️ authentication off — will not connect' })),
       el('td', { class: 'mono', text: cam.ip || '—' }),
       el('td', { class: 'mono', text: cam.mac || '—' }),
       el('td', {}, cam.adopted

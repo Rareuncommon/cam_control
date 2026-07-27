@@ -12,37 +12,45 @@ that every other machine gets the DMG.
 
 ---
 
-## First: turn the camera passwords off
+## First: leave access authentication ON
 
-Do this before anything else and the rest of the setup has nothing to type.
+**Confirmed on the FX3 and both FX30 bodies:** with
+`[Access Authen. Settings]` turned **Off**, the cameras are discovered on the
+network but refuse remote control — they connect and drop in a loop, forever.
+Turning it back On fixes it immediately. Tested by turning it off on all three,
+watching all three fail identically, and turning it back on.
 
-On **each** camera:
+So on **each** camera, confirm:
 
 ```
-MENU → (Network) → [Network Option] → [Access Authen. Settings] → Off
+MENU → (Network) → [Network Option] → [Access Authen. Settings] → On
 ```
 
-CamBridge asks every camera whether it wants credentials and connects with none
-when it does not. With authentication off, adding a camera is: press **Add**,
-type a name, done. Nothing to read off a screen, nothing to re-enter when a body
-is reinitialised, nothing stored.
+and read its credentials from:
 
-**The trade-off, so you are choosing it rather than inheriting it:** with
-authentication off, anything that can reach the camera on the network can
-control it — record, exposure, menus. That is a reasonable posture on a
-dedicated production VLAN with no route to the internet, and it is what the rest
-of a broadcast rack already does, since VISCA, NDI and ATEM control have no
-authentication at all. It is not reasonable on a shared office network or
-anything with guest Wi-Fi bridged into it.
+```
+MENU → (Network) → [Network Option] → [Access Authen. Info]
+```
 
-If the VLAN is not genuinely isolated, leave authentication on. CamBridge will
-ask for each body's username and password once, store it against that camera's
-MAC address, and never ask again. Either way it works; the passwordless route is
-just less to handle.
+Write down the **username and password** for each body. They are randomly
+generated per camera, they are not shared, and they are not something you
+choose. You enter each one **once** — CamBridge stores it against that camera's
+MAC address and reconnects on its own from then on, including across IP changes
+and reboots.
 
-> The password can never be discovered over the network — it is shown on the
-> camera's own screen and nowhere else, which is the point of it. No amount of
-> work on this app changes that.
+> **Why there is no passwordless option.** It is not a limitation of this app.
+> CamBridge already asks each camera whether it wants credentials and connects
+> with none when it says no — and Sony's SDK has a single `Connect` whose
+> credential arguments default to null, so the no-authentication call is exactly
+> what we make. The bodies themselves decline to be controlled over LAN without
+> it. Nothing in this codebase can change that.
+>
+> The password also cannot be discovered over the network. It is shown on the
+> camera's own screen and nowhere else, which is the point of it.
+>
+> If a future firmware does allow control with authentication off, CamBridge
+> will handle it without changes: the Setup tab already adapts to what each
+> camera reports.
 
 While you are in the camera menus, the rest of the network setup:
 
