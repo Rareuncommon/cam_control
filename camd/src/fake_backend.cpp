@@ -171,6 +171,7 @@ class FakeSession : public CameraSession {
 public:
     FakeSession(DiscoveredCamera info, EventSink* sink)
         : info_(std::move(info)), sink_(sink) {
+
         const bool super35 = info_.model.find("FX30") != std::string::npos;
         // Iris and gain start gated by their Auto setting, exactly as a real FX30
         // arrives: value present, no list, not writable. applyExposureGates() below
@@ -339,7 +340,17 @@ public:
         return true;
     }
 
-    bool ping(std::string& err) override { return check(err); }
+    bool ping(std::string& err) override {
+        // A real FX3 fires OnError 0x820A a few milliseconds after every
+        // successful Connect while being perfectly healthy. It has to be raised
+        // after the worker has entered Connected — the worker clears its
+        // disconnect flag on entry, so an error raised during construction is
+        // swallowed and reproduces nothing. camd once treated this as a dead
+        // link and tore the session down immediately, so no camera ever stayed
+        // up; raising it here means the whole suite fails if that returns.
+        if (sink_ && !errorRaised_) { errorRaised_ = true; sink_->onError(0x820A); }
+        return check(err);
+    }
 
     void disconnect() override { disconnected_ = true; }
 
@@ -367,6 +378,7 @@ private:
     std::string lastKey_;
     bool disconnected_ = false;
     bool notified_ = false;
+    bool errorRaised_ = false;
 };
 
 class FakeBackend : public Backend {

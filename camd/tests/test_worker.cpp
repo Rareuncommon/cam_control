@@ -516,3 +516,25 @@ TEST(forgetting_a_camera_stops_it_and_leaves_the_others_running) {
     CHECK_EQ(rig.registry->find("cam3")->snapshot().mac, std::string("AA:BB:CC:00:00:03"));
     CHECK(!rig.registry->removeCamera("cam2", err));
 }
+
+TEST(an_sdk_error_does_not_tear_down_a_healthy_session) {
+    // The FX3 reports OnError 0x820A moments after every successful connect. If
+    // that is mistaken for a disconnect the camera never stays up long enough to
+    // publish properties, stream live view, or finish a record command — which is
+    // exactly what happened on the rig: 842 teardowns against 8 real disconnects.
+    //
+    // Sampling matters here. Checking the state once proves nothing, because the
+    // worker reconnects within about a second and looks healthy again by the time
+    // you look. So watch continuously and assert it never left Connected.
+    Rig rig;
+    CHECK(rig.waitAllConnected());
+
+    int sawNotConnected = 0;
+    for (int i = 0; i < 40; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (rig.registry->find("cam1")->snapshot().state != ConnState::Connected) {
+            ++sawNotConnected;
+        }
+    }
+    CHECK_EQ(sawNotConnected, 0);
+}

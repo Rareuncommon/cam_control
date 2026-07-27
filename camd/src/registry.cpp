@@ -71,10 +71,20 @@ public:
         LOG_WARN(w_->cfg_.id.c_str(), "SDK warning 0x%X", code);
     }
     void onError(int code) override {
-        LOG_ERROR(w_->cfg_.id.c_str(), "SDK error 0x%X", code);
-        // Treat an error as suspect liveness rather than assuming the link is fine.
-        w_->sdkDisconnected_ = true;
-        w_->jobCv_.notify_all();
+        // Log only. This used to also set sdkDisconnected_, on the theory that an
+        // error meant the link was suspect — which was wrong and catastrophic.
+        //
+        // Real bodies fire OnError for ordinary operational conditions: an FX3
+        // reports 0x820A within about 9ms of every successful Connect. Treating
+        // that as a dead link tore down a healthy session immediately, forever.
+        // One capture showed 842 teardowns from this handler against 8 genuine
+        // OnDisconnected callbacks, so no camera ever stayed connected long
+        // enough to publish its properties, hold a live view, or finish a record
+        // command.
+        //
+        // OnDisconnected is the SDK's authoritative "this link is gone" signal,
+        // and it is the only thing that should end a session.
+        LOG_WARN(w_->cfg_.id.c_str(), "SDK error 0x%X (link left alone)", code);
     }
 
 private:

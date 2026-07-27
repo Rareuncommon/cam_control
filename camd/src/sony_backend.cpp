@@ -512,18 +512,34 @@ public:
 
     bool ping(std::string& err) override {
         if (!handle_) { err = "not connected"; return false; }
-        // Cheapest liveness probe the SDK offers that actually crosses the wire:
-        // fetch one property and immediately release it.
+        // Liveness probe: fetch a property and release it immediately.
+        //
+        // Asking for one named property is cheapest, but it conflates two very
+        // different failures — "the camera is gone" and "this body will not
+        // answer for that particular property". One FX30 here refuses
+        // RecordingState with 0x8402 on every probe while being perfectly
+        // reachable, which drove a heartbeat timeout and a disconnect roughly
+        // every ten seconds. So a failure falls back to a full property fetch,
+        // and only if that fails too is the link treated as dead.
         SDK::CrDeviceProperty* props = nullptr;
         CrInt32 count = 0;
         CrInt32u code = SDK::CrDeviceProperty_RecordingState;
         SDK::CrError e = SDK::GetSelectDeviceProperties(handle_, 1, &code, &props, &count);
-        if (e != SDK::CrError_None) {
-            err = "heartbeat probe failed " + hexError(e);
-            return false;
+        if (e == SDK::CrError_None) {
+            if (props) SDK::ReleaseDeviceProperties(handle_, props);
+            return true;
         }
-        if (props) SDK::ReleaseDeviceProperties(handle_, props);
-        return true;
+
+        SDK::CrDeviceProperty* all = nullptr;
+        CrInt32 allCount = 0;
+        SDK::CrError e2 = SDK::GetDeviceProperties(handle_, &all, &allCount);
+        if (e2 == SDK::CrError_None) {
+            if (all) SDK::ReleaseDeviceProperties(handle_, all);
+            return true;
+        }
+
+        err = "heartbeat probe failed " + hexError(e) + " and " + hexError(e2);
+        return false;
     }
 
     void disconnect() override {
