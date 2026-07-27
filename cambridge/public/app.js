@@ -255,6 +255,27 @@ function cameraCard(cam) {
     return card;
   }
 
+  // Connected, but the body is telling us nothing. An empty card with a lone
+  // Record button reads as a broken app; it is actually a camera that will not
+  // answer property queries, and the operator can only fix that at the tripod.
+  if (Object.keys(cam.properties ?? {}).length === 0) {
+    body.append(el('div', { class: 'note warnnote' },
+      document.createTextNode('Connected, but this camera is not reporting any '
+        + 'settings, so there is nothing to control and Record is unsafe to press.')));
+    body.append(el('div', { class: 'note' },
+      document.createTextNode('On the camera itself: leave any menu, take it out of '
+        + 'playback so it is showing a live picture, and confirm Remote Shooting is '
+        + 'still On. If it stays like this, power-cycle that body — a session left '
+        + 'open by earlier software will do exactly this.')));
+    body.append(el('div', { class: 'btnrow' },
+      el('button', { onclick: () => doAction(cam.id, 'reconnect') },
+        document.createTextNode('Reconnect')),
+      el('button', { class: 'small', onclick: () => switchView('setup') },
+        document.createTextNode('Setup'))));
+    card.append(body);
+    return card;
+  }
+
   // The four an operator touches during a shoot, plus ND when the body has it.
   add(body, stepper(cam, 'fNumber', 'Iris', { invert: true }), autoGate(cam, 'fNumber'));
   add(body, stepper(cam, 'isoSensitivity', 'ISO'), autoGate(cam, 'isoSensitivity'));

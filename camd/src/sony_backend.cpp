@@ -57,7 +57,19 @@ namespace {
 std::string hexError(CrInt32u e) {
     char buf[24];
     std::snprintf(buf, sizeof(buf), "0x%08X", e);
-    return buf;
+    std::string out = buf;
+    // Name the groups rather than individual codes. The high half identifies the
+    // area in Sony's CrError enum, and that alone is usually enough to tell a
+    // camera-state problem from a transport one — which is the distinction that
+    // matters at 2am with a body that will not answer.
+    switch (e & 0xFF00u) {
+        case 0x8200u: out += " (connect group)"; break;
+        case 0x8400u: out += " (API group — often the camera is not in a state"
+                             " that accepts this, e.g. a menu open or playback)"; break;
+        case 0x8500u: out += " (adaptor/transport group)"; break;
+        default: break;
+    }
+    return out;
 }
 
 // How a property's value array should be read.
