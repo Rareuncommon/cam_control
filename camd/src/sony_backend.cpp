@@ -524,7 +524,30 @@ public:
             err = "camera returned an empty live view frame";
             return false;
         }
-        jpeg.assign(reinterpret_cast<const char*>(buffer.data()), imageSize);
+
+        // Read back through GetImageData() rather than the buffer we handed in.
+        // Sony's own sample does this, and the two are not required to be the
+        // same address — the SDK is free to point at an offset within the buffer.
+        // Using the buffer start yielded bytes that were not a decodable JPEG, so
+        // the browser showed a broken image while everything else looked healthy.
+        const CrInt8u* data = block.GetImageData();
+        if (data == nullptr) data = buffer.data();
+        jpeg.assign(reinterpret_cast<const char*>(data), imageSize);
+
+        // Refuse to serve anything that is not actually a JPEG. Passing junk on
+        // makes the browser show a broken image with no explanation anywhere;
+        // saying so here puts the reason in the log and in the panel.
+        if (jpeg.size() < 3 ||
+            static_cast<unsigned char>(jpeg[0]) != 0xFF ||
+            static_cast<unsigned char>(jpeg[1]) != 0xD8) {
+            char head[64];
+            std::snprintf(head, sizeof(head), "0x%02X 0x%02X",
+                          static_cast<unsigned char>(jpeg[0]),
+                          jpeg.size() > 1 ? static_cast<unsigned char>(jpeg[1]) : 0);
+            err = std::string("live view data is not a JPEG (starts ") + head + ")";
+            jpeg.clear();
+            return false;
+        }
         return true;
     }
 
