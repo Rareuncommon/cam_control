@@ -406,11 +406,21 @@ function feedTile(cam) {
       // only ever reports "error", which is why this said nothing useful before.
       try {
         const r = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/liveview?single=1`);
+        const type = r.headers.get('content-type') ?? '';
+        if (r.ok && type.startsWith('image/')) {
+          // A single frame came back. The camera is producing video and the
+          // continuous stream is at fault, which is a bug here, not a camera
+          // setting — worth saying, because the two need opposite fixes.
+          const blob = await r.blob();
+          reason.textContent = `A single frame works (${Math.round(blob.size / 1024)} kB) `
+            + 'but the continuous stream failed — this is a CamBridge bug, not a camera setting.';
+          return;
+        }
         const body = await r.json().catch(() => null);
         reason.textContent = body?.error
-          || 'The camera accepted the connection but sent no video.';
-      } catch {
-        reason.textContent = 'The camera accepted the connection but sent no video.';
+          ?? `The stream failed (HTTP ${r.status}) and the camera gave no reason.`;
+      } catch (e) {
+        reason.textContent = `Could not reach the live view endpoint: ${e.message}`;
       }
     });
 
