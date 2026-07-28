@@ -498,9 +498,14 @@ public:
         }
         const CrInt32u bufSize = info.GetBufferSize();
         if (bufSize == 0) {
-            // Not an error: live view is simply not producing frames right now.
+            // The call succeeded and the camera said "no frame". Reporting that as
+            // success with an empty buffer left the caller to infer the failure
+            // and produced an empty error string in the 503, so the panel could
+            // only say "no live view" with no reason attached. Say it plainly.
             jpeg.clear();
-            return true;
+            err = "camera reports no live view frame available "
+                  "(body may not stream while idle, or its monitor is asleep)";
+            return false;
         }
 
         // The SDK writes into a buffer we own and must keep alive for the call.
@@ -516,7 +521,8 @@ public:
         const CrInt32u imageSize = block.GetImageSize();
         if (imageSize == 0 || imageSize > bufSize) {
             jpeg.clear();
-            return true;
+            err = "camera returned an empty live view frame";
+            return false;
         }
         jpeg.assign(reinterpret_cast<const char*>(buffer.data()), imageSize);
         return true;

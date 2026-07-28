@@ -432,7 +432,12 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             if (!fetch(jpeg, err)) {
                 // Tolerate transient gaps — a camera reconnecting should not tear
                 // down the viewer — but give up if it is clearly gone.
-                if (++consecutiveFailures > 50) break;
+                if (++consecutiveFailures > 50) {
+                    LOG_WARN(req.param("id").c_str(),
+                             "live view gave up after ~10s: %s",
+                             err.empty() ? "no frames and no reason given" : err.c_str());
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }

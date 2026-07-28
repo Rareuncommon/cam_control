@@ -395,11 +395,24 @@ function feedTile(cam) {
       alt: `${cam.label} live view`,
       title: 'Click to focus here',
     });
+    const reason = el('div', { class: 'note', text: 'Checking…' });
     const fallback = el('div', { class: 'placeholder' },
-      el('div', { text: 'No live view from this camera' }),
-      el('div', { class: 'note', text: 'Live view may need enabling on the body.' }));
+      el('div', { text: 'No live view from this camera' }), reason);
     fallback.style.display = 'none';
-    img.addEventListener('error', () => { img.style.display = 'none'; fallback.style.display = 'flex'; });
+    img.addEventListener('error', async () => {
+      img.style.display = 'none';
+      fallback.style.display = 'flex';
+      // Ask for a single frame to get the camera's own reason. The MJPEG <img>
+      // only ever reports "error", which is why this said nothing useful before.
+      try {
+        const r = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/liveview?single=1`);
+        const body = await r.json().catch(() => null);
+        reason.textContent = body?.error
+          || 'The camera accepted the connection but sent no video.';
+      } catch {
+        reason.textContent = 'The camera accepted the connection but sent no video.';
+      }
+    });
 
     // Tap-to-focus. Coordinates go up normalised, so the browser never needs to
     // know anything about the camera's AF grid.
