@@ -583,7 +583,11 @@ function render() {
   const failed = view.cameras.filter((c) => c.status?.recordingFailed);
   const bad = view.cameras.filter((c) => c.state !== 'connected');
   if (!view.camdConnected) {
-    banner.textContent = 'The camera daemon is not reachable — no control is possible.';
+    // Name the log. The panel being up means cambridge and the config are fine,
+    // so the daemon either failed to start or died — and its own log is the only
+    // place that says which.
+    banner.textContent = 'The camera daemon is not reachable — no control is possible. '
+      + (health.logDir ? `Check ${health.logDir}/camd.stdout.log` : 'Check the camd log.');
     banner.classList.add('show');
   } else if (failed.length) {
     banner.textContent = `RECORDING FAILED on ${failed.map((c) => c.label).join(', ')}`;
