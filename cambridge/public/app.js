@@ -384,45 +384,88 @@ function renderControl() {
   for (const cam of view.cameras) grid.append(cameraCard(cam));
 }
 
+// Live feeds, one polling loop per tile.
+//
+// This used to point an <img> at an MJPEG (multipart/x-mixed-replace) stream,
+// which Chrome and Firefox render and Safari does not — it fires "error"
+// instead. On a Mac the panel opens in whatever the default browser is, so the
+// feed was black for exactly the reason that is hardest to guess from the app
+// side: single frames worked perfectly and only the stream failed.
+//
+// Polling single frames is a little less efficient and works in every browser.
+// One request in flight at a time, so a slow camera throttles itself rather than
+// building a queue of stale frames.
+const FEED_INTERVAL_MS = 100;
+let feedStops = [];
+
+function stopAllFeeds() {
+  for (const stop of feedStops) stop();
+  feedStops = [];
+}
+
+function startFeed(cam, img, onFailure) {
+  let stopped = false;
+  let objectUrl = null;
+  let failures = 0;
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const r = await fetch(
+        `/api/cameras/${encodeURIComponent(cam.id)}/liveview?single=1`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      if (stopped) return;
+      if (blob.size > 0) {
+        const next = URL.createObjectURL(blob);
+        img.src = next;
+        // Revoke the previous frame only after the new one is assigned, or the
+        // browser can be left decoding a URL that no longer exists.
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = next;
+        failures = 0;
+      }
+    } catch (err) {
+      // A camera reconnecting should not kill the tile; several in a row means
+      // it is genuinely not producing.
+      if (++failures === 10) onFailure(err);
+    }
+    if (!stopped) setTimeout(tick, FEED_INTERVAL_MS);
+  };
+
+  tick();
+  return () => {
+    stopped = true;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  };
+}
+
 function feedTile(cam) {
   const rec = cam.status?.recording;
   const tallyClass = cam.tally?.program ? ' pgm' : cam.tally?.preview ? ' pvw' : '';
   const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
 
   if (cam.state === 'connected') {
-    const img = el('img', {
-      src: `/api/cameras/${encodeURIComponent(cam.id)}/liveview?t=${Date.now()}`,
-      alt: `${cam.label} live view`,
-      title: 'Click to focus here',
-    });
-    const reason = el('div', { class: 'note', text: 'Checking…' });
+    const img = el('img', { alt: `${cam.label} live view`, title: 'Click to focus here' });
+    const reason = el('div', { class: 'note', text: 'Waiting for the first frame…' });
     const fallback = el('div', { class: 'placeholder' },
       el('div', { text: 'No live view from this camera' }), reason);
     fallback.style.display = 'none';
-    img.addEventListener('error', async () => {
+
+    feedStops.push(startFeed(cam, img, async () => {
       img.style.display = 'none';
       fallback.style.display = 'flex';
-      // Ask for a single frame to get the camera's own reason. The MJPEG <img>
-      // only ever reports "error", which is why this said nothing useful before.
+      // Ask once more, and report whatever the camera actually says rather than
+      // guessing at a cause.
       try {
         const r = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/liveview?single=1`);
-        const type = r.headers.get('content-type') ?? '';
-        if (r.ok && type.startsWith('image/')) {
-          // A single frame came back. The camera is producing video and the
-          // continuous stream is at fault, which is a bug here, not a camera
-          // setting — worth saying, because the two need opposite fixes.
-          const blob = await r.blob();
-          reason.textContent = `A single frame works (${Math.round(blob.size / 1024)} kB) `
-            + 'but the continuous stream failed — this is a CamBridge bug, not a camera setting.';
-          return;
-        }
         const body = await r.json().catch(() => null);
         reason.textContent = body?.error
-          ?? `The stream failed (HTTP ${r.status}) and the camera gave no reason.`;
+          ?? `The camera stopped sending frames (HTTP ${r.status}).`;
       } catch (e) {
         reason.textContent = `Could not reach the live view endpoint: ${e.message}`;
       }
-    });
+    }));
 
     // Tap-to-focus. Coordinates go up normalised, so the browser never needs to
     // know anything about the camera's AF grid.
@@ -466,6 +509,10 @@ function feedTile(cam) {
 
 function renderMultiview() {
   const grid = $('#mvgrid');
+  // Every rebuild abandons the old <img> elements, so their polling loops have
+  // to be stopped or they pile up: leave and re-enter the tab a few times and
+  // the cameras are being asked for frames by a dozen dead tiles.
+  stopAllFeeds();
   grid.textContent = '';
   const cams = soloFeed ? view.cameras.filter((c) => c.id === soloFeed) : view.cameras;
   grid.className = soloFeed ? 'solo' : '';
@@ -664,6 +711,8 @@ function renderTools() {
 }
 
 function switchView(name) {
+  // Leaving Multiview must stop the feeds; nothing is displaying them.
+  if (currentView === 'multiview' && name !== 'multiview') stopAllFeeds();
   currentView = name;
   soloFeed = null;
   for (const b of document.querySelectorAll('nav.tabs button')) {

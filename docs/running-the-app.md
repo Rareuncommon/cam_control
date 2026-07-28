@@ -120,8 +120,13 @@ Live feeds from every connected camera.
 - **Tap anywhere on a picture to focus there.** The tap is sent as a normalised
   position, so the browser never needs to know the camera's AF grid.
 - Each feed has **AF**, a **record** button and **Enlarge**.
-- Live view has to be enabled on the body; a camera that is not streaming shows
-  a message rather than a black rectangle.
+- A camera that is not streaming shows the reason rather than a black rectangle.
+
+Feeds are polled a frame at a time rather than streamed as MJPEG. MJPEG in an
+`<img>` is rendered by Chrome and Firefox and **not by Safari**, which simply
+fires an error — so on a Mac, where the panel opens in whatever the default
+browser is, the feeds were black while single frames worked perfectly. Polling
+costs a little more and works everywhere.
 
 ### Setup
 
