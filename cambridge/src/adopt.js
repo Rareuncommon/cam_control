@@ -81,6 +81,26 @@ export class Adoption {
   }
 
   /**
+   * Persists the auth block, re-reading first.
+   *
+   * Deliberately re-reads rather than writing a remembered copy: setting a PIN
+   * must not roll back a camera adopted a moment earlier from another browser.
+   * Goes through the same atomic write as everything else here, which also
+   * means the PIN hash lands in a file that is already mode 0600.
+   */
+  saveAuth(authBlock) {
+    try {
+      const cfg = this.readConfig();
+      cfg.auth = authBlock;
+      this.writeConfig(cfg);
+      return { ok: true };
+    } catch (err) {
+      this.log?.error('auth', `could not save the PIN: ${err.message}`);
+      return { ok: false, error: `could not save the PIN: ${err.message}` };
+    }
+  }
+
+  /**
    * Adopt a discovered camera.
    * @param {{mac:string,model?:string,ip?:string,label?:string,username?:string,password?:string,id?:string}} input
    */

@@ -169,7 +169,47 @@ left.
 
 ### Setup
 
-Adoption, as above.
+Adoption, as above — plus who is allowed to do it.
+
+#### Who can control the cameras
+
+Out of the box there is **no PIN**, and the panel says so on every screen:
+anyone who can reach the address has full control and can read the cameras'
+stored passwords. That is the default because locking the panel as a side
+effect of an upgrade — on a shoot day, with nobody knowing the PIN — would be
+worse than the exposure. It is not a good permanent state.
+
+Set a PIN in **Setup → Who can control the cameras**. There are two levels:
+
+| | Can do |
+|---|---|
+| **Operator** | everything that affects the shoot in progress: exposure, record, focus, presets, scenes, match, undo |
+| **Admin** | all of that, plus what outlasts the shoot: adding and forgetting cameras, changing a stored password, quitting CamBridge |
+
+Set the operator PIN first if you only want one level — with no admin PIN
+configured, one PIN means one level of access, and the split starts the moment
+you add an admin PIN.
+
+Sessions last sixteen hours, so nobody signs in twice in a day.
+
+#### Companion, scripts and anything that is not a person
+
+Machine clients cannot answer a PIN prompt, so they use a token instead. Add one
+to the config:
+
+```json
+"auth": {
+  "tokens": { "a-long-random-string": "operator" }
+}
+```
+
+and have the client send it as `Authorization: Bearer a-long-random-string`.
+Give it `operator` unless it genuinely needs to adopt cameras. Tokens are as
+sensitive as the PIN — anyone holding one can drive the cameras.
+
+Every action is logged with who took it: a PIN session as `operator` or
+`admin`, a token by a short fingerprint that identifies it without disclosing
+it. Read `cambridge.log` to see who changed what.
 
 ## Trying it without cameras
 

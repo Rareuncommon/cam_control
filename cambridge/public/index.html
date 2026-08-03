@@ -170,6 +170,35 @@
     <table class="list" id="discovered-table"></table>
   </div>
   <div class="card">
+    <h3>Who can control the cameras</h3>
+    <div class="sub" id="auth-state"></div>
+    <div class="formgrid" style="margin-top:12px">
+      <label for="pin-role">PIN for</label>
+      <select id="pin-role">
+        <option value="operator">Operators — everything during a shoot</option>
+        <option value="admin">Admin — also add, remove and re-credential cameras</option>
+      </select>
+      <label for="pin-value">New PIN</label>
+      <input type="password" id="pin-value" inputmode="numeric" autocomplete="new-password"
+             placeholder="at least four characters">
+    </div>
+    <div class="line" style="margin-top:12px">
+      <button class="small primary" id="pin-save">Set PIN</button>
+      <button class="small ghost" id="sign-out">Sign out</button>
+      <span class="note" id="pin-msg"></span>
+    </div>
+    <p class="note" style="margin:12px 0 0">
+      Operators can drive every camera. Admin is needed for the things that
+      outlast a shoot: adding or forgetting a camera, changing its stored
+      password, and quitting CamBridge.
+    </p>
+    <p class="note" style="margin:6px 0 0">
+      Bitfocus Companion and other machine clients use a token from the config
+      file instead of a PIN, because they cannot answer a prompt.
+    </p>
+  </div>
+
+  <div class="card">
     <h3>Added cameras</h3>
     <div class="sub">These are saved and reconnect on their own. Removing one does not change the camera itself.</div>
     <table class="list" id="adopted-table"></table>

@@ -22,6 +22,7 @@ import { AtemTally, tallyForCameras } from './atem.js';
 import { ViscaServer } from './visca.js';
 import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEFAULT_THRESHOLDS } from './alarms.js';
 import { report as takeReport, rollState } from './takelog.js';
+import { Auth, hashPin } from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -41,6 +42,10 @@ function loadConfig(path) {
     // Always on, unlike the integrations above: a studio that has not thought
     // about thresholds is exactly the one that needs the defaults.
     alarms: { ...DEFAULT_THRESHOLDS },
+    // No PIN configured means the panel is open, and says so in the UI. Locking
+    // it as a side effect of an upgrade — on a shoot day, with no way in —
+    // would be worse than the exposure it prevents.
+    auth: { operatorPin: null, adminPin: null, tokens: {} },
   };
   if (!existsSync(path)) {
     process.stderr.write(`cambridge: no config at ${path}, using defaults\n`);
@@ -56,6 +61,7 @@ function loadConfig(path) {
       atem: { ...defaults.atem, ...(parsed.atem ?? {}) },
       visca: { ...defaults.visca, ...(parsed.visca ?? {}) },
       alarms: { ...defaults.alarms, ...(parsed.alarms ?? {}) },
+      auth: { ...defaults.auth, ...(parsed.auth ?? {}) },
     };
   } catch (err) {
     process.stderr.write(`cambridge: config ${path} is not valid JSON: ${err.message}\n`);
@@ -155,6 +161,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const adoption = new Adoption(configPath, camd, log);
 
   const undo = new UndoHistory();
+  const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
+  if (!auth.enabled) {
+    log.warn('auth', 'no PIN configured — anyone on this network can control the cameras');
+  }
 
   /**
    * Injected setter used by presets, gang and match, so all writes are logged.
@@ -410,6 +420,77 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     let m;
 
     try {
+      // --- access control ---
+      // Ahead of every route rather than sprinkled through them, so a route
+      // added later is protected by default instead of protected if remembered.
+      // Static files are served without a check: the login page has to be
+      // reachable to log in, and the panel's own JS is not a secret — every
+      // endpoint it calls is gated here regardless.
+      const gated = path.startsWith('/api/');
+      const who = { role: 'anonymous', label: 'anonymous' };
+      if (gated) {
+        const verdict = auth.authorise(req.method, path, req);
+        Object.assign(who, verdict.who);
+        if (!verdict.allowed) {
+          log.warn('auth', `${verdict.status} ${req.method} ${path} (${verdict.who.label})`);
+          // `authRequired` means "signing in would fix this", so it belongs on
+          // the 401 only. A 403 is a valid session that lacks the role, and
+          // flagging it the same way sends the panel to a login the operator
+          // would pass — teaching them nothing about why it failed.
+          return sendJson(res, verdict.status, {
+            error: verdict.error,
+            ...(verdict.status === 401 ? { authRequired: true } : { needsRole: 'admin' }),
+          });
+        }
+      }
+      /** Prefixes an audit line with who did it. */
+      const actor = () => (who.label && who.label !== 'anonymous' ? `[${who.label}] ` : '');
+
+      // --- auth ---
+      if (path === '/api/auth/state' && req.method === 'GET') {
+        return sendJson(res, 200, { ...auth.state(), you: { role: who.role, label: who.label } });
+      }
+
+      if (path === '/api/auth/login' && req.method === 'POST') {
+        const body = await readBody(req);
+        const result = auth.login(body?.pin ?? '');
+        if (!result.ok) {
+          log.warn('auth', `failed sign-in attempt from ${req.socket?.remoteAddress ?? '?'}`);
+          return sendJson(res, 401, { error: result.error });
+        }
+        if (result.cookie) {
+          res.setHeader('Set-Cookie', Auth.cookieHeader(result.cookie));
+          log.info('auth', `signed in as ${result.role}`);
+        }
+        return sendJson(res, 200, { ok: true, role: result.role, open: !!result.open });
+      }
+
+      if (path === '/api/auth/logout' && req.method === 'POST') {
+        if (who.id) auth.logout(who.id);
+        res.setHeader('Set-Cookie', Auth.clearCookieHeader());
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Setting a PIN is itself an admin action, which is why it is in
+      // ADMIN_ROUTES — except on a panel with no PIN at all, where by
+      // definition nobody could be admin yet and the first person to set one
+      // is how the panel gets protected.
+      if (path === '/api/auth/pin' && req.method === 'POST') {
+        const body = await readBody(req);
+        const role = body?.role === 'admin' ? 'adminPin' : 'operatorPin';
+        const pin = String(body?.pin ?? '');
+        if (pin.length < 4) {
+          return sendJson(res, 400, { error: 'Use at least four characters.' });
+        }
+        const stored = hashPin(pin);
+        auth[role] = stored;
+        const saved = await adoption.saveAuth({ ...cfg.auth, [role]: stored });
+        if (!saved.ok) return sendJson(res, 500, { error: saved.error });
+        cfg.auth[role] = stored;
+        log.info('auth', `${actor()}set the ${role === 'adminPin' ? 'admin' : 'operator'} PIN`);
+        return sendJson(res, 200, { ok: true, ...auth.state() });
+      }
+
       // --- events (SSE) ---
       if (path === '/api/events') {
         res.writeHead(200, {
@@ -471,7 +552,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         }
         const [result] = await applyWithoutHistory(cameraId, { [entry.prop]: entry.from });
         if (result.ok) await refreshProperties(cameraId);
-        log.info('undo', `${cameraId} ${entry.prop} ${entry.to} -> ${entry.from}` +
+        log.info('undo', `${actor()}${cameraId} ${entry.prop} ${entry.to} -> ${entry.from}` +
           (result.ok ? '' : ` FAILED: ${result.error}`));
         return sendJson(res, result.ok ? 200 : 502, {
           ok: result.ok, cameraId, undone: entry, error: result.error,
@@ -496,7 +577,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const results = await applyWithoutHistory(cameraId, found.values);
         if (results.some((r) => r.ok)) await refreshProperties(cameraId);
         const n = Object.keys(found.values).length;
-        log.info('undo', `${cameraId} undid ${found.mark.label} and everything since ` +
+        log.info('undo', `${actor()}${cameraId} undid ${found.mark.label} and everything since ` +
           `(${n} propert${n === 1 ? 'y' : 'ies'} restored)`);
         return sendJson(res, 200, {
           ok: results.every((r) => r.ok),
@@ -514,7 +595,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'POST') {
         const cameraId = decodeURIComponent(m[1]);
         const cleared = state.acknowledgeRecordDrop(cameraId);
-        if (cleared) log.info('alarm', `${cameraId} dropped-record alarm acknowledged`);
+        if (cleared) log.info('alarm', `${actor()}${cameraId} dropped-record alarm acknowledged`);
         return sendJson(res, 200, { ok: true, cameraId, cleared });
       }
 
@@ -639,7 +720,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'POST') {
         const [, cameraId, action] = m.map(decodeURIComponent);
         const body = await readBody(req);
-        log.info('action', `${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
+        log.info('action', `${actor()}${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
         const result = await runAction(cameraId, action, body ?? undefined);
         if (result.ok) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
@@ -652,7 +733,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const body = await readBody(req);
         const want = body?.start !== false;
         const targets = state.list().filter((c) => c.state === 'connected');
-        log.info('action', `record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
+        log.info('action', `${actor()}record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
         const results = await Promise.all(targets.map(async (cam) => {
           const r = await runAction(cam.id, want ? 'recordStart' : 'recordStop');
           return { cameraId: cam.id, ok: r.ok, ...(r.body ?? {}) };

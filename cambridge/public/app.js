@@ -164,6 +164,8 @@ function toast(message, kind = 'ok', ttl = 5000) {
   setTimeout(() => t.remove(), ttl);
 }
 
+let redirectingToLogin = false;
+
 async function api(method, path, body) {
   const res = await fetch(path, {
     method,
@@ -172,7 +174,23 @@ async function api(method, path, body) {
   });
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
-  // Fail loud: the operator must know a command did not land.
+
+  // A session that expired mid-shoot must land on the sign-in page rather than
+  // toasting "unauthorised" once per control and leaving a dead panel on screen.
+  //
+  // Guarded because location.replace() does not stop requests already in
+  // flight: the panel fires several on load, and without this each one would
+  // call replace() again on its way back.
+  if (res.status === 401 && data?.authRequired) {
+    if (!redirectingToLogin) {
+      redirectingToLogin = true;
+      location.replace('/login.html');
+    }
+    return {};
+  }
+  // 403 is different: the session is fine, the action needs admin. Say which,
+  // and stay where we are — bouncing to a login the operator would pass would
+  // teach them nothing about why it did not work.
   if (!res.ok) toast(data?.error ?? `${method} ${path} failed (${res.status})`, 'bad', 9000);
   return data ?? {};
 }
@@ -885,6 +903,19 @@ function renderBanner() {
     return;
   }
 
+  // An unprotected panel is worth saying so on every screen, not only in Setup
+  // where someone has to go looking. It ranks below a live alarm: a card about
+  // to fill is this minute's problem and this is this week's.
+  if (!alarmSummary && authState.enabled === false && authState.warning) {
+    add(banner, el('span', { text: `⚠️ ${authState.warning}` }));
+    add(banner, el('button', {
+      class: 'small ghost', text: 'Set a PIN',
+      onclick: () => switchView('setup'),
+    }));
+    banner.classList.add('warn', 'show');
+    return;
+  }
+
   if (!alarmSummary) { banner.classList.remove('show'); return; }
 
   add(banner, el('span', { text: alarmSummary.text }));
@@ -1109,6 +1140,39 @@ $('#gang-clear').addEventListener('click', async () => {
   gangSelection.clear();
   toast('Cameras unlinked');
   loadMeta();
+});
+
+// --- access control ---------------------------------------------------------
+
+let authState = { enabled: false, warning: null, you: { role: 'anonymous' } };
+
+async function refreshAuth() {
+  authState = await api('GET', '/api/auth/state');
+  const box = $('#auth-state');
+  if (box) {
+    box.textContent = authState.enabled
+      ? `Protected by PIN. You are signed in as ${authState.you?.role ?? 'unknown'}.`
+      : (authState.warning ?? 'No PIN is set.');
+    box.classList.toggle('bad', !authState.enabled);
+  }
+  renderBanner();
+}
+
+$('#pin-save')?.addEventListener('click', async () => {
+  const pin = $('#pin-value').value;
+  const role = $('#pin-role').value;
+  const res = await api('POST', '/api/auth/pin', { pin, role });
+  if (res.ok) {
+    $('#pin-value').value = '';
+    $('#pin-msg').textContent = `${role === 'admin' ? 'Admin' : 'Operator'} PIN set.`;
+    toast('PIN saved');
+    await refreshAuth();
+  }
+});
+
+$('#sign-out')?.addEventListener('click', async () => {
+  await api('POST', '/api/auth/logout');
+  location.replace('/login.html');
 });
 
 // The take log. Fetched on demand rather than pushed: it is read between
@@ -1336,5 +1400,6 @@ function connectEvents() {
 }
 
 loadMeta();
+refreshAuth();
 connectEvents();
 setInterval(() => { if (currentView === 'setup') refreshSetup(); }, 5000);

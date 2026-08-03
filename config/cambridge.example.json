@@ -67,6 +67,23 @@
     }
   },
 
+  "alarms": {
+    "$comment": "When to warn about a card filling or a battery running down. Chosen against how long it takes to act, not round numbers: five minutes of card is about the time to notice, swap it and get back.",
+    "batteryWarnPct": 30,
+    "batteryCriticalPct": 15,
+    "mediaWarnSec": 900,
+    "mediaCriticalSec": 300
+  },
+
+  "auth": {
+    "$comment": "Who can control the cameras. With both PINs null the panel is OPEN — anyone on this network has full control and can read the camera passwords. Set a PIN from the Setup tab rather than editing this by hand; PINs are stored salted and hashed and never in the clear.",
+    "operatorPin": null,
+    "adminPin": null,
+    "$comment_roles": "Operators can drive every camera. Admin is needed for what outlasts a shoot: adopting, forgetting or re-credentialing a camera, and quitting the app. With no adminPin set, one PIN means one level of access.",
+    "$comment_tokens": "Machine clients — Bitfocus Companion, scripts — send 'Authorization: Bearer <token>' instead of a PIN, because they cannot answer a prompt. Map each token to the role it carries. Treat these like passwords.",
+    "tokens": {}
+  },
+
   "cameras": [
     {
       "id": "cam1",
