@@ -128,6 +128,45 @@ fires an error — so on a Mac, where the panel opens in whatever the default
 browser is, the feeds were black while single frames worked perfectly. Polling
 costs a little more and works everywhere.
 
+#### Monitoring assists
+
+Frames are decoded into a canvas, so the panel can read the pixels. Everything
+below is computed in the browser from frames it already has — the cameras are
+not asked for anything extra, and none of it touches the daemon.
+
+**Exposure** replaces or marks the picture, one mode at a time:
+
+| Mode | What it does |
+|---|---|
+| Normal picture | the feed as the camera sends it |
+| False colour | every pixel replaced by the band its brightness falls in |
+| Mark clipping | blown highlights go red, crushed blacks go blue, the rest is left alone |
+
+*Mark clipping* is the one you can leave on during a take, because the picture
+stays recognisable. *False colour* is for setting up.
+
+Press **Key** for what the false-colour bands mean. The one worth memorising is
+the wide pink band: that is where a correctly exposed face sits on these bodies,
+so **"make the face pink"** is the usable version of this on set.
+
+The chips can all be on at once, because they draw over the picture rather than
+replacing it:
+
+- **Histogram** — brightness distribution, top right of each feed. The red edge
+  is clipping, the blue edge is crush.
+- **Clip %** — how much of the frame is blown or crushed. It appears only when
+  there is something to report; a permanent "0.0%" is a thing people stop
+  reading.
+- **Thirds**, **Centre**, **Safe area** — framing guides. Safe area is the 90%
+  action-safe box.
+
+**Matte** shows the frame as it will be delivered — 16:9 or 2.39:1 — with the
+part you are going to lose dimmed rather than outlined, because a thin line does
+not tell you what is being cropped.
+
+All of it is remembered per browser, so a booth iPad comes back the way it was
+left.
+
 ### Setup
 
 Adoption, as above.

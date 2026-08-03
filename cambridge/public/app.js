@@ -1,4 +1,8 @@
 import { createGamepadControl } from './gamepad.js';
+import {
+  histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
+  drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
+} from './scopes.js';
 
 // CamBridge control panel.
 //
@@ -46,6 +50,25 @@ let rampMs = Number(localStorage.getItem('cb.rampMs') ?? 0);
 // gamepad control always starts off, so a controller left plugged in over the
 // week cannot move a camera the moment the panel is opened.
 let padCamera = localStorage.getItem('cb.padCamera') ?? null;
+
+// Monitoring assists. Persisted like the rest of the panel's preferences, so a
+// booth iPad left on false colour comes back on false colour.
+//
+// 'off' | 'false' | 'clip' — one at a time, because false colour replaces the
+// picture and clipping marks overlay it, and showing both means seeing neither.
+let scopeMode = localStorage.getItem('cb.scopeMode') ?? 'off';
+let guides = (() => {
+  const stored = { thirds: false, centre: false, safe: false, matte: 'off',
+                   histogram: false, clipReadout: false };
+  try { return { ...stored, ...JSON.parse(localStorage.getItem('cb.guides') ?? '{}') }; }
+  catch { return stored; }
+})();
+const falseColourLut = buildFalseColourLut();
+
+function saveScopePrefs() {
+  localStorage.setItem('cb.scopeMode', scopeMode);
+  localStorage.setItem('cb.guides', JSON.stringify(guides));
+}
 
 /** Short badge text per alarm code; the full sentence is the tooltip. */
 const ALARM_BADGE = {
@@ -512,10 +535,26 @@ function stopAllFeeds() {
   feedStops = [];
 }
 
-function startFeed(cam, img, onFailure) {
+/**
+ * Frames are decoded and drawn to a canvas rather than assigned to an <img>.
+ *
+ * The fetch loop, the one-request-in-flight rule and the consecutive-failure
+ * counting below are unchanged — that shape is why the feeds work at all, and
+ * is not something to disturb for a drawing change. What is gone is the object
+ * URL dance: createImageBitmap takes the blob directly, so there is no URL to
+ * create, assign in the right order, and revoke.
+ *
+ * The canvas is what makes scopes possible: once a frame is drawn, the pixels
+ * are readable, and exposure analysis costs no extra traffic because the camera
+ * is only ever asked for what it was already sending.
+ */
+function startFeed(cam, canvas, onFailure) {
   let stopped = false;
-  let objectUrl = null;
   let failures = 0;
+  let frame = 0;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let lastHist = null;
+  let lastClip = null;
 
   const tick = async () => {
     if (stopped) return;
@@ -526,12 +565,13 @@ function startFeed(cam, img, onFailure) {
       const blob = await r.blob();
       if (stopped) return;
       if (blob.size > 0) {
-        const next = URL.createObjectURL(blob);
-        img.src = next;
-        // Revoke the previous frame only after the new one is assigned, or the
-        // browser can be left decoding a URL that no longer exists.
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        objectUrl = next;
+        const bitmap = await createImageBitmap(blob);
+        if (stopped) { bitmap.close(); return; }
+        drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, (h, c) => {
+          lastHist = h; lastClip = c;
+        });
+        bitmap.close();
+        frame += 1;
         failures = 0;
       }
     } catch (err) {
@@ -543,10 +583,55 @@ function startFeed(cam, img, onFailure) {
   };
 
   tick();
-  return () => {
-    stopped = true;
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  };
+  return () => { stopped = true; };
+}
+
+/**
+ * Draws one frame, plus whatever scopes and guides are switched on.
+ *
+ * Scopes are recomputed every SCOPE_EVERY_N frames and the previous result is
+ * redrawn in between. A histogram that updates three times a second is
+ * indistinguishable from one that updates ten times a second to anyone reading
+ * it, and the difference is three full-frame pixel passes per second per
+ * camera on a machine that is also running the shoot.
+ */
+const SCOPE_EVERY_N = 3;
+
+function drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, remember) {
+  if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+  }
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+
+  const wantPixels = scopeMode !== 'off' || guides.histogram || guides.clipReadout;
+  let hist = lastHist;
+  let clip = lastClip;
+
+  if (wantPixels) {
+    const image = ctx.getImageData(0, 0, w, h);
+    if (scopeMode === 'false') {
+      applyFalseColour(image.data, falseColourLut);
+      ctx.putImageData(image, 0, 0);
+    } else if (scopeMode === 'clip') {
+      markClipping(image.data);
+      ctx.putImageData(image, 0, 0);
+    }
+    if (frame % SCOPE_EVERY_N === 0) {
+      hist = guides.histogram ? histogram(image.data) : null;
+      clip = guides.clipReadout ? clipStats(image.data) : null;
+      remember(hist, clip);
+    }
+  }
+
+  drawGuides(ctx, w, h, guides);
+  if (guides.histogram && hist) {
+    drawHistogram(ctx, hist, { x: w - Math.min(150, w * 0.34) - 8, y: 8,
+      w: Math.min(150, w * 0.34), h: Math.min(60, h * 0.22) });
+  }
+  if (guides.clipReadout && clip) drawClipReadout(ctx, clip, { x: 8, y: h - 25 });
 }
 
 function feedTile(cam) {
@@ -555,7 +640,8 @@ function feedTile(cam) {
   const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
 
   if (cam.state === 'connected') {
-    const img = el('img', { alt: `${cam.label} live view`, title: 'Click to focus here' });
+    const img = el('canvas', { class: 'feedcanvas', title: 'Click to focus here',
+      role: 'img', 'aria-label': `${cam.label} live view` });
     const reason = el('div', { class: 'note', text: 'Waiting for the first frame…' });
     const fallback = el('div', { class: 'placeholder' },
       el('div', { text: 'No live view from this camera' }), reason);
@@ -891,6 +977,56 @@ for (const b of document.querySelectorAll('nav.tabs button')) {
   b.addEventListener('click', () => switchView(b.dataset.view));
 }
 $('#mv-refresh').addEventListener('click', renderMultiview);
+
+// --- monitoring assists -----------------------------------------------------
+// None of these restart the feeds. The draw path reads the current settings on
+// every frame, so a toggle takes effect on the next one — switching a guide on
+// mid-take must not blank three pictures for a moment while they reconnect.
+$('#scope-mode').addEventListener('change', (e) => {
+  scopeMode = e.target.value;
+  saveScopePrefs();
+});
+$('#matte').addEventListener('change', (e) => {
+  guides.matte = e.target.value;
+  saveScopePrefs();
+});
+for (const chip of document.querySelectorAll('#guide-chips .chip')) {
+  chip.addEventListener('click', () => {
+    const key = chip.dataset.guide;
+    guides[key] = !guides[key];
+    chip.classList.toggle('on', guides[key]);
+    saveScopePrefs();
+  });
+}
+
+$('#scope-key').addEventListener('click', () => {
+  const table = $('#scope-key-table');
+  table.textContent = '';
+  table.append(el('tr', {}, el('th', { text: '' }), el('th', { text: 'Range' }),
+    el('th', { text: 'Means' })));
+  let from = 0;
+  for (const band of FALSE_COLOUR_BANDS) {
+    const swatch = el('td');
+    swatch.append(el('span', { class: 'swatch' }));
+    swatch.firstChild.style.background = `rgb(${band.colour.join(',')})`;
+    table.append(el('tr', {}, swatch,
+      el('td', { text: `${from}–${band.max}%` }),
+      el('td', { text: band.label })));
+    from = band.max;
+  }
+  $('#scope-key-dialog').showModal();
+});
+$('#scope-key-close').addEventListener('click', () => $('#scope-key-dialog').close());
+
+/** Puts the controls where the stored preferences say they are. */
+function restoreScopeControls() {
+  $('#scope-mode').value = scopeMode;
+  $('#matte').value = guides.matte ?? 'off';
+  for (const chip of document.querySelectorAll('#guide-chips .chip')) {
+    chip.classList.toggle('on', !!guides[chip.dataset.guide]);
+  }
+}
+restoreScopeControls();
 $('#picker-close').addEventListener('click', () => $('#picker').close());
 $('#adopt-cancel').addEventListener('click', () => $('#adopt-dialog').close());
 
