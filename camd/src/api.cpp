@@ -469,7 +469,26 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             v.set("linkDown", json::Value(down));
             res.json(200, v.dump());
         });
-        LOG_WARN("api", "--fake: /debug/link/:mac is enabled for kill-test rehearsal");
+        // Same idea for the media alarm. A card filling mid-take is the failure
+        // that costs the most and gets rehearsed the least, precisely because
+        // waiting three hours for a real one to fill is not a rehearsal anyone
+        // does twice.
+        server.route("POST", "/debug/media/:mac",
+                     [](const http::Request& req, http::Response& res) {
+            json::Value parsed;
+            std::string perr;
+            json::parse(req.body, parsed, perr);
+            const std::int64_t seconds =
+                parsed.isObject() ? parsed["seconds"].asInt(60) : 60;
+            const std::string mac = req.param("mac");
+            fakeBackendSetMediaRemaining(mac, seconds);
+            json::Value v = json::Value::makeObject();
+            v.set("mac", json::Value(mac));
+            v.set("seconds", json::Value(seconds));
+            res.json(200, v.dump());
+        });
+        LOG_WARN("api", "--fake: /debug/link/:mac and /debug/media/:mac are enabled "
+                        "for kill-test rehearsal");
     }
 
     // --- websocket ----------------------------------------------------------

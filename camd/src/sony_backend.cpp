@@ -400,6 +400,7 @@ public:
         auto media = props.find(prop::kMediaFree);
         if (media != props.end()) {
             out.mediaPresent = media->second.current > 0;
+            out.mediaSlot1Sec = media->second.current;
             out.media = "SLOT1 " + std::to_string(media->second.current) + "s remaining";
         }
         return true;

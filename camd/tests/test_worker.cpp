@@ -538,3 +538,33 @@ TEST(an_sdk_error_does_not_tear_down_a_healthy_session) {
     }
     CHECK_EQ(sawNotConnected, 0);
 }
+
+TEST(card_remaining_is_reported_as_a_number_not_only_as_prose) {
+    // The media alarm cannot exist without this. `status.media` has always been a
+    // display string ("SLOT1 840s remaining"), and no threshold can read prose.
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+
+    auto w = rig.registry->find("cam1");
+    CHECK(waitFor([w] { return w->snapshot().status.mediaSlot1Sec > 0; }, 3000));
+
+    // Slot 2 stays -1 until its SDK property is confirmed to exist. The Node
+    // layer has to treat that as "not reported" rather than "zero seconds left",
+    // so the daemon must actually emit -1 rather than quietly omitting it.
+    CHECK_EQ(w->snapshot().status.mediaSlot2Sec, static_cast<std::int64_t>(-1));
+}
+
+TEST(a_card_can_be_forced_near_full_to_rehearse_the_alarm) {
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+    auto w = rig.registry->find("cam1");
+    CHECK(waitFor([w] { return w->snapshot().status.mediaSlot1Sec > 0; }, 3000));
+
+    fakeBackendSetMediaRemaining("AA:BB:CC:00:00:01", 45);
+    CHECK(waitFor([w] { return w->snapshot().status.mediaSlot1Sec == 45; }, 3000));
+
+    // Forcing one camera's card must not touch another's — an alarm that fires on
+    // every camera at once tells the operator nothing about which one to change.
+    auto other = rig.registry->find("cam2");
+    CHECK(other->snapshot().status.mediaSlot1Sec > 45);
+}

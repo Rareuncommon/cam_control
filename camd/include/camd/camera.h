@@ -59,8 +59,23 @@ enum : std::int64_t {
 struct CameraStatus {
     int batteryPercent = -1;         // -1 when the camera does not report it
     std::int64_t recordingState = kRecordingUnknown;
-    std::string media;               // free-form, as reported
+    std::string media;               // free-form, for display only
     bool mediaPresent = false;
+
+    // Recording time left, in seconds, per card slot. -1 means "not reported".
+    //
+    // `media` above is a human-readable string and always has been, which is
+    // fine for a label and useless for a threshold: nothing can alarm on
+    // "SLOT1 840s remaining" without parsing prose back into a number. These
+    // carry the same figure as data so the Node layer can warn before a card
+    // fills rather than after.
+    //
+    // Slot 2 stays -1 until the SDK property for it is confirmed to exist in
+    // the 2.02.00 headers — see the grep in docs/phases-6.md. Both FX3 and
+    // FX30 have two slots, so it is worth having; guessing the property name
+    // is not.
+    std::int64_t mediaSlot1Sec = -1;
+    std::int64_t mediaSlot2Sec = -1;
 };
 
 // What discovery found on the network.
@@ -144,5 +159,9 @@ std::unique_ptr<Backend> makeFakeBackend(std::vector<DiscoveredCamera> present);
 // Fake-backend hook: simulate pulling one camera's Ethernet. This is how the
 // Phase 2 kill-test behaviour is exercised without walking to a tripod.
 void fakeBackendSetLinkDown(const std::string& mac, bool down);
+
+// Fake-backend hook: force a camera's card-remaining, in seconds, so the media
+// alarm can be rehearsed. Takes effect on that camera's next status poll.
+void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds);
 
 }  // namespace camd

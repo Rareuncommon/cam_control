@@ -33,6 +33,21 @@ bool linkDown(const std::string& mac) {
     return it != g_linkDown.end() && it->second;
 }
 
+// Forced card-remaining, in seconds, keyed by MAC. Set by the debug endpoint so
+// a nearly-full card can be rehearsed on demand: the alarm that matters most is
+// the one nobody has ever seen fire.
+std::mutex g_mediaMu;
+std::map<std::string, std::int64_t> g_mediaOverride;
+
+bool takeMediaOverride(const std::string& mac, std::int64_t& out) {
+    std::lock_guard<std::mutex> lock(g_mediaMu);
+    auto it = g_mediaOverride.find(mac);
+    if (it == g_mediaOverride.end()) return false;
+    out = it->second;
+    g_mediaOverride.erase(it);
+    return true;
+}
+
 PropertyValue enumerated(std::int64_t current, std::vector<std::int64_t> allowed,
                          bool writable = true) {
     PropertyValue p;
@@ -196,6 +211,9 @@ public:
         props_[prop::kZoomPosition] = ranged(0, 0, 1000, 1);
         props_[prop::kRecordingState] = enumerated(kRecordingNotRecording, {}, false);
         props_[prop::kBatteryLevel] = ranged(87, 0, 100, 1, false);
+        // Card remaining, in seconds — the same units the SDK reports. Starts at
+        // a plausible three hours and is drained by tick() below.
+        props_[prop::kMediaFree] = ranged(mediaSec_, 0, 4 * 3600, 1, false);
         // Matches the FX30 finding: the toggle command is not available.
         props_[prop::kRecToggleSupported] = enumerated(super35 ? 0 : 0, {0, 1}, false);
 
@@ -279,11 +297,53 @@ public:
     bool getStatus(CameraStatus& out, std::string& err) override {
         if (!check(err)) return false;
         std::lock_guard<std::mutex> lock(mu_);
+        tick();
         out.batteryPercent = static_cast<int>(props_[prop::kBatteryLevel].current);
         out.recordingState = recording_ ? kRecordingRecording : kRecordingNotRecording;
-        out.media = "SLOT1 128GB";
-        out.mediaPresent = true;
+        out.mediaSlot1Sec = mediaSec_;
+        // Slot 2 stays unreported here for the same reason the Sony backend does
+        // not fill it: the SDK property has not been confirmed to exist. The
+        // Node layer must handle -1 anyway, so the fake exercises that path.
+        out.mediaSlot2Sec = -1;
+        out.media = "SLOT1 " + std::to_string(mediaSec_) + "s remaining";
+        out.mediaPresent = mediaSec_ > 0;
         return true;
+    }
+
+    // Drains the card while recording and the battery always, so thresholds have
+    // something to cross. Driven off the wall clock rather than a call count:
+    // status is polled on a throttle, and a card that empties at a rate set by
+    // how often someone happens to look at it is not a rehearsal of anything.
+    //
+    // Caller holds mu_.
+    void tick() {
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::seconds>(now - lastTick_).count();
+
+        std::int64_t forced = 0;
+        if (takeMediaOverride(info_.mac, forced)) {
+            mediaSec_ = forced < 0 ? 0 : forced;
+            LOG_WARN("fake", "card for %s forced to %llds remaining", info_.mac.c_str(),
+                     static_cast<long long>(mediaSec_));
+        }
+
+        if (elapsed <= 0) return;
+        lastTick_ = now;
+
+        if (recording_ && mediaSec_ > 0) {
+            mediaSec_ = std::max<std::int64_t>(0, mediaSec_ - elapsed);
+        }
+        props_[prop::kMediaFree].current = mediaSec_;
+
+        // Roughly 1% every two minutes: slow enough not to be noise, fast enough
+        // that a demo reaches the warning threshold inside a sitting.
+        batteryDrainAccum_ += elapsed;
+        while (batteryDrainAccum_ >= 120) {
+            batteryDrainAccum_ -= 120;
+            auto& bat = props_[prop::kBatteryLevel].current;
+            if (bat > 0) bat -= 1;
+        }
     }
 
     bool sendRecordButton(bool down, std::string& err) override {
@@ -379,6 +439,9 @@ private:
     bool disconnected_ = false;
     bool notified_ = false;
     bool errorRaised_ = false;
+    std::int64_t mediaSec_ = 3 * 3600;
+    std::int64_t batteryDrainAccum_ = 0;
+    std::chrono::steady_clock::time_point lastTick_ = std::chrono::steady_clock::now();
 };
 
 class FakeBackend : public Backend {
@@ -435,6 +498,13 @@ void fakeBackendSetLinkDown(const std::string& mac, bool down) {
     std::lock_guard<std::mutex> lock(g_linkMu);
     g_linkDown[mac] = down;
     LOG_WARN("fake", "link for %s is now %s", mac.c_str(), down ? "DOWN" : "UP");
+}
+
+// Test and diagnostic hook: put a camera's card near full so the media alarm can
+// be rehearsed. Applied on the session's next status poll, not immediately.
+void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds) {
+    std::lock_guard<std::mutex> lock(g_mediaMu);
+    g_mediaOverride[mac] = seconds;
 }
 
 }  // namespace camd

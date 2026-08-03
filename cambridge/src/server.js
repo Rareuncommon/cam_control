@@ -20,6 +20,8 @@ import { Presets, Gangs, matchFrom, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_RE
 import { Adoption, normaliseMac, suggestId } from './adopt.js';
 import { AtemTally, tallyForCameras } from './atem.js';
 import { ViscaServer } from './visca.js';
+import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEFAULT_THRESHOLDS } from './alarms.js';
+import { report as takeReport, rollState } from './takelog.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -36,6 +38,9 @@ function loadConfig(path) {
     // joystick should not have sockets it never uses listening on the network.
     atem: { enabled: false, host: '', port: 9910, mapping: {} },
     visca: { enabled: false, bind: '0.0.0.0', port: 52381, tcp: true, mapping: {} },
+    // Always on, unlike the integrations above: a studio that has not thought
+    // about thresholds is exactly the one that needs the defaults.
+    alarms: { ...DEFAULT_THRESHOLDS },
   };
   if (!existsSync(path)) {
     process.stderr.write(`cambridge: no config at ${path}, using defaults\n`);
@@ -50,6 +55,7 @@ function loadConfig(path) {
       cameras: parsed.cameras ?? [],
       atem: { ...defaults.atem, ...(parsed.atem ?? {}) },
       visca: { ...defaults.visca, ...(parsed.visca ?? {}) },
+      alarms: { ...defaults.alarms, ...(parsed.alarms ?? {}) },
     };
   } catch (err) {
     process.stderr.write(`cambridge: config ${path} is not valid JSON: ${err.message}\n`);
@@ -155,6 +161,21 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     return res;
   };
 
+  /**
+   * The single path every camera action takes, from every surface.
+   *
+   * It exists for record intent. Telling an ordinary stop apart from a camera
+   * giving up requires knowing a stop was asked for, and that has to be recorded
+   * wherever the ask came from — panel, Companion, VISCA joystick or gamepad.
+   * With VISCA calling camd directly this was two paths, and a stop pressed on
+   * the joystick would have been reported as a fault.
+   */
+  const runAction = async (cameraId, action, body) => {
+    if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
+    if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
+    return camd.action(cameraId, action, body);
+  };
+
   // --- switcher tally -------------------------------------------------------
   // Read-only, and entirely optional. With no ATEM configured this stays null
   // and every tally indicator simply never lights.
@@ -189,7 +210,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     visca = new ViscaServer({
       state,
       applyFn,
-      actionFn: (cameraId, action, actionBody) => camd.action(cameraId, action, actionBody),
+      actionFn: (cameraId, action, actionBody) => runAction(cameraId, action, actionBody),
       recallPreset: (name, cameraId) => presets.recallPreset(cameraId, name, applyFn),
       savePreset: (name, cameraId) => presets.savePreset(cameraId, name),
       mapping: cfg.visca.mapping,
@@ -211,6 +232,54 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     }
   }
 
+  const thresholds = resolveThresholds(cfg.alarms);
+  /** Codes already logged, so a standing alarm is logged once, not every poll. */
+  let loggedAlarms = new Set();
+
+  /**
+   * The full push payload.
+   *
+   * Alarms ride along with state rather than travelling on their own channel:
+   * they are derived entirely from the state in the same message, and splitting
+   * them would let a browser render a banner about a camera whose card reading
+   * it has not received yet.
+   */
+  function buildPush() {
+    const view = state.view();
+    const alarms = evaluateAlarms(view.cameras, thresholds);
+    logNewAlarms(alarms);
+    return {
+      type: 'state',
+      view,
+      alarms,
+      alarmsByCamera: byCamera(alarms),
+      alarmSummary: summarise(alarms),
+      roll: rollState(view.cameras),
+    };
+  }
+
+  /**
+   * Writes each alarm to the log once, on the edge.
+   *
+   * A draining card produces an alarm on every status poll for as long as it is
+   * low. Logging all of them buries the transition that mattered under hundreds
+   * of identical lines — the same mistake that made the daemon log unreadable
+   * when SDK errors were logged per occurrence.
+   */
+  function logNewAlarms(alarms) {
+    const now = new Set(alarms.map((a) => `${a.cameraId}:${a.code}`));
+    for (const a of alarms) {
+      const key = `${a.cameraId}:${a.code}`;
+      if (loggedAlarms.has(key)) continue;
+      log.write(a.level === 'critical' ? 'error' : 'warn', 'alarm',
+        `${a.label} ${a.message}`);
+    }
+    for (const key of loggedAlarms) {
+      if (!now.has(key)) log.info('alarm', `cleared: ${key}`);
+    }
+    loggedAlarms = now;
+  }
+
   // Coalesce bursts: turning an iris wheel produces a stream of property events,
   // and repainting per event would swamp an iPad over Wi-Fi.
   let pushTimer = null;
@@ -220,13 +289,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Connection transitions are the one thing that must never be delayed —
       // "camera offline" is the message the operator needs instantly. Tally is
       // the same: it has to track the cut, not trail it by a coalescing window.
-      pushToClients({ type: 'state', view: state.view() });
+      pushToClients(buildPush());
       return;
     }
     if (pushTimer) return;
     pushTimer = setTimeout(() => {
       pushTimer = null;
-      pushToClients({ type: 'state', view: state.view() });
+      pushToClients(buildPush());
     }, 60);
   });
 
@@ -302,6 +371,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
+    // Reused by every path-parameter route below.
+    let m;
+
     try {
       // --- events (SSE) ---
       if (path === '/api/events') {
@@ -310,7 +382,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           'Cache-Control': 'no-store',
           Connection: 'keep-alive',
         });
-        res.write(`data: ${JSON.stringify({ type: 'state', view: state.view() })}\n\n`);
+        res.write(`data: ${JSON.stringify(buildPush())}\n\n`);
         sseClients.add(res);
         // Comment frames keep proxies and sleeping iPads from dropping the stream.
         const keepAlive = setInterval(() => {
@@ -326,6 +398,34 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // --- state ---
       if (path === '/api/state' && req.method === 'GET') {
         return sendJson(res, 200, state.view());
+      }
+
+      // --- alarms ---
+      // Same evaluation the SSE push uses, for anything that polls rather than
+      // subscribes — a monitoring script, or curl at 3am.
+      if (path === '/api/alarms' && req.method === 'GET') {
+        const alarms = evaluateAlarms(state.view().cameras, thresholds);
+        return sendJson(res, 200, {
+          alarms,
+          summary: summarise(alarms),
+          thresholds,
+          roll: rollState(state.list()),
+        });
+      }
+
+      // --- take log ---
+      if (path === '/api/takes' && req.method === 'GET') {
+        return sendJson(res, 200, takeReport(state.takes));
+      }
+
+      // Dismiss a dropped-record alarm once it has been seen. Nothing else
+      // clears it: the camera is not going to tell us it was noticed.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/acknowledge$/);
+      if (m && req.method === 'POST') {
+        const cameraId = decodeURIComponent(m[1]);
+        const cleared = state.acknowledgeRecordDrop(cameraId);
+        if (cleared) log.info('alarm', `${cameraId} dropped-record alarm acknowledged`);
+        return sendJson(res, 200, { ok: true, cameraId, cleared });
       }
 
       if (path === '/api/health' && req.method === 'GET') {
@@ -417,7 +517,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       // --- property set, with gang fanout ---
-      let m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/([^/]+)$/);
+      m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/([^/]+)$/);
       if (m && req.method === 'PUT') {
         const [, cameraId, prop] = m.map(decodeURIComponent);
         const body = await readBody(req);
@@ -450,7 +550,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const [, cameraId, action] = m.map(decodeURIComponent);
         const body = await readBody(req);
         log.info('action', `${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
-        const result = await camd.action(cameraId, action, body ?? undefined);
+        const result = await runAction(cameraId, action, body ?? undefined);
         if (result.ok) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
           ok: result.ok, cameraId, action, ...(result.body ?? {}),
@@ -464,7 +564,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const targets = state.list().filter((c) => c.state === 'connected');
         log.info('action', `record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
         const results = await Promise.all(targets.map(async (cam) => {
-          const r = await camd.action(cam.id, want ? 'recordStart' : 'recordStop');
+          const r = await runAction(cam.id, want ? 'recordStart' : 'recordStop');
           return { cameraId: cam.id, ok: r.ok, ...(r.body ?? {}) };
         }));
         const failed = results.filter((r) => !r.ok);
