@@ -65,8 +65,30 @@ button.small   { min-height: 34px; padding: 5px 10px; font-size: 13px; }
 button.ghost   { background: transparent; }
 button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 
-#banner { display: none; padding: 11px 16px; background: var(--bad); color: #fff; font-weight: 700; }
-#banner.show { display: block; }
+#banner {
+  display: none; padding: 11px 16px; background: var(--bad); color: #fff; font-weight: 700;
+  align-items: center; gap: 12px;
+}
+#banner.show { display: flex; }
+/* A warning is not an emergency. Using the same red for a card with twelve
+   minutes left as for a camera that stopped recording teaches people to read
+   past both. */
+#banner.warn { background: var(--warn); color: #1a1200; }
+#banner button { background: rgba(0,0,0,.22); border-color: rgba(255,255,255,.35); color: inherit; }
+#banner button:hover { border-color: currentColor; }
+
+/* Recording, and every connected camera is. Loud enough to be read across a
+   booth without being the alarm red. */
+.pill.rec { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 700; }
+
+/* Scoped to .btnrow so these beat its `> *` stretch rule, which appears later
+   in the file and would otherwise win on source order and spread the timer
+   across the row. */
+.btnrow > .rectime {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums; font-weight: 700;
+  color: var(--rec); align-self: center; padding: 0 4px; min-width: 52px; text-align: right;
+}
+.btnrow > .undo { display: flex; gap: 6px; flex: 0 0 auto; }
 
 .view { display: none; }
 .view.active { display: block; }
@@ -211,6 +233,9 @@ table.list th {
 }
 table.list td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 table.list tr:last-child td { border-bottom: none; }
+/* Pills in a cell — the take log's camera column — need their own spacing;
+   inline-block siblings otherwise butt together into one unreadable run. */
+table.list td > .pill { margin: 2px 4px 2px 0; display: inline-block; }
 .formgrid { display: grid; grid-template-columns: 140px 1fr; gap: 9px; align-items: center; max-width: 580px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {

@@ -22,6 +22,9 @@
     <button data-view="setup">Setup</button>
   </nav>
   <span id="camd-pill" class="pill">connecting…</span>
+  <!-- "3 of 3 rolling" — the question asked most often during a shoot, and
+       until now answerable only by reading three separate record buttons. -->
+  <span id="roll-pill" class="pill" style="display:none"></span>
   <span class="spacer"></span>
   <button id="pad-open" class="small ghost" style="display:none" title="Gamepad control">🎮</button>
   <button id="advanced-toggle" class="small ghost" title="Keep every camera's extra controls open">More controls</button>
@@ -87,6 +90,15 @@
           <button class="small" id="gang-clear">Unlink all</button>
           <span class="note" id="gang-state"></span>
         </div>
+      </div>
+
+      <div>
+        <h3>Take log — what actually rolled</h3>
+        <div class="line">
+          <button class="small" id="takes-refresh">Show takes</button>
+          <span class="note">Every take, which cameras got it, and any that stopped on their own.</span>
+        </div>
+        <table class="list" id="takes-table" style="margin-top:9px"></table>
       </div>
 
       <div class="note" id="focus-note"></div>

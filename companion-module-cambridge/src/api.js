@@ -16,7 +16,8 @@ export class CambridgeApi {
    * @param {string} opts.host          cambridge address
    * @param {number} opts.port
    * @param {(level: string, msg: string) => void} opts.log
-   * @param {(view: object) => void} opts.onState     full state snapshot
+   * @param {(frame: object) => void} opts.onState    full state envelope:
+   *        { view, alarms, alarmsByCamera, alarmSummary, roll, undo }
    * @param {(up: boolean, detail?: string) => void} opts.onConnection
    * @param {typeof fetch} [opts.fetchImpl]           injected for tests
    */
@@ -73,6 +74,8 @@ export class CambridgeApi {
   async #poll() {
     if (this.stopped) return;
     const r = await this.request('GET', '/api/state');
+    // /api/state returns the same envelope the stream pushes, so both paths
+    // hand the instance an identical frame.
     if (r.ok && r.body) this.onState(r.body);
   }
 
@@ -122,7 +125,7 @@ export class CambridgeApi {
       if (!payload) continue;
       try {
         const msg = JSON.parse(payload);
-        if (msg.type === 'state' && msg.view) this.onState(msg.view);
+        if (msg.type === 'state' && msg.view) this.onState(msg);
       } catch {
         this.log('debug', 'ignored malformed event frame');
       }

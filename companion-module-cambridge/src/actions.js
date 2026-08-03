@@ -313,5 +313,28 @@ export function buildActions(self) {
       callback: (ev) =>
         self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/actions/reconnect`),
     },
+
+    undo: {
+      name: 'Camera: undo the last change',
+      options: [cameraField()],
+      callback: (ev) =>
+        self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/undo`),
+    },
+
+    undoRecall: {
+      // Named for what it does rather than "revert": the first reading of
+      // "revert to scene Interview" is the opposite of undoing that recall.
+      name: 'Camera: undo the last recall and everything since',
+      options: [cameraField()],
+      callback: (ev) =>
+        self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/revert`),
+    },
+
+    acknowledge: {
+      name: 'Camera: dismiss a dropped-record alarm',
+      options: [cameraField()],
+      callback: (ev) =>
+        self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/acknowledge`),
+    },
   };
 }

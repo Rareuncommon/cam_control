@@ -431,8 +431,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       // --- state ---
+      // The same envelope the SSE push carries, minus its `type`. One shape for
+      // both paths: the Companion module falls back to polling this when its
+      // stream drops, and a poll that returned less than the stream would make
+      // alarms flicker off every time a network hiccup fell back.
       if (path === '/api/state' && req.method === 'GET') {
-        return sendJson(res, 200, state.view());
+        const { type, ...envelope } = buildPush();
+        return sendJson(res, 200, envelope);
       }
 
       // --- alarms ---

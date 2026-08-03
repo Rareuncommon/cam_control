@@ -19,6 +19,9 @@ const PER_CAMERA = [
   ['nd', 'ND filter'],
   ['battery', 'Battery %'],
   ['media', 'Media'],
+  ['card', 'Card time remaining'],
+  ['alarm', 'Worst alarm, or empty'],
+  ['rectime', 'Elapsed record time'],
   ['tally', 'Tally (PGM / PVW / off)'],
 ];
 
@@ -35,6 +38,9 @@ export function buildVariableDefinitions(cameras) {
     { variableId: 'daemon', name: 'CamBridge daemon state' },
     { variableId: 'cameras_down', name: 'Names of cameras not connected' },
     { variableId: 'tally_program', name: 'Camera currently on program' },
+    { variableId: 'rolling', name: 'Rolling count, e.g. "2 of 3"' },
+    { variableId: 'alarm_count', name: 'Number of active alarms' },
+    { variableId: 'alarm', name: 'Worst active alarm, or empty' },
   ];
   for (const cam of cameras) {
     const v = varId(cam.id);
@@ -55,14 +61,31 @@ const raw = (cam, prop) => {
   return Number.isFinite(value) ? value : '';
 };
 
-export function buildVariableValues(cameras, { camdConnected = true } = {}) {
+/** "12:04", or "—" when the camera does not report the figure. */
+function clock(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  const s = Math.floor(seconds);
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const pad = (n) => String(n).padStart(2, '0');
+  return hh > 0 ? `${hh}:${pad(mm)}:${pad(s % 60)}` : `${mm}:${pad(s % 60)}`;
+}
+
+export function buildVariableValues(cameras, {
+  camdConnected = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(),
+} = {}) {
+  const connected = cameras.filter((c) => c.state === 'connected').length;
   const values = {
     camera_count: cameras.length,
-    connected_count: cameras.filter((c) => c.state === 'connected').length,
+    connected_count: connected,
     recording_count: cameras.filter((c) => c.status?.recording).length,
     daemon: camdConnected ? 'connected' : 'UNREACHABLE',
     cameras_down: cameras.filter((c) => c.state !== 'connected').map((c) => c.label || c.id).join(', '),
     tally_program: cameras.filter((c) => c.tally?.program).map((c) => c.label || c.id).join(', '),
+    rolling: roll ? `${roll.rolling} of ${roll.total}` : `0 of ${connected}`,
+    alarm_count: alarms.length,
+    // Alarms arrive most severe first, so the head is the one to show.
+    alarm: alarms.length ? `${alarms[0].label} ${alarms[0].message}` : '',
   };
 
   for (const cam of cameras) {
@@ -82,6 +105,11 @@ export function buildVariableValues(cameras, { camdConnected = true } = {}) {
     values[`${v}_battery`] = Number.isFinite(cam.status?.battery) && cam.status.battery >= 0
       ? `${cam.status.battery}%` : '—';
     values[`${v}_media`] = cam.status?.media ?? '';
+    values[`${v}_card`] = clock(cam.status?.mediaSlot1Sec);
+    values[`${v}_rectime`] = cam.recordStartedAt
+      ? clock((now - cam.recordStartedAt) / 1000) : '';
+    const worst = (alarmsByCamera?.[cam.id] ?? [])[0];
+    values[`${v}_alarm`] = worst ? worst.message : '';
     values[`${v}_tally`] = t?.program ? 'PGM' : t?.preview ? 'PVW' : 'off';
 
     values[`${v}_iris_raw`] = raw(cam, 'fNumber');

@@ -25,6 +25,13 @@ const el = (tag, attrs = {}, ...kids) => {
 const add = (parent, ...kids) => { for (const k of kids) if (k) parent.append(k); return parent; };
 
 let view = { camdConnected: false, cameras: [], backend: '' };
+// Alarms arrive with the state they are derived from, in the same push, so the
+// banner can never describe a camera whose readings have not arrived yet.
+let alarms = [];
+let alarmsByCamera = {};
+let alarmSummary = null;
+let roll = null;
+let undoState = {};
 let meta = { focusNote: '', scenes: [], presets: {}, groups: {} };
 let discovery = { discovered: [], credentialHint: '' };
 let health = {};
@@ -39,6 +46,94 @@ let rampMs = Number(localStorage.getItem('cb.rampMs') ?? 0);
 // gamepad control always starts off, so a controller left plugged in over the
 // week cannot move a camera the moment the panel is opened.
 let padCamera = localStorage.getItem('cb.padCamera') ?? null;
+
+/** Short badge text per alarm code; the full sentence is the tooltip. */
+const ALARM_BADGE = {
+  media: 'CARD',
+  battery: 'BATTERY',
+  recordFailed: 'REC FAILED',
+  recordDropped: 'REC DROPPED',
+};
+
+/** "12:04" — mm:ss, or h:mm:ss once a take passes an hour. */
+function clockDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
+}
+
+/**
+ * Elapsed record time.
+ *
+ * The server sends a start timestamp rather than a running count, and this
+ * ticks locally — pushing a new state once a second for a timer would mean the
+ * whole panel repaints once a second all through a take.
+ */
+function recTimer(cam) {
+  if (!cam.recordStartedAt) return null;
+  const span = el('span', { class: 'rectime' });
+  const text = () => clockDuration((Date.now() - cam.recordStartedAt) / 1000);
+
+  // Set before returning, while the span is still detached. Checking
+  // isConnected first — as the obvious version of this does — sees a node that
+  // the caller has not appended yet, and stops the timer before it ever starts.
+  span.textContent = text();
+
+  const id = setInterval(() => {
+    // Cards are rebuilt on every state push, so the previous span is orphaned.
+    // Stopping here is what keeps a repaint from leaving an interval behind.
+    if (!span.isConnected) { clearInterval(id); return; }
+    span.textContent = text();
+  }, 1000);
+  return span;
+}
+
+/** Undo, showing what it would reverse so it is never a blind press. */
+function undoButton(cam) {
+  const u = undoState[cam.id];
+  if (!u?.last && !u?.hasMark) return null;
+  const wrap = el('span', { class: 'undo' });
+  if (u.last) {
+    add(wrap, el('button', {
+      class: 'small ghost',
+      text: `Undo ${propLabel(u.last.prop)}`,
+      title: `Put ${propLabel(u.last.prop)} back to what it was before the last change`,
+      onclick: () => api('POST', `/api/cameras/${encodeURIComponent(cam.id)}/undo`),
+    }));
+  }
+  if (u.hasMark) {
+    add(wrap, el('button', {
+      class: 'small ghost',
+      text: 'Undo recall',
+      title: 'Undo the last preset or scene recall, and everything changed since',
+      onclick: () => api('POST', `/api/cameras/${encodeURIComponent(cam.id)}/revert`),
+    }));
+  }
+  return wrap;
+}
+
+/** Human name for a property, for the undo button. */
+function propLabel(prop) {
+  return ({
+    fNumber: 'iris', isoSensitivity: 'ISO', shutterSpeed: 'shutter',
+    colorTemp: 'Kelvin', wbTint: 'tint', whiteBalance: 'WB',
+    ndValue: 'ND', focusPosition: 'focus',
+  })[prop] ?? prop;
+}
+
+/** Card remaining, as time rather than the daemon's display string. */
+function mediaChip(st) {
+  const secs = st.mediaSlot1Sec;
+  if (!Number.isFinite(secs) || secs < 0) {
+    // -1 means the camera did not report it. Saying so beats printing "0:00",
+    // which reads as a full card.
+    return el('span', { text: 'card —', title: 'This camera does not report card time' });
+  }
+  return el('span', { text: `card ${clockDuration(secs)}` });
+}
 
 function toast(message, kind = 'ok', ttl = 5000) {
   const t = el('div', { class: `toast ${kind}`, text: message });
@@ -283,18 +378,32 @@ function cameraCard(cam) {
   add(body, stepper(cam, 'ndValue', 'ND', { coarse: 5 }));
   add(body, stepper(cam, 'colorTemp', 'Kelvin', { coarse: 1 }));
 
-  body.append(el('div', { class: 'btnrow' },
+  const recRow = el('div', { class: 'btnrow' },
     el('button', {
       class: rec ? 'big' : 'danger big',
       onclick: () => doAction(cam.id, rec ? 'recordStop' : 'recordStart'),
-    }, document.createTextNode(rec ? '■ Stop' : '● Record'))));
+    }, document.createTextNode(rec ? '■ Stop' : '● Record')));
+  add(recRow, recTimer(cam), undoButton(cam));
+  body.append(recRow);
 
   const st = cam.status ?? {};
-  body.append(el('div', { class: 'status' },
+  const statusRow = el('div', { class: 'status' });
+  add(statusRow,
     el('span', { text: `Battery ${st.battery >= 0 ? st.battery + '%' : '—'}` }),
-    el('span', { text: st.media || 'media —' }),
+    mediaChip(st),
     cam.properties?.ndDensity ? el('span', { text: cam.properties.ndDensity.label }) : null,
-    failed ? el('span', { class: 'pill bad', text: 'RECORDING FAILED' }) : null));
+    failed ? el('span', { class: 'pill bad', text: 'RECORDING FAILED' }) : null);
+  // Badges rather than another line of prose: at a glance the operator needs to
+  // know which camera, not to read a sentence.
+  for (const a of alarmsByCamera[cam.id] ?? []) {
+    if (a.code === 'offline') continue;   // the card already says so, larger
+    add(statusRow, el('span', {
+      class: `pill ${a.level === 'critical' ? 'bad' : 'warn'}`,
+      text: ALARM_BADGE[a.code] ?? a.code,
+      title: `${a.label} ${a.message}`,
+    }));
+  }
+  body.append(statusRow);
 
   // Everything else, behind a disclosure so the main card stays uncluttered.
   const more = el('details', { class: 'more', open: advanced });
@@ -649,25 +758,8 @@ function render() {
   pill.textContent = view.camdConnected ? 'connected' : 'daemon offline';
   pill.className = `pill ${view.camdConnected ? 'ok' : 'bad'}`;
 
-  const banner = $('#banner');
-  const failed = view.cameras.filter((c) => c.status?.recordingFailed);
-  const bad = view.cameras.filter((c) => c.state !== 'connected');
-  if (!view.camdConnected) {
-    // Name the log. The panel being up means cambridge and the config are fine,
-    // so the daemon either failed to start or died — and its own log is the only
-    // place that says which.
-    banner.textContent = 'The camera daemon is not reachable — no control is possible. '
-      + (health.logDir ? `Check ${health.logDir}/camd.stdout.log` : 'Check the camd log.');
-    banner.classList.add('show');
-  } else if (failed.length) {
-    banner.textContent = `RECORDING FAILED on ${failed.map((c) => c.label).join(', ')}`;
-    banner.classList.add('show');
-  } else if (bad.length) {
-    banner.textContent = bad.map((c) => `${c.label}: ${c.state}`).join('   ·   ');
-    banner.classList.add('show');
-  } else {
-    banner.classList.remove('show');
-  }
+  renderBanner();
+  renderRollPill();
 
   const activeKey = document.activeElement?.dataset?.key ?? interacting;
   if (currentView === 'control') renderControl();
@@ -679,6 +771,73 @@ function render() {
     if (restore) restore.focus({ preventScroll: true });
   }
   renderTools();
+}
+
+/**
+ * The banner.
+ *
+ * One line, always the worst thing that is true. It used to hand-roll its own
+ * conditions — recording-failed, then any camera not connected — which the
+ * alarm evaluator now covers along with card, battery and dropped records, so
+ * the banner reads that instead of deciding for itself. The daemon being
+ * unreachable still comes first and separately: with no daemon there is no
+ * state to raise alarms from, and every camera would otherwise be reported
+ * offline individually when the real problem is one process.
+ */
+function renderBanner() {
+  const banner = $('#banner');
+  banner.textContent = '';
+  banner.classList.remove('warn');
+
+  if (!view.camdConnected) {
+    // Name the log. The panel being up means cambridge and the config are fine,
+    // so the daemon either failed to start or died — and its own log is the only
+    // place that says which.
+    banner.textContent = 'The camera daemon is not reachable — no control is possible. '
+      + (health.logDir ? `Check ${health.logDir}/camd.stdout.log` : 'Check the camd log.');
+    banner.classList.add('show');
+    return;
+  }
+
+  if (!alarmSummary) { banner.classList.remove('show'); return; }
+
+  add(banner, el('span', { text: alarmSummary.text }));
+  // Only a dropped record can be dismissed, and only because nothing else will
+  // ever clear it — the camera is not going to tell us it was noticed. A card
+  // alarm has no dismiss button on purpose: it goes away when the card does.
+  const dropped = alarms.filter((a) => a.code === 'recordDropped');
+  for (const a of dropped) {
+    add(banner, el('button', {
+      class: 'small ghost',
+      text: `Dismiss ${a.label}`,
+      onclick: () => api('POST', `/api/cameras/${encodeURIComponent(a.cameraId)}/acknowledge`),
+    }));
+  }
+  if (alarmSummary.level !== 'critical') banner.classList.add('warn');
+  banner.classList.add('show');
+}
+
+/**
+ * "3 of 3 rolling" in the top bar.
+ *
+ * The question asked most often during a shoot, and until now answerable only
+ * by reading three separate record buttons. Counts connected cameras only — an
+ * offline body has its own, louder alarm, and folding it in here would turn
+ * "all rolling" into a claim about a camera nobody can see.
+ */
+function renderRollPill() {
+  const pill = $('#roll-pill');
+  if (!pill) return;
+  if (!roll || roll.total === 0 || roll.idle) {
+    pill.style.display = 'none';
+    return;
+  }
+  pill.style.display = '';
+  pill.textContent = `${roll.rolling} of ${roll.total} rolling`;
+  pill.className = `pill ${roll.all ? 'rec' : 'warn'}`;
+  pill.title = roll.all
+    ? 'Every connected camera is recording'
+    : `Not rolling: ${roll.notRolling.map((c) => c.label).join(', ')}`;
 }
 
 function renderTools() {
@@ -814,6 +973,42 @@ $('#gang-clear').addEventListener('click', async () => {
   gangSelection.clear();
   toast('Cameras unlinked');
   loadMeta();
+});
+
+// The take log. Fetched on demand rather than pushed: it is read between
+// setups or after a shoot, not watched, and it grows all day.
+$('#takes-refresh').addEventListener('click', async () => {
+  const data = await api('GET', '/api/takes');
+  const table = $('#takes-table');
+  table.textContent = '';
+  if (!data.takes?.length) {
+    table.append(el('tr', {}, el('td', { class: 'note', text: 'Nothing has been recorded yet.' })));
+    return;
+  }
+  table.append(el('tr', {},
+    el('th', { text: 'Take' }), el('th', { text: 'Started' }),
+    el('th', { text: 'Length' }), el('th', { text: 'Cameras' })));
+
+  for (const t of [...data.takes].reverse()) {
+    const cams = el('td');
+    for (const c of t.cameras) {
+      add(cams, el('span', {
+        class: c.outcome === 'ok' || c.outcome === 'rolling' ? 'pill ok' : 'pill bad',
+        text: c.label,
+        title: c.outcomeText,
+      }));
+    }
+    // A camera that was in other takes but not this one is the column worth
+    // having: it separates "missed take four" from "never rolled all day".
+    for (const mcam of t.missing) {
+      add(cams, el('span', { class: 'pill warn', text: mcam.label, title: 'did not roll on this take' }));
+    }
+    table.append(el('tr', {},
+      el('td', { text: String(t.take) }),
+      el('td', { text: new Date(t.startedAt).toLocaleTimeString() }),
+      el('td', { text: t.duration }),
+      cams));
+  }
 });
 
 $('#adopt-confirm').addEventListener('click', async () => {
@@ -989,6 +1184,11 @@ function connectEvents() {
         msg.view.cameras.length !== view.cameras.length ||
         msg.view.cameras.some((c, i) => c.id !== view.cameras[i]?.id || c.state !== view.cameras[i]?.state);
       view = msg.view;
+      alarms = msg.alarms ?? [];
+      alarmsByCamera = msg.alarmsByCamera ?? {};
+      alarmSummary = msg.alarmSummary ?? null;
+      roll = msg.roll ?? null;
+      undoState = msg.undo ?? {};
       render();
       if (currentView === 'multiview' && changed) renderMultiview();
     } catch { /* ignore malformed frame */ }
