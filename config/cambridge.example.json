@@ -45,12 +45,18 @@
     "enabled": false,
     "host": "172.16.16.10",
     "port": 9910,
-    "$comment_mapping": "Which ATEM input each camera is plugged into, as numbered on the switcher.",
+    "$comment_mapping": "Which ATEM input each camera is plugged into, as numbered on the switcher. Used by both tally and Link.",
     "mapping": {
       "cam1": 1,
       "cam2": 2,
       "cam3": 3
-    }
+    },
+    "$comment_link": "ATEM Link: let a Blackmagic hardware panel or the Camera page drive Sony exposure. Still switcher-to-camera only — CamBridge never sends the switcher anything. OFF by default because the decoder's packet layout has not yet been confirmed against real hardware.",
+    "link": false,
+    "$comment_logRaw": "Capture mode. Logs every camera-control block the switcher sends, as hex next to how CamBridge read it, without acting on any of it. Turn this on first, move one control at a time on the panel, and check the two agree before setting link true.",
+    "logRaw": false,
+    "$comment_coalesceMs": "A panel wheel emits dozens of positions a second; only the newest is worth sending. Raise if a camera still struggles to keep up.",
+    "coalesceMs": 120
   },
 
   "visca": {

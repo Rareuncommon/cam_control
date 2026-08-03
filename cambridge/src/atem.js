@@ -1,8 +1,12 @@
-// ATEM tally listener.
+// ATEM tally listener, and camera control from the switcher.
 //
 // Talks just enough of Blackmagic's switcher protocol to learn which input is on
-// program and which is on preview. It never sends a command — this is read-only
-// by design. A bug here should be incapable of cutting a source mid-take.
+// program and which is on preview, and to pick up the camera-control data a
+// hardware panel broadcasts.
+//
+// It never sends the switcher a command — that is still true with ATEM Link
+// added, because Link is switcher-to-camera only. A bug in this file remains
+// incapable of cutting a source mid-take.
 //
 // The protocol, as much of it as we need:
 //
@@ -191,6 +195,11 @@ export class AtemTally extends EventEmitter {
       const body = payload.subarray(offset + 8, offset + blockLength);
       if (name === 'TlSr') changed = this.#parseTlSr(body) || changed;
       else if (name === 'TlIn') changed = this.#parseTlIn(body) || changed;
+      // Camera control the switcher is broadcasting, from a hardware panel or
+      // its own Camera page. Emitted rather than acted on here: this class stays
+      // a protocol reader, and the decision to write anything to a camera
+      // belongs to the layer that knows about cameras.
+      else if (name === 'CCdP') this.emit('cameraControl', Buffer.from(body));
       offset += blockLength;
     }
     if (changed) this.emit('tally', this.snapshot());

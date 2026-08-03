@@ -19,6 +19,7 @@ import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId } from './adopt.js';
 import { AtemTally, tallyForCameras } from './atem.js';
+import { decodeCCdP, toCameraWrites, cameraForDestination, WriteCoalescer } from './atem-cc.js';
 import { ViscaServer } from './visca.js';
 import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEFAULT_THRESHOLDS } from './alarms.js';
 import { report as takeReport, rollState } from './takelog.js';
@@ -37,7 +38,10 @@ function loadConfig(path) {
     cameras: [],
     // Both off unless the config asks for them: a studio without a switcher or a
     // joystick should not have sockets it never uses listening on the network.
-    atem: { enabled: false, host: '', port: 9910, mapping: {} },
+    // `link` is separate from `enabled` on purpose. Tally is read-only and safe
+    // to leave on; Link writes to cameras from a decoder whose wrapper layout is
+    // not yet confirmed against real hardware, so it is opt-in.
+    atem: { enabled: false, host: '', port: 9910, mapping: {}, link: false, logRaw: false },
     visca: { enabled: false, bind: '0.0.0.0', port: 52381, tcp: true, mapping: {} },
     // Always on, unlike the integrations above: a studio that has not thought
     // about thresholds is exactly the one that needs the defaults.
@@ -219,6 +223,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   // Read-only, and entirely optional. With no ATEM configured this stays null
   // and every tally indicator simply never lights.
   let atem = null;
+  let atemWrites = null;
   if (cfg.atem.enabled && cfg.atem.host) {
     atem = new AtemTally({
       host: cfg.atem.host,
@@ -238,6 +243,55 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       log.warn('atem', 'switcher connection lost, clearing tally');
       state.applyTally({});
     });
+
+    // --- ATEM Link ---
+    // Camera control broadcast by the switcher, translated into ordinary
+    // property writes. Every write goes through applyFn, so a move made on a
+    // Blackmagic panel is logged, gang-aware and undoable exactly like one made
+    // in the browser.
+    if (cfg.atem.link || cfg.atem.logRaw) {
+      atemWrites = new WriteCoalescer(
+        (cameraId, prop, value) => applyFn(cameraId, prop, value),
+        cfg.atem.coalesceMs ?? 120,
+      );
+
+      atem.on('cameraControl', (body) => {
+        const decoded = decodeCCdP(body);
+
+        // The capture mode. The wrapper layout this decoder assumes is not
+        // confirmed against hardware, so this prints the bytes next to the
+        // interpretation: move one control at a time on the panel and the log
+        // says whether the two agree.
+        if (cfg.atem.logRaw) {
+          log.info('atem-link', decoded.ok
+            ? `CCdP dest=${decoded.destination} ${decoded.category}.${decoded.parameter} `
+              + `type=${decoded.dataType}${decoded.relative ? ' relative' : ''} `
+              + `values=[${decoded.values.join(', ')}]  raw: ${decoded.raw}`
+            : `CCdP undecodable (${decoded.error})  raw: ${decoded.raw}`);
+        }
+        if (!cfg.atem.link || !decoded.ok) return;
+
+        const cameraId = cameraForDestination(cfg.atem.mapping, decoded.destination);
+        if (!cameraId) return;   // an input with no camera behind it
+        const camera = state.get(cameraId);
+        if (!camera || camera.state !== 'connected') return;
+
+        const { writes, skipped } = toCameraWrites(decoded, camera);
+        for (const w of writes) {
+          if (w.action) runAction(cameraId, w.action);
+          else atemWrites.submit(cameraId, w.prop, w.value);
+        }
+        // Logged at debug: an unmapped wheel produces these continuously while
+        // it is turning, and at info it would bury everything else.
+        for (const s of skipped) {
+          log.debug('atem-link', `${cameraId}: ignored ${s.category}.${s.parameter} — ${s.reason}`);
+        }
+      });
+
+      log.info('atem', cfg.atem.link
+        ? 'ATEM Link is ON — the switcher can drive camera exposure'
+        : 'ATEM Link capture mode: logging camera control without acting on it');
+    }
   }
 
   // --- VISCA -----------------------------------------------------------------
@@ -763,6 +817,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           // is correct — we did not start it and must not assume we own it.
           camd.stop();
           atem?.stop();
+          atemWrites?.stop();
           await visca?.stop();
           process.exit(0);
         }, 150);
@@ -956,6 +1011,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     async stop() {
       camd.stop();
       atem?.stop();
+      atemWrites?.stop();
       await visca?.stop();
       for (const c of sseClients) { try { c.end(); } catch { /* closed */ } }
       sseClients.clear();
