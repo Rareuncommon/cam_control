@@ -16,7 +16,7 @@ import { CamdClient } from './camd-client.js';
 import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
-import { Presets, Gangs, matchFrom, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
+import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId } from './adopt.js';
 import { AtemTally, tallyForCameras } from './atem.js';
 import { ViscaServer } from './visca.js';
@@ -154,12 +154,41 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log);
 
-  /** Injected setter used by presets, gang and match, so all writes are logged. */
+  const undo = new UndoHistory();
+
+  /**
+   * Injected setter used by presets, gang and match, so all writes are logged.
+   *
+   * Also the one choke point where undo history is captured. Every surface ends
+   * up here — the panel's property PUT, gang fanout, preset and scene recall,
+   * match, VISCA and the gamepad — so recording here catches all of them, and
+   * recording anywhere else would catch some.
+   */
   const applyFn = async (cameraId, prop, raw) => {
+    const before = state.get(cameraId)?.properties?.[prop]?.value;
     const res = await camd.setProperty(cameraId, prop, raw);
     log.debug('set', `${cameraId} ${prop}=${raw} -> ${res.ok ? 'ok' : res.body?.error}`);
+    // Only successful writes enter the history. A refused write did not change
+    // the camera, so there is nothing to undo, and an entry for it would make
+    // the next undo skip the change the operator actually wants back.
+    if (res.ok) undo.record(cameraId, prop, before, res.body?.applied ?? raw);
     return res;
   };
+
+  /** Applies a set of raw values without recording them as new history. */
+  async function applyWithoutHistory(cameraId, values) {
+    undo.suspended = true;
+    try {
+      const results = [];
+      for (const [prop, raw] of Object.entries(values)) {
+        const res = await applyFn(cameraId, prop, raw);
+        results.push({ prop, ok: !!res.ok, value: raw, error: res.ok ? null : res.body?.error });
+      }
+      return results;
+    } finally {
+      undo.suspended = false;
+    }
+  }
 
   /**
    * The single path every camera action takes, from every surface.
@@ -255,6 +284,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       alarmsByCamera: byCamera(alarms),
       alarmSummary: summarise(alarms),
       roll: rollState(view.cameras),
+      undo: undo.summary(),
     };
   }
 
@@ -320,6 +350,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         state.applyConnectionState(ev);
         log.info('camera', `${ev.cameraId} ${before ?? '?'} -> ${ev.state}` +
           (ev.detail ? ` (${ev.detail})` : ''));
+        // Undo history does not survive an outage. The values a camera held
+        // before it dropped are not somewhere it can be put back to — it may
+        // have been power-cycled since — and offering to undo to them would be
+        // offering to write a stale number to a body that never had it.
+        if (ev.state !== 'connected') undo.forget(ev.cameraId);
         // A camera that just came back needs its full property set refetched;
         // camd republishes changes, but we want the complete picture immediately.
         if (ev.state === 'connected') await refreshProperties(ev.cameraId);
@@ -416,6 +451,56 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // --- take log ---
       if (path === '/api/takes' && req.method === 'GET') {
         return sendJson(res, 200, takeReport(state.takes));
+      }
+
+      // --- undo ---
+      // Reverses the last property change on one camera. The write is made with
+      // history suspended, so undo cannot become a toggle between two values.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/undo$/);
+      if (m && req.method === 'POST') {
+        const cameraId = decodeURIComponent(m[1]);
+        const entry = undo.popLast(cameraId);
+        if (!entry) {
+          return sendJson(res, 200, { ok: true, cameraId, undone: null,
+            detail: 'nothing to undo on this camera' });
+        }
+        const [result] = await applyWithoutHistory(cameraId, { [entry.prop]: entry.from });
+        if (result.ok) await refreshProperties(cameraId);
+        log.info('undo', `${cameraId} ${entry.prop} ${entry.to} -> ${entry.from}` +
+          (result.ok ? '' : ` FAILED: ${result.error}`));
+        return sendJson(res, result.ok ? 200 : 502, {
+          ok: result.ok, cameraId, undone: entry, error: result.error,
+        });
+      }
+
+      // Undoes the last recall *and everything done since* — the answer to
+      // "wrong scene, put it back".
+      //
+      // The mark is dropped before the recall applies anything, so what comes
+      // back is the state from before it, not the state the recall produced.
+      // The response says "undid", never "reverted to": the first reading of
+      // "reverted to scene Interview" is the opposite of what this does.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/revert$/);
+      if (m && req.method === 'POST') {
+        const cameraId = decodeURIComponent(m[1]);
+        const found = undo.popToMark(cameraId);
+        if (!found) {
+          return sendJson(res, 200, { ok: true, cameraId, undid: null,
+            detail: 'no recall to undo on this camera' });
+        }
+        const results = await applyWithoutHistory(cameraId, found.values);
+        if (results.some((r) => r.ok)) await refreshProperties(cameraId);
+        const n = Object.keys(found.values).length;
+        log.info('undo', `${cameraId} undid ${found.mark.label} and everything since ` +
+          `(${n} propert${n === 1 ? 'y' : 'ies'} restored)`);
+        return sendJson(res, 200, {
+          ok: results.every((r) => r.ok),
+          cameraId,
+          undid: found.mark.label,
+          detail: `undid ${found.mark.label} and everything since it`,
+          restored: n,
+          results,
+        });
       }
 
       // Dismiss a dropped-record alarm once it has been seen. Nothing else
@@ -616,6 +701,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (req.method === 'DELETE') return sendJson(res, 200, presets.deletePreset(cameraId, name));
         if (req.method === 'POST') {
           const body = await readBody(req);
+          undo.mark(cameraId, `preset "${name}"`);
           const r = await presets.recallPreset(cameraId, name, applyFn, {
             transitionMs: Number(body?.transitionMs) || 0,
             only: Array.isArray(body?.only) && body.only.length ? body.only : null,
@@ -633,6 +719,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (req.method === 'DELETE') return sendJson(res, 200, presets.deleteScene(name));
         if (req.method === 'POST') {
           const body = await readBody(req);
+          // A mark on every camera, not just the ones the scene names — the
+          // operator reverts "the scene", and a camera left out of the mark
+          // would be the one that stays wrong.
+          for (const cam of state.list()) undo.mark(cam.id, `scene "${name}"`);
           const r = await presets.recallScene(name, applyFn, {
             transitionMs: Number(body?.transitionMs) || 0,
             only: Array.isArray(body?.only) && body.only.length ? body.only : null,
@@ -668,6 +758,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const targets = body?.targets?.length
           ? body.targets
           : state.list().filter((c) => c.id !== referenceId && c.state === 'connected').map((c) => c.id);
+        const reference = state.get(referenceId);
+        for (const id of targets) {
+          undo.mark(id, `match to ${reference?.label ?? referenceId}`);
+        }
         const r = await matchFrom(state, referenceId, targets, body?.props, applyFn, log);
         await refreshAllProperties();
         return sendJson(res, r.ok ? 200 : 409, r);
