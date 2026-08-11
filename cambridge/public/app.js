@@ -2,6 +2,7 @@ import { createGamepadControl } from './gamepad.js';
 import {
   histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
   drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
+  containRect, pointToImage,
 } from './scopes.js';
 
 // CamBridge control panel.
@@ -166,7 +167,7 @@ function toast(message, kind = 'ok', ttl = 5000) {
 
 let redirectingToLogin = false;
 
-async function api(method, path, body) {
+async function api(method, path, body, { quiet = false } = {}) {
   const res = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -191,14 +192,78 @@ async function api(method, path, body) {
   // 403 is different: the session is fine, the action needs admin. Say which,
   // and stay where we are — bouncing to a login the operator would pass would
   // teach them nothing about why it did not work.
-  if (!res.ok) toast(data?.error ?? `${method} ${path} failed (${res.status})`, 'bad', 9000);
-  return data ?? {};
+  // `quiet` is for callers that explain the failure better themselves. Without
+  // it they get two toasts: the raw daemon string and their own sentence.
+  if (!res.ok && !quiet) toast(data?.error ?? `${method} ${path} failed (${res.status})`, 'bad', 9000);
+  // Deliberately NOT named `ok`. Several endpoints return {ok:false} in the
+  // body with HTTP 200 to report a partial result — record-all with one camera
+  // refusing is the live example — so overwriting `ok` with the transport's
+  // view would report that as a clean success.
+  return { ...(data ?? {}), httpOk: res.ok, httpStatus: res.status };
 }
 
 const setProp = (id, prop, value) =>
   api('PUT', `/api/cameras/${encodeURIComponent(id)}/properties/${prop}`, { value });
 const doAction = (id, action, body) =>
   api('POST', `/api/cameras/${encodeURIComponent(id)}/actions/${action}`, body);
+
+/** Cameras already known to refuse a focus point, so we explain once, not per tap. */
+const noPointFocus = new Set();
+
+/**
+ * Tap-to-focus, with an honest answer when the body will not take a point.
+ *
+ * Some bodies do not expose an AF area position over the SDK at all — an FX30
+ * on the rig answered "afAreaPositionAFS is not supported by this body". Left
+ * alone that surfaced as a raw daemon string on every single tap, which reads
+ * as a broken feature rather than an unsupported one.
+ *
+ * Plain autofocus does work on those bodies, so the fallback is offered rather
+ * than merely apologised for — and offered, not performed, because AF on the
+ * camera's own area is a different thing from focusing where someone pointed,
+ * and doing it unasked would be quietly wrong.
+ */
+async function tapFocus(cam, point) {
+  if (noPointFocus.has(cam.id)) {
+    toast(`${cam.label} cannot focus on a point — use AF`, 'warn', 4000);
+    return;
+  }
+
+  const res = await api('POST',
+    `/api/cameras/${encodeURIComponent(cam.id)}/actions/tapFocus`, point, { quiet: true });
+  if (res.httpOk) return;
+
+  if (res.reason === 'afAreaUnsupported') {
+    // Remember, so the next twenty taps during a take do not each repeat it.
+    noPointFocus.add(cam.id);
+    toastAction(
+      `${cam.label} does not accept a focus point. Its autofocus still works.`,
+      'Focus with AF',
+      () => doAction(cam.id, 'autofocus'));
+    return;
+  }
+  if (res.reason === 'afAreaRefused') {
+    toastAction(
+      `${cam.label} refused a focus point in its current mode — check Focus Area on the body.`,
+      'Focus with AF',
+      () => doAction(cam.id, 'autofocus'));
+    return;
+  }
+  toast(res.error ?? 'Tap to focus failed', 'bad', 8000);
+}
+
+/** A toast with one button on it. */
+function toastAction(message, label, onClick) {
+  const t = el('div', { class: 'toast warn' });
+  add(t, el('span', { text: message }));
+  add(t, el('button', {
+    class: 'small ghost',
+    text: label,
+    onclick: () => { t.remove(); onClick(); },
+  }));
+  $('#toasts').append(t);
+  setTimeout(() => t.remove(), 12_000);
+}
 
 // --- controls ---------------------------------------------------------------
 
@@ -682,16 +747,30 @@ function feedTile(cam) {
 
     // Tap-to-focus. Coordinates go up normalised, so the browser never needs to
     // know anything about the camera's AF grid.
+    //
+    // Measured against the picture, not the element. The canvas fills the tile
+    // but `object-fit: contain` letterboxes the frame inside it, so the element
+    // rect includes bars the camera knows nothing about. Using it meant every
+    // tap on a feed whose shape differs from the 16:9 tile landed somewhere
+    // else — invisible against the fake backend's 16:9 test card, which is the
+    // one ratio where the two rects coincide.
     img.addEventListener('click', async (e) => {
       const r = img.getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width;
-      const y = (e.clientY - r.top) / r.height;
+      const point = pointToImage(
+        e.clientX - r.left, e.clientY - r.top, r.width, r.height,
+        img.width, img.height);
+
+      // A tap on a letterbox bar is not a request to focus at the edge of
+      // frame. Do nothing rather than send a coordinate nobody pointed at.
+      if (!point) return;
+
+      const box = containRect(r.width, r.height, img.width, img.height);
       const mark = el('div', { class: 'tapmark' });
-      mark.style.left = `${e.clientX - r.left}px`;
-      mark.style.top = `${e.clientY - r.top}px`;
+      mark.style.left = `${box.x + point.x * box.w}px`;
+      mark.style.top = `${box.y + point.y * box.h}px`;
       tile.append(mark);
       setTimeout(() => mark.remove(), 1100);
-      await doAction(cam.id, 'tapFocus', { x, y });
+      await tapFocus(cam, point);
     });
     tile.append(img, fallback);
   } else {

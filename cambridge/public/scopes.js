@@ -145,6 +145,51 @@ export function averageColour(rgba, width, height, region = { x: 0.4, y: 0.4, w:
   return { r: r / n, g: g / n, b: b / n, n };
 }
 
+/**
+ * Where the picture actually sits inside a `object-fit: contain` element.
+ *
+ * The feed canvas is stretched to fill its tile, but `contain` scales the
+ * *bitmap* to fit while preserving aspect ratio, so unless the two ratios match
+ * exactly there are bars down the sides or along the top and bottom. The
+ * element's bounding rect covers the bars; the picture does not.
+ *
+ * Getting this wrong is invisible rather than loud, which is how it survived:
+ * the fake backend's test card is 160x90, exactly the 16:9 of the tile, and
+ * that is the one ratio where the element rect and the image rect are the same
+ * thing. A real 4:3 live view is pillarboxed and every tap is offset and
+ * scaled.
+ *
+ * @returns {{x:number,y:number,w:number,h:number,scale:number}} in element space
+ */
+export function containRect(elementW, elementH, imageW, imageH) {
+  if (!(elementW > 0 && elementH > 0 && imageW > 0 && imageH > 0)) {
+    return { x: 0, y: 0, w: 0, h: 0, scale: 0 };
+  }
+  const scale = Math.min(elementW / imageW, elementH / imageH);
+  const w = imageW * scale;
+  const h = imageH * scale;
+  return { x: (elementW - w) / 2, y: (elementH - h) / 2, w, h, scale };
+}
+
+/**
+ * A click in element space to normalised image coordinates.
+ *
+ * Returns null for a click that landed on a letterbox bar. That is deliberate
+ * and is not the same as clamping to the edge: tapping the black band beside
+ * the picture is not a request to focus at the extreme edge of frame, and
+ * silently treating it as one puts focus somewhere nobody pointed at.
+ *
+ * @returns {{x:number,y:number}|null} each 0..1 within the picture
+ */
+export function pointToImage(offsetX, offsetY, elementW, elementH, imageW, imageH) {
+  const r = containRect(elementW, elementH, imageW, imageH);
+  if (r.w <= 0 || r.h <= 0) return null;
+  const x = (offsetX - r.x) / r.w;
+  const y = (offsetY - r.y) / r.h;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+  return { x, y };
+}
+
 // --- drawing ---------------------------------------------------------------
 
 /** Histogram in a corner of the tile: small, unlabelled, read at a glance. */

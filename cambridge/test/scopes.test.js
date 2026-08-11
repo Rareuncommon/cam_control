@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   luma, histogram, clipStats, markClipping, applyFalseColour,
   buildFalseColourLut, averageColour, FALSE_COLOUR_BANDS,
+  containRect, pointToImage,
 } from '../public/scopes.js';
 
 /** A flat frame of one colour, `n` pixels. */
@@ -173,4 +174,73 @@ test('a region outside the frame returns nothing rather than reading garbage', (
   const data = flat(128, 128, 128, 4);
   const out = averageColour(data, 4, 1, { x: 2, y: 2, w: 0.5, h: 0.5 });
   assert.equal(out.n, 0);
+});
+
+// --- tap-to-focus coordinate mapping ----------------------------------------
+//
+// The bug these pin: the click handler measured the canvas *element* rect while
+// `object-fit: contain` letterboxes the picture inside it. It went unnoticed
+// because the fake backend's test card is 160x90 — exactly the tile's 16:9, the
+// single ratio where element and image rects coincide. Every case below is one
+// the fake feed cannot produce.
+
+test('a 16:9 image in a 16:9 tile fills it with no bars', () => {
+  const r = containRect(1600, 900, 160, 90);
+  assert.equal(r.x, 0);
+  assert.equal(r.y, 0);
+  assert.equal(r.w, 1600);
+  assert.equal(r.h, 900);
+});
+
+test('a 4:3 image in a 16:9 tile is pillarboxed', () => {
+  // The real case: Sony live view is not 16:9.
+  const r = containRect(1600, 900, 640, 480);
+  assert.equal(r.h, 900, 'height fills');
+  assert.equal(r.w, 1200, 'width is short of the tile');
+  assert.equal(r.x, 200, 'bars of 200px each side');
+  assert.equal(r.y, 0);
+});
+
+test('a wider-than-tile image is letterboxed top and bottom', () => {
+  const r = containRect(1600, 900, 2390, 1000);
+  assert.equal(r.w, 1600);
+  assert.ok(r.h < 900);
+  assert.equal(r.x, 0);
+  assert.ok(r.y > 0);
+});
+
+test('the centre of a pillarboxed picture maps to the centre of frame', () => {
+  const p = pointToImage(800, 450, 1600, 900, 640, 480);
+  assert.equal(p.x, 0.5);
+  assert.equal(p.y, 0.5);
+});
+
+test('the picture edges map to 0 and 1, not the tile edges', () => {
+  // With 200px bars, image x=0 is at element x=200. Measuring against the
+  // element would have called that 0.125 and put focus an eighth of the way in.
+  assert.equal(pointToImage(200, 0, 1600, 900, 640, 480).x, 0);
+  assert.equal(pointToImage(1400, 900, 1600, 900, 640, 480).x, 1);
+});
+
+test('a tap on a letterbox bar is refused, not clamped to the edge', () => {
+  // Clamping would focus at the extreme edge of frame — somewhere nobody
+  // pointed at — and look like the tap worked.
+  assert.equal(pointToImage(100, 450, 1600, 900, 640, 480), null, 'left bar');
+  assert.equal(pointToImage(1500, 450, 1600, 900, 640, 480), null, 'right bar');
+  assert.equal(pointToImage(800, 10, 1600, 900, 2390, 1000), null, 'top bar');
+});
+
+test('the old element-rect maths really did disagree, and by how much', () => {
+  // Guards the fix by pinning the size of the error: a tap a quarter across a
+  // pillarboxed tile is a third of the way into the picture, not a quarter.
+  const naive = 400 / 1600;
+  const correct = pointToImage(400, 450, 1600, 900, 640, 480).x;
+  assert.equal(naive, 0.25);
+  assert.ok(Math.abs(correct - naive) > 0.08, 'the two must not agree');
+  assert.ok(Math.abs(correct - 1 / 6) < 1e-9);
+});
+
+test('a canvas with no frame yet yields nothing rather than dividing by zero', () => {
+  assert.equal(pointToImage(10, 10, 1600, 900, 0, 0), null);
+  assert.deepEqual(containRect(0, 0, 640, 480), { x: 0, y: 0, w: 0, h: 0, scale: 0 });
 });

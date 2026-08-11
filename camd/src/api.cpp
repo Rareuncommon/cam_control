@@ -28,9 +28,19 @@ struct Outcome {
 void applyOutcome(const std::shared_ptr<Outcome>& out, http::Response& res) {
     if (out->ok) {
         res.json(out->status ? out->status : 200, out->body.dump());
-    } else {
-        res.error(out->status ? out->status : 500, out->error);
+        return;
     }
+    // A failing handler may still have something structured to say — a reason
+    // code the caller can branch on rather than matching the sentence, which
+    // gets reworded. Send both when there is one; fall back to the plain error
+    // shape otherwise, which is what every existing caller expects.
+    if (out->body.isObject()) {
+        json::Value v = std::move(out->body);
+        v.set("error", json::Value(out->error));
+        res.json(out->status ? out->status : 500, v.dump());
+        return;
+    }
+    res.error(out->status ? out->status : 500, out->error);
 }
 
 }  // namespace
@@ -159,6 +169,67 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             out->body = json::Value::makeObject();
             out->body.set("cameraId", json::Value(std::string{}));
             out->body.set("properties", propertyMapJson(props));
+        }, timeoutMs);
+
+        if (!completed) {
+            res.error(504, "camera did not respond within " + std::to_string(timeoutMs) + "ms");
+            return;
+        }
+        if (out->ok) out->body.set("cameraId", json::Value(req.param("id")));
+        applyOutcome(out, res);
+    });
+
+    // Diagnostic: every property the camera announces, named or not.
+    //
+    // Registered unconditionally, unlike the /debug routes, because a
+    // diagnostic that only runs against the fake backend answers nothing about
+    // a real body. It is read-only, takes no arguments and exposes no
+    // credentials — the camera's own property codes and values, and nothing
+    // else. Written for the tap-to-focus case, where a body replied "property
+    // afAreaPositionAFS is not supported" and there was no way to tell an
+    // absent property from an unmapped one.
+    server.route("GET", "/cameras/:id/properties/raw",
+                 [this, timeoutMs](const http::Request& req, http::Response& res) {
+        auto w = registry_.find(req.param("id"));
+        if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
+
+        auto out = std::make_shared<Outcome>();
+        const bool completed = w->run([out](CameraSession* s) {
+            if (!s) {
+                out->status = 503;
+                out->error = "camera not connected";
+                return;
+            }
+            std::vector<PropertyDescriptor> descriptors;
+            std::string err;
+            if (!s->describeProperties(descriptors, err)) {
+                out->status = 502;
+                out->error = err;
+                return;
+            }
+            json::Value arr = json::Value::makeArray();
+            for (const auto& d : descriptors) {
+                char hex[16];
+                std::snprintf(hex, sizeof(hex), "0x%04X", d.code);
+                json::Value v = json::Value::makeObject();
+                v.set("code", json::Value(std::string(hex)));
+                // Empty name is the interesting case: the camera offers it and
+                // camd does not model it.
+                v.set("name", json::Value(d.name));
+                v.set("mapped", json::Value(!d.name.empty()));
+                v.set("current", json::Value(d.current));
+                v.set("writable", json::Value(d.writable));
+                v.set("enableFlag", json::Value(static_cast<std::int64_t>(d.enableFlag)));
+                v.set("dataType", json::Value(static_cast<std::int64_t>(d.dataType)));
+                v.set("elementCount",
+                      json::Value(static_cast<std::int64_t>(d.elementCount)));
+                arr.push(std::move(v));
+            }
+            out->ok = true;
+            out->status = 200;
+            out->body = json::Value::makeObject();
+            out->body.set("count", json::Value(static_cast<std::int64_t>(descriptors.size())));
+            out->body.set("properties", std::move(arr));
         }, timeoutMs);
 
         if (!completed) {
@@ -325,10 +396,24 @@ void Api::install(http::Server& server, const std::string& wsPath) {
                 // Which property applies depends on the focus mode in use, so try
                 // the continuous one first and fall back to single-shot.
                 std::int64_t applied = packed;
-                if (!s->setProperty(prop::kAfAreaPositionC, packed, applied, err) &&
+                std::string errC;
+                if (!s->setProperty(prop::kAfAreaPositionC, packed, applied, errC) &&
                     !s->setProperty(prop::kAfAreaPositionS, packed, applied, err)) {
                     out->status = 502;
                     out->error = "camera would not accept an AF area position: " + err;
+                    // A reason code as well as the sentence, so the panel can
+                    // explain this without matching on prose that will be
+                    // reworded. Absent and refused are different problems:
+                    // absent means this body does not do point focus at all,
+                    // refused means it might in another mode.
+                    const bool absent =
+                        errC.find("not supported") != std::string::npos ||
+                        errC.find("unknown property") != std::string::npos;
+                    out->body = json::Value::makeObject();
+                    out->body.set("reason",
+                                  json::Value(std::string(absent ? "afAreaUnsupported"
+                                                                 : "afAreaRefused")));
+                    out->body.set("detail", json::Value(errC));
                     return;
                 }
                 std::string aferr;

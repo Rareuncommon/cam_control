@@ -589,6 +589,19 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       // --- take log ---
+      // --- raw property dump (diagnostic) ---
+      // Proxied straight through from camd. Operator-level rather than admin:
+      // it is read-only, carries no credentials, and it is the one call that
+      // answers "why won't this camera accept X" — putting it behind the admin
+      // PIN would add friction to exactly the moment someone needs it.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/raw$/);
+      if (m && req.method === 'GET') {
+        const cameraId = decodeURIComponent(m[1]);
+        const r = await camd.request(
+          'GET', `/cameras/${encodeURIComponent(cameraId)}/properties/raw`);
+        return sendJson(res, r.ok ? 200 : (r.status || 502), r.body ?? { error: 'no answer from camd' });
+      }
+
       if (path === '/api/takes' && req.method === 'GET') {
         return sendJson(res, 200, takeReport(state.takes));
       }

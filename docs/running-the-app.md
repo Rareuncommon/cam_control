@@ -122,6 +122,30 @@ Live feeds from every connected camera.
 - Each feed has **AF**, a **record** button and **Enlarge**.
 - A camera that is not streaming shows the reason rather than a black rectangle.
 
+The tap is measured against the **picture**, not the tile. A live view that is
+not 16:9 sits letterboxed inside the tile with black bars, and tapping a bar
+does nothing at all — it is not a request to focus at the extreme edge of frame,
+and treating it as one would put focus somewhere nobody pointed.
+
+#### If tapping does not focus
+
+Not every body accepts a focus point over the SDK. Where it does not, the panel
+says so once and offers **Focus with AF** instead of repeating a daemon error on
+every tap — plain autofocus works on those cameras, it just uses the camera's
+own AF area rather than the spot you touched.
+
+To find out what a particular body does and does not offer:
+
+```sh
+curl -s localhost:8088/api/cameras/<id>/properties/raw | python3 -m json.tool
+```
+
+That lists **every** property the camera announces, including the ones CamBridge
+has no name for — `"mapped": false` marks those. It is the answer to "why won't
+this camera accept X", because the ordinary property list is filtered down to
+what CamBridge models and so cannot distinguish a property the body lacks from
+one CamBridge simply never asks about.
+
 Feeds are polled a frame at a time rather than streamed as MJPEG. MJPEG in an
 `<img>` is rendered by Chrome and Firefox and **not by Safari**, which simply
 fires an error — so on a Mac, where the panel opens in whatever the default
