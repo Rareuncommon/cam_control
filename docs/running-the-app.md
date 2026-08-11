@@ -137,14 +137,21 @@ own AF area rather than the spot you touched.
 To find out what a particular body does and does not offer:
 
 ```sh
-curl -s localhost:8088/api/cameras/<id>/properties/raw | python3 -m json.tool
+./scripts/focus-report.sh
 ```
 
-That lists **every** property the camera announces, including the ones CamBridge
-has no name for — `"mapped": false` marks those. It is the answer to "why won't
-this camera accept X", because the ordinary property list is filtered down to
-what CamBridge models and so cannot distinguish a property the body lacks from
-one CamBridge simply never asks about.
+No arguments — it finds the port and the camera ids itself. Add `--full` for
+every property as JSON, or `--out report.txt` to write it to a file.
+
+It lists **every** property each camera announces, including the ones CamBridge
+has no name for. That matters because the ordinary property list is filtered
+down to what CamBridge models, so a property the body genuinely lacks and one
+CamBridge simply never asks about look identical — and only the unfiltered list
+tells them apart.
+
+Run it once with Focus Area set to **Wide** on the camera and again with it on
+**Flexible Spot**. If an AF area property appears only in the second, tapping
+can be made to work by switching Focus Area automatically.
 
 Feeds are polled a frame at a time rather than streamed as MJPEG. MJPEG in an
 `<img>` is rendered by Chrome and Firefox and **not by Safari**, which simply
