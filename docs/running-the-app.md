@@ -258,6 +258,31 @@ You can also rehearse a camera dropping out:
 curl -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
 ```
 
+## Handing the project to someone else
+
+`docs/handoff.md` is the project state written to be read cold — architecture,
+the decisions that are load-bearing, what is verified on hardware versus only
+against the fake backend, and the open questions with their next steps.
+
+To export a whole Claude Code session alongside it:
+
+```sh
+./scripts/export-session.sh
+```
+
+That writes `session-export/` containing the handoff brief, the conversation as
+Markdown, the raw session as JSONL for running code over, and any screenshots.
+It finds the transcript itself — nothing to paste.
+
+**It redacts by default**: home paths, the operator's login name (learned from
+the transcript rather than guessed), the studio's VLAN addresses and email
+addresses. `--no-redact` keeps them; `--extra "Some Client"` adds a string of
+your own. Exports are git-ignored — they hold the entire conversation.
+
+One caveat it will tell you about: a session that was compacted keeps its
+earlier half only as a summary. The export labels that section rather than
+splicing it in as though it were conversation.
+
 ## When something is wrong
 
 Logs live in `logs/`:

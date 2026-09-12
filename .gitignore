@@ -60,3 +60,8 @@ config/*.bak
 # curl cookie jars left by manual API testing. These hold a live session id.
 .cookies
 *.cookies
+
+# Session exports. They contain the whole conversation and any screenshots in
+# it; useful to produce, never something to commit.
+session-export/
+*.session-export/
