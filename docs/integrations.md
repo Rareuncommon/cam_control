@@ -111,6 +111,85 @@ worked but the tally blocks were not what we expect — that is the case to repo
 
 ---
 
+## ATEM Link — drive Sony cameras from a Blackmagic panel
+
+Turns the switcher's camera control into Sony property writes, so a hardware
+shading panel — or the Camera page in ATEM Software Control — moves iris, gain,
+white balance, shutter and focus on the FX3 and FX30s.
+
+**Still switcher-to-camera only.** CamBridge does not gain the ability to send
+the switcher anything; the read-only guarantee above is unchanged.
+
+Every write goes through the same path as one made in the browser, so a move
+made on the panel is logged, gang-aware and undoable.
+
+### Set it up in two passes, not one
+
+The Blackmagic *payload* format is published and is what the mapping below is
+built on. The way an ATEM *wraps* it in its own packets is community
+reverse-engineering, and has not been confirmed against real hardware here. So
+Link ships off, and there is a capture mode for confirming it in one sitting.
+
+**Pass one — look.**
+
+```json
+"atem": { "enabled": true, "host": "172.16.16.10",
+          "mapping": { "cam1": 1, "cam2": 2, "cam3": 3 },
+          "link": false, "logRaw": true }
+```
+
+Restart, then move **one control at a time** on the panel and watch
+`cambridge.log`:
+
+```
+INFO [atem-link] CCdP dest=2 0.3 type=128 values=[0.62]  raw: 02 00 03 00 80 00 00 01 04 f6
+```
+
+Check three things: `dest` matches the input you moved, the `category.parameter`
+matches the control (the table below), and `values` moves the way the control
+does. If they line up, the layout is right. If they do not, that log line is
+exactly what is needed to correct `WRAPPER` in `cambridge/src/atem-cc.js` — one
+line of offsets, not a rewrite.
+
+**Pass two — switch it on.** Set `"link": true` and leave `logRaw` off.
+
+### What maps
+
+| Panel control | Blackmagic id | Sony |
+|---|---|---|
+| Iris | 0.3 aperture, normalised | `fNumber` |
+| Focus | 0.0 | `focusPosition` |
+| Auto focus | 0.1 | AF trigger |
+| Zoom | 0.8 | `zoomPosition` |
+| White balance | 1.2 kelvin + tint | `colorTemp`, `wbTint` |
+| Shutter | 1.5 exposure µs | `shutterSpeed` |
+| Gain | 1.13 dB | `isoSensitivity` |
+| ISO | 1.14 | `isoSensitivity` |
+
+Iris walks the body's own aperture list by position rather than being scaled
+arithmetically. Blackmagic's normalised aperture is linear in aperture *area*,
+so a straight conversion would make the top of the panel's travel do almost
+nothing and the bottom jump several stops. Walking the list keeps one detent on
+the panel worth one step on the camera.
+
+**Colour correction wheels are deliberately not mapped.** Blackmagic's model is
+a lift/gamma/gain wheel per channel; Sony's Creative Look is a handful of scalar
+trims. There is no faithful conversion, and an approximate one would shift the
+look of a camera that is on air in a way nobody asked for. Turning those wheels
+logs a reason at debug level rather than doing nothing silently.
+
+Relative adjustments are refused for the same reason: the panel's idea of a step
+is not the camera's.
+
+### If a control does nothing
+
+Run at `"level": "debug"` and look for `atem-link` lines. Each says which camera
+and which control, and why it was ignored — "iris is not writable, it is
+probably on Auto" is the common one, and is fixed on the camera with
+**Set Manual** in the panel, not here.
+
+---
+
 ## VISCA
 
 Lets a hardware joystick, a controller panel, or Companion's generic VISCA

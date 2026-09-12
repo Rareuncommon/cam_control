@@ -538,3 +538,87 @@ TEST(an_sdk_error_does_not_tear_down_a_healthy_session) {
     }
     CHECK_EQ(sawNotConnected, 0);
 }
+
+TEST(card_remaining_is_reported_as_a_number_not_only_as_prose) {
+    // The media alarm cannot exist without this. `status.media` has always been a
+    // display string ("SLOT1 840s remaining"), and no threshold can read prose.
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+
+    auto w = rig.registry->find("cam1");
+    CHECK(waitFor([w] { return w->snapshot().status.mediaSlot1Sec > 0; }, 3000));
+
+    // Slot 2 stays -1 until its SDK property is confirmed to exist. The Node
+    // layer has to treat that as "not reported" rather than "zero seconds left",
+    // so the daemon must actually emit -1 rather than quietly omitting it.
+    CHECK_EQ(w->snapshot().status.mediaSlot2Sec, static_cast<std::int64_t>(-1));
+}
+
+TEST(a_card_can_be_forced_near_full_to_rehearse_the_alarm) {
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+    auto w = rig.registry->find("cam1");
+    CHECK(waitFor([w] { return w->snapshot().status.mediaSlot1Sec > 0; }, 3000));
+
+    fakeBackendSetMediaRemaining("AA:BB:CC:00:00:01", 45);
+    CHECK(waitFor([w] { return w->snapshot().status.mediaSlot1Sec == 45; }, 3000));
+
+    // Forcing one camera's card must not touch another's — an alarm that fires on
+    // every camera at once tells the operator nothing about which one to change.
+    auto other = rig.registry->find("cam2");
+    CHECK(other->snapshot().status.mediaSlot1Sec > 45);
+}
+
+TEST(the_raw_dump_reports_properties_camd_has_no_name_for) {
+    // The whole reason this endpoint exists. getProperties() filters to camd's
+    // own surface, so a body that answers "property X is not supported" looks
+    // the same whether the code is absent, offered only in another camera mode,
+    // or simply one camd never asks about. The dump has to show the unmapped
+    // ones or it answers nothing.
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+    auto w = rig.registry->find("cam1");
+
+    auto found = std::make_shared<std::vector<PropertyDescriptor>>();
+    CHECK(w->run([found](CameraSession* s) {
+        std::string err;
+        if (s) s->describeProperties(*found, err);
+    }, 2000));
+
+    CHECK(!found->empty());
+
+    int named = 0;
+    int unnamed = 0;
+    for (const auto& d : *found) {
+        if (d.name.empty()) ++unnamed;
+        else ++named;
+    }
+    CHECK(named > 0);
+    CHECK(unnamed > 0);
+}
+
+TEST(a_body_without_an_af_area_property_refuses_tap_to_focus) {
+    // cam3 stands in for the FX30 on the rig, which answered "afAreaPositionAFS
+    // is not supported by this body". Without a fake that refuses, the panel's
+    // explanation and its autofocus fallback cannot be exercised here at all.
+    Rig rig;
+    CHECK(rig.waitConnected("cam3"));
+    auto w = rig.registry->find("cam3");
+
+    auto props = std::make_shared<PropertyMap>();
+    CHECK(w->run([props](CameraSession* s) {
+        std::string err;
+        if (s) s->getProperties(*props, err);
+    }, 2000));
+    CHECK(props->count(prop::kAfAreaPositionC) == 0);
+
+    // And a camera that does have it still does, or the working path has no
+    // coverage either.
+    CHECK(rig.waitConnected("cam1"));
+    auto ok = std::make_shared<PropertyMap>();
+    CHECK(rig.registry->find("cam1")->run([ok](CameraSession* s) {
+        std::string err;
+        if (s) s->getProperties(*ok, err);
+    }, 2000));
+    CHECK(ok->count(prop::kAfAreaPositionC) == 1);
+}

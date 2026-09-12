@@ -22,6 +22,9 @@
     <button data-view="setup">Setup</button>
   </nav>
   <span id="camd-pill" class="pill">connecting…</span>
+  <!-- "3 of 3 rolling" — the question asked most often during a shoot, and
+       until now answerable only by reading three separate record buttons. -->
+  <span id="roll-pill" class="pill" style="display:none"></span>
   <span class="spacer"></span>
   <button id="pad-open" class="small ghost" style="display:none" title="Gamepad control">🎮</button>
   <button id="advanced-toggle" class="small ghost" title="Keep every camera's extra controls open">More controls</button>
@@ -89,6 +92,15 @@
         </div>
       </div>
 
+      <div>
+        <h3>Take log — what actually rolled</h3>
+        <div class="line">
+          <button class="small" id="takes-refresh">Show takes</button>
+          <span class="note">Every take, which cameras got it, and any that stopped on their own.</span>
+        </div>
+        <table class="list" id="takes-table" style="margin-top:9px"></table>
+      </div>
+
       <div class="note" id="focus-note"></div>
     </div>
   </details>
@@ -98,8 +110,55 @@
 <section class="view" id="view-multiview">
   <div class="line" style="padding:12px 12px 0">
     <button class="small" id="mv-refresh">Restart feeds</button>
+
+    <!-- Exposure view. One at a time: false colour replaces the picture and
+         clipping marks overlay it, so showing both means seeing neither.
+         Label and select are wrapped together so a wrap never strands a label
+         above someone else's control. -->
+    <span class="field">
+      <label class="note" for="scope-mode">Exposure</label>
+      <select id="scope-mode">
+        <option value="off">Normal picture</option>
+        <option value="false">False colour</option>
+        <option value="clip">Mark clipping</option>
+      </select>
+    </span>
+
+    <!-- Everything below can be on at once: they are drawn over the picture
+         rather than replacing it. -->
+    <div class="chips" id="guide-chips">
+      <div class="chip" data-guide="histogram">Histogram</div>
+      <div class="chip" data-guide="clipReadout">Clip %</div>
+      <div class="chip" data-guide="thirds">Thirds</div>
+      <div class="chip" data-guide="centre">Centre</div>
+      <div class="chip" data-guide="safe">Safe area</div>
+    </div>
+
+    <span class="field">
+      <label class="note" for="matte">Matte</label>
+      <select id="matte">
+        <option value="off">none</option>
+        <option value="16:9">16:9</option>
+        <option value="2.39">2.39:1</option>
+      </select>
+    </span>
+
+    <button class="small ghost" id="scope-key" title="What the false-colour bands mean">Key</button>
     <span class="note">Tap a picture to focus there. Live view must be enabled on the camera.</span>
   </div>
+
+  <dialog id="scope-key-dialog">
+    <h3>False colour</h3>
+    <p class="note">
+      Each band is a range of brightness. The wide pink band is where a correctly
+      exposed face sits on these bodies — "make the face pink" is the usable
+      version of this on set.
+    </p>
+    <table class="list" id="scope-key-table" style="margin-top:12px"></table>
+    <div class="line" style="margin-top:14px;justify-content:flex-end">
+      <button id="scope-key-close" class="ghost">Close</button>
+    </div>
+  </dialog>
   <main id="mvgrid"></main>
 </section>
 
@@ -110,6 +169,35 @@
     <div class="sub" id="discover-hint"></div>
     <table class="list" id="discovered-table"></table>
   </div>
+  <div class="card">
+    <h3>Who can control the cameras</h3>
+    <div class="sub" id="auth-state"></div>
+    <div class="formgrid" style="margin-top:12px">
+      <label for="pin-role">PIN for</label>
+      <select id="pin-role">
+        <option value="operator">Operators — everything during a shoot</option>
+        <option value="admin">Admin — also add, remove and re-credential cameras</option>
+      </select>
+      <label for="pin-value">New PIN</label>
+      <input type="password" id="pin-value" inputmode="numeric" autocomplete="new-password"
+             placeholder="at least four characters">
+    </div>
+    <div class="line" style="margin-top:12px">
+      <button class="small primary" id="pin-save">Set PIN</button>
+      <button class="small ghost" id="sign-out">Sign out</button>
+      <span class="note" id="pin-msg"></span>
+    </div>
+    <p class="note" style="margin:12px 0 0">
+      Operators can drive every camera. Admin is needed for the things that
+      outlast a shoot: adding or forgetting a camera, changing its stored
+      password, and quitting CamBridge.
+    </p>
+    <p class="note" style="margin:6px 0 0">
+      Bitfocus Companion and other machine clients use a token from the config
+      file instead of a PIN, because they cannot answer a prompt.
+    </p>
+  </div>
+
   <div class="card">
     <h3>Added cameras</h3>
     <div class="sub">These are saved and reconnect on their own. Removing one does not change the camera itself.</div>

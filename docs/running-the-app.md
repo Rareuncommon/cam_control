@@ -122,15 +122,125 @@ Live feeds from every connected camera.
 - Each feed has **AF**, a **record** button and **Enlarge**.
 - A camera that is not streaming shows the reason rather than a black rectangle.
 
+The tap is measured against the **picture**, not the tile. A live view that is
+not 16:9 sits letterboxed inside the tile with black bars, and tapping a bar
+does nothing at all — it is not a request to focus at the extreme edge of frame,
+and treating it as one would put focus somewhere nobody pointed.
+
+#### If tapping does not focus
+
+Not every body accepts a focus point over the SDK. Where it does not, the panel
+says so once and offers **Focus with AF** instead of repeating a daemon error on
+every tap — plain autofocus works on those cameras, it just uses the camera's
+own AF area rather than the spot you touched.
+
+To find out what a particular body does and does not offer:
+
+```sh
+./scripts/focus-report.sh
+```
+
+No arguments — it finds the port and the camera ids itself. Add `--full` for
+every property as JSON, or `--out report.txt` to write it to a file.
+
+It lists **every** property each camera announces, including the ones CamBridge
+has no name for. That matters because the ordinary property list is filtered
+down to what CamBridge models, so a property the body genuinely lacks and one
+CamBridge simply never asks about look identical — and only the unfiltered list
+tells them apart.
+
+Run it once with Focus Area set to **Wide** on the camera and again with it on
+**Flexible Spot**. If an AF area property appears only in the second, tapping
+can be made to work by switching Focus Area automatically.
+
 Feeds are polled a frame at a time rather than streamed as MJPEG. MJPEG in an
 `<img>` is rendered by Chrome and Firefox and **not by Safari**, which simply
 fires an error — so on a Mac, where the panel opens in whatever the default
 browser is, the feeds were black while single frames worked perfectly. Polling
 costs a little more and works everywhere.
 
+#### Monitoring assists
+
+Frames are decoded into a canvas, so the panel can read the pixels. Everything
+below is computed in the browser from frames it already has — the cameras are
+not asked for anything extra, and none of it touches the daemon.
+
+**Exposure** replaces or marks the picture, one mode at a time:
+
+| Mode | What it does |
+|---|---|
+| Normal picture | the feed as the camera sends it |
+| False colour | every pixel replaced by the band its brightness falls in |
+| Mark clipping | blown highlights go red, crushed blacks go blue, the rest is left alone |
+
+*Mark clipping* is the one you can leave on during a take, because the picture
+stays recognisable. *False colour* is for setting up.
+
+Press **Key** for what the false-colour bands mean. The one worth memorising is
+the wide pink band: that is where a correctly exposed face sits on these bodies,
+so **"make the face pink"** is the usable version of this on set.
+
+The chips can all be on at once, because they draw over the picture rather than
+replacing it:
+
+- **Histogram** — brightness distribution, top right of each feed. The red edge
+  is clipping, the blue edge is crush.
+- **Clip %** — how much of the frame is blown or crushed. It appears only when
+  there is something to report; a permanent "0.0%" is a thing people stop
+  reading.
+- **Thirds**, **Centre**, **Safe area** — framing guides. Safe area is the 90%
+  action-safe box.
+
+**Matte** shows the frame as it will be delivered — 16:9 or 2.39:1 — with the
+part you are going to lose dimmed rather than outlined, because a thin line does
+not tell you what is being cropped.
+
+All of it is remembered per browser, so a booth iPad comes back the way it was
+left.
+
 ### Setup
 
-Adoption, as above.
+Adoption, as above — plus who is allowed to do it.
+
+#### Who can control the cameras
+
+Out of the box there is **no PIN**, and the panel says so on every screen:
+anyone who can reach the address has full control and can read the cameras'
+stored passwords. That is the default because locking the panel as a side
+effect of an upgrade — on a shoot day, with nobody knowing the PIN — would be
+worse than the exposure. It is not a good permanent state.
+
+Set a PIN in **Setup → Who can control the cameras**. There are two levels:
+
+| | Can do |
+|---|---|
+| **Operator** | everything that affects the shoot in progress: exposure, record, focus, presets, scenes, match, undo |
+| **Admin** | all of that, plus what outlasts the shoot: adding and forgetting cameras, changing a stored password, quitting CamBridge |
+
+Set the operator PIN first if you only want one level — with no admin PIN
+configured, one PIN means one level of access, and the split starts the moment
+you add an admin PIN.
+
+Sessions last sixteen hours, so nobody signs in twice in a day.
+
+#### Companion, scripts and anything that is not a person
+
+Machine clients cannot answer a PIN prompt, so they use a token instead. Add one
+to the config:
+
+```json
+"auth": {
+  "tokens": { "a-long-random-string": "operator" }
+}
+```
+
+and have the client send it as `Authorization: Bearer a-long-random-string`.
+Give it `operator` unless it genuinely needs to adopt cameras. Tokens are as
+sensitive as the PIN — anyone holding one can drive the cameras.
+
+Every action is logged with who took it: a PIN session as `operator` or
+`admin`, a token by a short fingerprint that identifies it without disclosing
+it. Read `cambridge.log` to see who changed what.
 
 ## Trying it without cameras
 
@@ -147,6 +257,31 @@ You can also rehearse a camera dropping out:
 ```sh
 curl -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
 ```
+
+## Handing the project to someone else
+
+`docs/handoff.md` is the project state written to be read cold — architecture,
+the decisions that are load-bearing, what is verified on hardware versus only
+against the fake backend, and the open questions with their next steps.
+
+To export a whole Claude Code session alongside it:
+
+```sh
+./scripts/export-session.sh
+```
+
+That writes `session-export/` containing the handoff brief, the conversation as
+Markdown, the raw session as JSONL for running code over, and any screenshots.
+It finds the transcript itself — nothing to paste.
+
+**It redacts by default**: home paths, the operator's login name (learned from
+the transcript rather than guessed), the studio's VLAN addresses and email
+addresses. `--no-redact` keeps them; `--extra "Some Client"` adds a string of
+your own. Exports are git-ignored — they hold the entire conversation.
+
+One caveat it will tell you about: a session that was compacted keeps its
+earlier half only as a summary. The export labels that section rather than
+splicing it in as though it were conversation.
 
 ## When something is wrong
 

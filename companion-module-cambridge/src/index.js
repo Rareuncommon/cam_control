@@ -26,6 +26,10 @@ class CambridgeInstance extends InstanceBase {
     this.scenes = [];
     this.presetsByCamera = {};
     this.groups = {};
+    this.alarms = [];
+    this.alarmsByCamera = {};
+    this.alarmSummary = null;
+    this.roll = null;
     /** Signature of the last definition rebuild, so we only rebuild when it matters. */
     this.definitionSignature = '';
   }
@@ -92,8 +96,20 @@ class CambridgeInstance extends InstanceBase {
 
   // --- state ---------------------------------------------------------------
 
-  /** Public rather than #private so tests can drive it with a real state frame. */
-  applyState(view) {
+  /**
+   * Public rather than #private so tests can drive it with a real state frame.
+   *
+   * Takes the whole envelope, not just the view: alarms are evaluated by
+   * CamBridge and travel with the state they were derived from, so a Stream
+   * Deck key showing a card warning and the panel banner can never disagree.
+   */
+  applyState(frame) {
+    const view = frame?.view ?? frame ?? {};
+    this.alarms = frame?.alarms ?? [];
+    this.alarmsByCamera = frame?.alarmsByCamera ?? {};
+    this.alarmSummary = frame?.alarmSummary ?? null;
+    this.roll = frame?.roll ?? null;
+
     this.camdConnected = !!view.camdConnected;
     const incoming = view.cameras ?? [];
 
@@ -112,7 +128,12 @@ class CambridgeInstance extends InstanceBase {
       this.rebuildDefinitions();
     }
 
-    this.setVariableValues(buildVariableValues(this.cameras, { camdConnected: this.camdConnected }));
+    this.setVariableValues(buildVariableValues(this.cameras, {
+      camdConnected: this.camdConnected,
+      alarmsByCamera: this.alarmsByCamera,
+      alarms: this.alarms,
+      roll: this.roll,
+    }));
     this.checkFeedbacks();
   }
 

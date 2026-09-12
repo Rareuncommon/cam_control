@@ -16,10 +16,14 @@ import { CamdClient } from './camd-client.js';
 import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
-import { Presets, Gangs, matchFrom, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
+import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId } from './adopt.js';
 import { AtemTally, tallyForCameras } from './atem.js';
+import { decodeCCdP, toCameraWrites, cameraForDestination, WriteCoalescer } from './atem-cc.js';
 import { ViscaServer } from './visca.js';
+import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEFAULT_THRESHOLDS } from './alarms.js';
+import { report as takeReport, rollState } from './takelog.js';
+import { Auth, hashPin } from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -34,8 +38,18 @@ function loadConfig(path) {
     cameras: [],
     // Both off unless the config asks for them: a studio without a switcher or a
     // joystick should not have sockets it never uses listening on the network.
-    atem: { enabled: false, host: '', port: 9910, mapping: {} },
+    // `link` is separate from `enabled` on purpose. Tally is read-only and safe
+    // to leave on; Link writes to cameras from a decoder whose wrapper layout is
+    // not yet confirmed against real hardware, so it is opt-in.
+    atem: { enabled: false, host: '', port: 9910, mapping: {}, link: false, logRaw: false },
     visca: { enabled: false, bind: '0.0.0.0', port: 52381, tcp: true, mapping: {} },
+    // Always on, unlike the integrations above: a studio that has not thought
+    // about thresholds is exactly the one that needs the defaults.
+    alarms: { ...DEFAULT_THRESHOLDS },
+    // No PIN configured means the panel is open, and says so in the UI. Locking
+    // it as a side effect of an upgrade — on a shoot day, with no way in —
+    // would be worse than the exposure it prevents.
+    auth: { operatorPin: null, adminPin: null, tokens: {} },
   };
   if (!existsSync(path)) {
     process.stderr.write(`cambridge: no config at ${path}, using defaults\n`);
@@ -50,6 +64,8 @@ function loadConfig(path) {
       cameras: parsed.cameras ?? [],
       atem: { ...defaults.atem, ...(parsed.atem ?? {}) },
       visca: { ...defaults.visca, ...(parsed.visca ?? {}) },
+      alarms: { ...defaults.alarms, ...(parsed.alarms ?? {}) },
+      auth: { ...defaults.auth, ...(parsed.auth ?? {}) },
     };
   } catch (err) {
     process.stderr.write(`cambridge: config ${path} is not valid JSON: ${err.message}\n`);
@@ -148,17 +164,66 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log);
 
-  /** Injected setter used by presets, gang and match, so all writes are logged. */
+  const undo = new UndoHistory();
+  const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
+  if (!auth.enabled) {
+    log.warn('auth', 'no PIN configured — anyone on this network can control the cameras');
+  }
+
+  /**
+   * Injected setter used by presets, gang and match, so all writes are logged.
+   *
+   * Also the one choke point where undo history is captured. Every surface ends
+   * up here — the panel's property PUT, gang fanout, preset and scene recall,
+   * match, VISCA and the gamepad — so recording here catches all of them, and
+   * recording anywhere else would catch some.
+   */
   const applyFn = async (cameraId, prop, raw) => {
+    const before = state.get(cameraId)?.properties?.[prop]?.value;
     const res = await camd.setProperty(cameraId, prop, raw);
     log.debug('set', `${cameraId} ${prop}=${raw} -> ${res.ok ? 'ok' : res.body?.error}`);
+    // Only successful writes enter the history. A refused write did not change
+    // the camera, so there is nothing to undo, and an entry for it would make
+    // the next undo skip the change the operator actually wants back.
+    if (res.ok) undo.record(cameraId, prop, before, res.body?.applied ?? raw);
     return res;
+  };
+
+  /** Applies a set of raw values without recording them as new history. */
+  async function applyWithoutHistory(cameraId, values) {
+    undo.suspended = true;
+    try {
+      const results = [];
+      for (const [prop, raw] of Object.entries(values)) {
+        const res = await applyFn(cameraId, prop, raw);
+        results.push({ prop, ok: !!res.ok, value: raw, error: res.ok ? null : res.body?.error });
+      }
+      return results;
+    } finally {
+      undo.suspended = false;
+    }
+  }
+
+  /**
+   * The single path every camera action takes, from every surface.
+   *
+   * It exists for record intent. Telling an ordinary stop apart from a camera
+   * giving up requires knowing a stop was asked for, and that has to be recorded
+   * wherever the ask came from — panel, Companion, VISCA joystick or gamepad.
+   * With VISCA calling camd directly this was two paths, and a stop pressed on
+   * the joystick would have been reported as a fault.
+   */
+  const runAction = async (cameraId, action, body) => {
+    if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
+    if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
+    return camd.action(cameraId, action, body);
   };
 
   // --- switcher tally -------------------------------------------------------
   // Read-only, and entirely optional. With no ATEM configured this stays null
   // and every tally indicator simply never lights.
   let atem = null;
+  let atemWrites = null;
   if (cfg.atem.enabled && cfg.atem.host) {
     atem = new AtemTally({
       host: cfg.atem.host,
@@ -178,6 +243,55 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       log.warn('atem', 'switcher connection lost, clearing tally');
       state.applyTally({});
     });
+
+    // --- ATEM Link ---
+    // Camera control broadcast by the switcher, translated into ordinary
+    // property writes. Every write goes through applyFn, so a move made on a
+    // Blackmagic panel is logged, gang-aware and undoable exactly like one made
+    // in the browser.
+    if (cfg.atem.link || cfg.atem.logRaw) {
+      atemWrites = new WriteCoalescer(
+        (cameraId, prop, value) => applyFn(cameraId, prop, value),
+        cfg.atem.coalesceMs ?? 120,
+      );
+
+      atem.on('cameraControl', (body) => {
+        const decoded = decodeCCdP(body);
+
+        // The capture mode. The wrapper layout this decoder assumes is not
+        // confirmed against hardware, so this prints the bytes next to the
+        // interpretation: move one control at a time on the panel and the log
+        // says whether the two agree.
+        if (cfg.atem.logRaw) {
+          log.info('atem-link', decoded.ok
+            ? `CCdP dest=${decoded.destination} ${decoded.category}.${decoded.parameter} `
+              + `type=${decoded.dataType}${decoded.relative ? ' relative' : ''} `
+              + `values=[${decoded.values.join(', ')}]  raw: ${decoded.raw}`
+            : `CCdP undecodable (${decoded.error})  raw: ${decoded.raw}`);
+        }
+        if (!cfg.atem.link || !decoded.ok) return;
+
+        const cameraId = cameraForDestination(cfg.atem.mapping, decoded.destination);
+        if (!cameraId) return;   // an input with no camera behind it
+        const camera = state.get(cameraId);
+        if (!camera || camera.state !== 'connected') return;
+
+        const { writes, skipped } = toCameraWrites(decoded, camera);
+        for (const w of writes) {
+          if (w.action) runAction(cameraId, w.action);
+          else atemWrites.submit(cameraId, w.prop, w.value);
+        }
+        // Logged at debug: an unmapped wheel produces these continuously while
+        // it is turning, and at info it would bury everything else.
+        for (const s of skipped) {
+          log.debug('atem-link', `${cameraId}: ignored ${s.category}.${s.parameter} — ${s.reason}`);
+        }
+      });
+
+      log.info('atem', cfg.atem.link
+        ? 'ATEM Link is ON — the switcher can drive camera exposure'
+        : 'ATEM Link capture mode: logging camera control without acting on it');
+    }
   }
 
   // --- VISCA -----------------------------------------------------------------
@@ -189,7 +303,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     visca = new ViscaServer({
       state,
       applyFn,
-      actionFn: (cameraId, action, actionBody) => camd.action(cameraId, action, actionBody),
+      actionFn: (cameraId, action, actionBody) => runAction(cameraId, action, actionBody),
       recallPreset: (name, cameraId) => presets.recallPreset(cameraId, name, applyFn),
       savePreset: (name, cameraId) => presets.savePreset(cameraId, name),
       mapping: cfg.visca.mapping,
@@ -211,6 +325,55 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     }
   }
 
+  const thresholds = resolveThresholds(cfg.alarms);
+  /** Codes already logged, so a standing alarm is logged once, not every poll. */
+  let loggedAlarms = new Set();
+
+  /**
+   * The full push payload.
+   *
+   * Alarms ride along with state rather than travelling on their own channel:
+   * they are derived entirely from the state in the same message, and splitting
+   * them would let a browser render a banner about a camera whose card reading
+   * it has not received yet.
+   */
+  function buildPush() {
+    const view = state.view();
+    const alarms = evaluateAlarms(view.cameras, thresholds);
+    logNewAlarms(alarms);
+    return {
+      type: 'state',
+      view,
+      alarms,
+      alarmsByCamera: byCamera(alarms),
+      alarmSummary: summarise(alarms),
+      roll: rollState(view.cameras),
+      undo: undo.summary(),
+    };
+  }
+
+  /**
+   * Writes each alarm to the log once, on the edge.
+   *
+   * A draining card produces an alarm on every status poll for as long as it is
+   * low. Logging all of them buries the transition that mattered under hundreds
+   * of identical lines — the same mistake that made the daemon log unreadable
+   * when SDK errors were logged per occurrence.
+   */
+  function logNewAlarms(alarms) {
+    const now = new Set(alarms.map((a) => `${a.cameraId}:${a.code}`));
+    for (const a of alarms) {
+      const key = `${a.cameraId}:${a.code}`;
+      if (loggedAlarms.has(key)) continue;
+      log.write(a.level === 'critical' ? 'error' : 'warn', 'alarm',
+        `${a.label} ${a.message}`);
+    }
+    for (const key of loggedAlarms) {
+      if (!now.has(key)) log.info('alarm', `cleared: ${key}`);
+    }
+    loggedAlarms = now;
+  }
+
   // Coalesce bursts: turning an iris wheel produces a stream of property events,
   // and repainting per event would swamp an iPad over Wi-Fi.
   let pushTimer = null;
@@ -220,13 +383,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Connection transitions are the one thing that must never be delayed —
       // "camera offline" is the message the operator needs instantly. Tally is
       // the same: it has to track the cut, not trail it by a coalescing window.
-      pushToClients({ type: 'state', view: state.view() });
+      pushToClients(buildPush());
       return;
     }
     if (pushTimer) return;
     pushTimer = setTimeout(() => {
       pushTimer = null;
-      pushToClients({ type: 'state', view: state.view() });
+      pushToClients(buildPush());
     }, 60);
   });
 
@@ -251,6 +414,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         state.applyConnectionState(ev);
         log.info('camera', `${ev.cameraId} ${before ?? '?'} -> ${ev.state}` +
           (ev.detail ? ` (${ev.detail})` : ''));
+        // Undo history does not survive an outage. The values a camera held
+        // before it dropped are not somewhere it can be put back to — it may
+        // have been power-cycled since — and offering to undo to them would be
+        // offering to write a stale number to a body that never had it.
+        if (ev.state !== 'connected') undo.forget(ev.cameraId);
         // A camera that just came back needs its full property set refetched;
         // camd republishes changes, but we want the complete picture immediately.
         if (ev.state === 'connected') await refreshProperties(ev.cameraId);
@@ -302,7 +470,81 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
+    // Reused by every path-parameter route below.
+    let m;
+
     try {
+      // --- access control ---
+      // Ahead of every route rather than sprinkled through them, so a route
+      // added later is protected by default instead of protected if remembered.
+      // Static files are served without a check: the login page has to be
+      // reachable to log in, and the panel's own JS is not a secret — every
+      // endpoint it calls is gated here regardless.
+      const gated = path.startsWith('/api/');
+      const who = { role: 'anonymous', label: 'anonymous' };
+      if (gated) {
+        const verdict = auth.authorise(req.method, path, req);
+        Object.assign(who, verdict.who);
+        if (!verdict.allowed) {
+          log.warn('auth', `${verdict.status} ${req.method} ${path} (${verdict.who.label})`);
+          // `authRequired` means "signing in would fix this", so it belongs on
+          // the 401 only. A 403 is a valid session that lacks the role, and
+          // flagging it the same way sends the panel to a login the operator
+          // would pass — teaching them nothing about why it failed.
+          return sendJson(res, verdict.status, {
+            error: verdict.error,
+            ...(verdict.status === 401 ? { authRequired: true } : { needsRole: 'admin' }),
+          });
+        }
+      }
+      /** Prefixes an audit line with who did it. */
+      const actor = () => (who.label && who.label !== 'anonymous' ? `[${who.label}] ` : '');
+
+      // --- auth ---
+      if (path === '/api/auth/state' && req.method === 'GET') {
+        return sendJson(res, 200, { ...auth.state(), you: { role: who.role, label: who.label } });
+      }
+
+      if (path === '/api/auth/login' && req.method === 'POST') {
+        const body = await readBody(req);
+        const result = auth.login(body?.pin ?? '');
+        if (!result.ok) {
+          log.warn('auth', `failed sign-in attempt from ${req.socket?.remoteAddress ?? '?'}`);
+          return sendJson(res, 401, { error: result.error });
+        }
+        if (result.cookie) {
+          res.setHeader('Set-Cookie', Auth.cookieHeader(result.cookie));
+          log.info('auth', `signed in as ${result.role}`);
+        }
+        return sendJson(res, 200, { ok: true, role: result.role, open: !!result.open });
+      }
+
+      if (path === '/api/auth/logout' && req.method === 'POST') {
+        if (who.id) auth.logout(who.id);
+        res.setHeader('Set-Cookie', Auth.clearCookieHeader());
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Setting a PIN is itself an admin action, which is why it is in
+      // ADMIN_ROUTES — except on a panel with no PIN at all, where by
+      // definition nobody could be admin yet and the first person to set one
+      // is how the panel gets protected.
+      if (path === '/api/auth/pin' && req.method === 'POST') {
+        const body = await readBody(req);
+        const role = body?.role === 'admin' ? 'adminPin' : 'operatorPin';
+        const pin = String(body?.pin ?? '');
+        if (pin.length < 4) {
+          return sendJson(res, 400, { error: 'Use at least four characters.' });
+        }
+        const stored = hashPin(pin);
+        auth[role] = stored;
+        const saved = await adoption.saveAuth({ ...cfg.auth, [role]: stored });
+        if (!saved.ok) return sendJson(res, 500, { error: saved.error });
+        cfg.auth[role] = stored;
+        log.info('auth', `${actor()}set the ${role === 'adminPin' ? 'admin' : 'operator'} PIN`);
+        return sendJson(res, 200, { ok: true, ...auth.state() });
+      }
+
       // --- events (SSE) ---
       if (path === '/api/events') {
         res.writeHead(200, {
@@ -310,7 +552,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           'Cache-Control': 'no-store',
           Connection: 'keep-alive',
         });
-        res.write(`data: ${JSON.stringify({ type: 'state', view: state.view() })}\n\n`);
+        res.write(`data: ${JSON.stringify(buildPush())}\n\n`);
         sseClients.add(res);
         // Comment frames keep proxies and sleeping iPads from dropping the stream.
         const keepAlive = setInterval(() => {
@@ -324,8 +566,104 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       // --- state ---
+      // The same envelope the SSE push carries, minus its `type`. One shape for
+      // both paths: the Companion module falls back to polling this when its
+      // stream drops, and a poll that returned less than the stream would make
+      // alarms flicker off every time a network hiccup fell back.
       if (path === '/api/state' && req.method === 'GET') {
-        return sendJson(res, 200, state.view());
+        const { type, ...envelope } = buildPush();
+        return sendJson(res, 200, envelope);
+      }
+
+      // --- alarms ---
+      // Same evaluation the SSE push uses, for anything that polls rather than
+      // subscribes — a monitoring script, or curl at 3am.
+      if (path === '/api/alarms' && req.method === 'GET') {
+        const alarms = evaluateAlarms(state.view().cameras, thresholds);
+        return sendJson(res, 200, {
+          alarms,
+          summary: summarise(alarms),
+          thresholds,
+          roll: rollState(state.list()),
+        });
+      }
+
+      // --- take log ---
+      // --- raw property dump (diagnostic) ---
+      // Proxied straight through from camd. Operator-level rather than admin:
+      // it is read-only, carries no credentials, and it is the one call that
+      // answers "why won't this camera accept X" — putting it behind the admin
+      // PIN would add friction to exactly the moment someone needs it.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/raw$/);
+      if (m && req.method === 'GET') {
+        const cameraId = decodeURIComponent(m[1]);
+        const r = await camd.request(
+          'GET', `/cameras/${encodeURIComponent(cameraId)}/properties/raw`);
+        return sendJson(res, r.ok ? 200 : (r.status || 502), r.body ?? { error: 'no answer from camd' });
+      }
+
+      if (path === '/api/takes' && req.method === 'GET') {
+        return sendJson(res, 200, takeReport(state.takes));
+      }
+
+      // --- undo ---
+      // Reverses the last property change on one camera. The write is made with
+      // history suspended, so undo cannot become a toggle between two values.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/undo$/);
+      if (m && req.method === 'POST') {
+        const cameraId = decodeURIComponent(m[1]);
+        const entry = undo.popLast(cameraId);
+        if (!entry) {
+          return sendJson(res, 200, { ok: true, cameraId, undone: null,
+            detail: 'nothing to undo on this camera' });
+        }
+        const [result] = await applyWithoutHistory(cameraId, { [entry.prop]: entry.from });
+        if (result.ok) await refreshProperties(cameraId);
+        log.info('undo', `${actor()}${cameraId} ${entry.prop} ${entry.to} -> ${entry.from}` +
+          (result.ok ? '' : ` FAILED: ${result.error}`));
+        return sendJson(res, result.ok ? 200 : 502, {
+          ok: result.ok, cameraId, undone: entry, error: result.error,
+        });
+      }
+
+      // Undoes the last recall *and everything done since* — the answer to
+      // "wrong scene, put it back".
+      //
+      // The mark is dropped before the recall applies anything, so what comes
+      // back is the state from before it, not the state the recall produced.
+      // The response says "undid", never "reverted to": the first reading of
+      // "reverted to scene Interview" is the opposite of what this does.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/revert$/);
+      if (m && req.method === 'POST') {
+        const cameraId = decodeURIComponent(m[1]);
+        const found = undo.popToMark(cameraId);
+        if (!found) {
+          return sendJson(res, 200, { ok: true, cameraId, undid: null,
+            detail: 'no recall to undo on this camera' });
+        }
+        const results = await applyWithoutHistory(cameraId, found.values);
+        if (results.some((r) => r.ok)) await refreshProperties(cameraId);
+        const n = Object.keys(found.values).length;
+        log.info('undo', `${actor()}${cameraId} undid ${found.mark.label} and everything since ` +
+          `(${n} propert${n === 1 ? 'y' : 'ies'} restored)`);
+        return sendJson(res, 200, {
+          ok: results.every((r) => r.ok),
+          cameraId,
+          undid: found.mark.label,
+          detail: `undid ${found.mark.label} and everything since it`,
+          restored: n,
+          results,
+        });
+      }
+
+      // Dismiss a dropped-record alarm once it has been seen. Nothing else
+      // clears it: the camera is not going to tell us it was noticed.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/acknowledge$/);
+      if (m && req.method === 'POST') {
+        const cameraId = decodeURIComponent(m[1]);
+        const cleared = state.acknowledgeRecordDrop(cameraId);
+        if (cleared) log.info('alarm', `${actor()}${cameraId} dropped-record alarm acknowledged`);
+        return sendJson(res, 200, { ok: true, cameraId, cleared });
       }
 
       if (path === '/api/health' && req.method === 'GET') {
@@ -417,7 +755,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       // --- property set, with gang fanout ---
-      let m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/([^/]+)$/);
+      m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/([^/]+)$/);
       if (m && req.method === 'PUT') {
         const [, cameraId, prop] = m.map(decodeURIComponent);
         const body = await readBody(req);
@@ -449,8 +787,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'POST') {
         const [, cameraId, action] = m.map(decodeURIComponent);
         const body = await readBody(req);
-        log.info('action', `${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
-        const result = await camd.action(cameraId, action, body ?? undefined);
+        log.info('action', `${actor()}${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
+        const result = await runAction(cameraId, action, body ?? undefined);
         if (result.ok) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
           ok: result.ok, cameraId, action, ...(result.body ?? {}),
@@ -462,9 +800,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const body = await readBody(req);
         const want = body?.start !== false;
         const targets = state.list().filter((c) => c.state === 'connected');
-        log.info('action', `record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
+        log.info('action', `${actor()}record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
         const results = await Promise.all(targets.map(async (cam) => {
-          const r = await camd.action(cam.id, want ? 'recordStart' : 'recordStop');
+          const r = await runAction(cam.id, want ? 'recordStart' : 'recordStop');
           return { cameraId: cam.id, ok: r.ok, ...(r.body ?? {}) };
         }));
         const failed = results.filter((r) => !r.ok);
@@ -492,6 +830,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           // is correct — we did not start it and must not assume we own it.
           camd.stop();
           atem?.stop();
+          atemWrites?.stop();
           await visca?.stop();
           process.exit(0);
         }, 150);
@@ -516,6 +855,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (req.method === 'DELETE') return sendJson(res, 200, presets.deletePreset(cameraId, name));
         if (req.method === 'POST') {
           const body = await readBody(req);
+          undo.mark(cameraId, `preset "${name}"`);
           const r = await presets.recallPreset(cameraId, name, applyFn, {
             transitionMs: Number(body?.transitionMs) || 0,
             only: Array.isArray(body?.only) && body.only.length ? body.only : null,
@@ -533,6 +873,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (req.method === 'DELETE') return sendJson(res, 200, presets.deleteScene(name));
         if (req.method === 'POST') {
           const body = await readBody(req);
+          // A mark on every camera, not just the ones the scene names — the
+          // operator reverts "the scene", and a camera left out of the mark
+          // would be the one that stays wrong.
+          for (const cam of state.list()) undo.mark(cam.id, `scene "${name}"`);
           const r = await presets.recallScene(name, applyFn, {
             transitionMs: Number(body?.transitionMs) || 0,
             only: Array.isArray(body?.only) && body.only.length ? body.only : null,
@@ -568,6 +912,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const targets = body?.targets?.length
           ? body.targets
           : state.list().filter((c) => c.id !== referenceId && c.state === 'connected').map((c) => c.id);
+        const reference = state.get(referenceId);
+        for (const id of targets) {
+          undo.mark(id, `match to ${reference?.label ?? referenceId}`);
+        }
         const r = await matchFrom(state, referenceId, targets, body?.props, applyFn, log);
         await refreshAllProperties();
         return sendJson(res, r.ok ? 200 : 409, r);
@@ -676,6 +1024,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     async stop() {
       camd.stop();
       atem?.stop();
+      atemWrites?.stop();
       await visca?.stop();
       for (const c of sseClients) { try { c.end(); } catch { /* closed */ } }
       sseClients.clear();

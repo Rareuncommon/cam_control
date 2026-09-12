@@ -56,3 +56,12 @@ dist/
 # Atomic config writes leave a .bak alongside the real file. It holds the same
 # camera credentials, so it is ignored for the same reason.
 config/*.bak
+
+# curl cookie jars left by manual API testing. These hold a live session id.
+.cookies
+*.cookies
+
+# Session exports. They contain the whole conversation and any screenshots in
+# it; useful to produce, never something to commit.
+session-export/
+*.session-export/

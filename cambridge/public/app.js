@@ -1,4 +1,9 @@
 import { createGamepadControl } from './gamepad.js';
+import {
+  histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
+  drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
+  containRect, pointToImage,
+} from './scopes.js';
 
 // CamBridge control panel.
 //
@@ -25,6 +30,13 @@ const el = (tag, attrs = {}, ...kids) => {
 const add = (parent, ...kids) => { for (const k of kids) if (k) parent.append(k); return parent; };
 
 let view = { camdConnected: false, cameras: [], backend: '' };
+// Alarms arrive with the state they are derived from, in the same push, so the
+// banner can never describe a camera whose readings have not arrived yet.
+let alarms = [];
+let alarmsByCamera = {};
+let alarmSummary = null;
+let roll = null;
+let undoState = {};
 let meta = { focusNote: '', scenes: [], presets: {}, groups: {} };
 let discovery = { discovered: [], credentialHint: '' };
 let health = {};
@@ -40,13 +52,122 @@ let rampMs = Number(localStorage.getItem('cb.rampMs') ?? 0);
 // week cannot move a camera the moment the panel is opened.
 let padCamera = localStorage.getItem('cb.padCamera') ?? null;
 
+// Monitoring assists. Persisted like the rest of the panel's preferences, so a
+// booth iPad left on false colour comes back on false colour.
+//
+// 'off' | 'false' | 'clip' — one at a time, because false colour replaces the
+// picture and clipping marks overlay it, and showing both means seeing neither.
+let scopeMode = localStorage.getItem('cb.scopeMode') ?? 'off';
+let guides = (() => {
+  const stored = { thirds: false, centre: false, safe: false, matte: 'off',
+                   histogram: false, clipReadout: false };
+  try { return { ...stored, ...JSON.parse(localStorage.getItem('cb.guides') ?? '{}') }; }
+  catch { return stored; }
+})();
+const falseColourLut = buildFalseColourLut();
+
+function saveScopePrefs() {
+  localStorage.setItem('cb.scopeMode', scopeMode);
+  localStorage.setItem('cb.guides', JSON.stringify(guides));
+}
+
+/** Short badge text per alarm code; the full sentence is the tooltip. */
+const ALARM_BADGE = {
+  media: 'CARD',
+  battery: 'BATTERY',
+  recordFailed: 'REC FAILED',
+  recordDropped: 'REC DROPPED',
+};
+
+/** "12:04" — mm:ss, or h:mm:ss once a take passes an hour. */
+function clockDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
+}
+
+/**
+ * Elapsed record time.
+ *
+ * The server sends a start timestamp rather than a running count, and this
+ * ticks locally — pushing a new state once a second for a timer would mean the
+ * whole panel repaints once a second all through a take.
+ */
+function recTimer(cam) {
+  if (!cam.recordStartedAt) return null;
+  const span = el('span', { class: 'rectime' });
+  const text = () => clockDuration((Date.now() - cam.recordStartedAt) / 1000);
+
+  // Set before returning, while the span is still detached. Checking
+  // isConnected first — as the obvious version of this does — sees a node that
+  // the caller has not appended yet, and stops the timer before it ever starts.
+  span.textContent = text();
+
+  const id = setInterval(() => {
+    // Cards are rebuilt on every state push, so the previous span is orphaned.
+    // Stopping here is what keeps a repaint from leaving an interval behind.
+    if (!span.isConnected) { clearInterval(id); return; }
+    span.textContent = text();
+  }, 1000);
+  return span;
+}
+
+/** Undo, showing what it would reverse so it is never a blind press. */
+function undoButton(cam) {
+  const u = undoState[cam.id];
+  if (!u?.last && !u?.hasMark) return null;
+  const wrap = el('span', { class: 'undo' });
+  if (u.last) {
+    add(wrap, el('button', {
+      class: 'small ghost',
+      text: `Undo ${propLabel(u.last.prop)}`,
+      title: `Put ${propLabel(u.last.prop)} back to what it was before the last change`,
+      onclick: () => api('POST', `/api/cameras/${encodeURIComponent(cam.id)}/undo`),
+    }));
+  }
+  if (u.hasMark) {
+    add(wrap, el('button', {
+      class: 'small ghost',
+      text: 'Undo recall',
+      title: 'Undo the last preset or scene recall, and everything changed since',
+      onclick: () => api('POST', `/api/cameras/${encodeURIComponent(cam.id)}/revert`),
+    }));
+  }
+  return wrap;
+}
+
+/** Human name for a property, for the undo button. */
+function propLabel(prop) {
+  return ({
+    fNumber: 'iris', isoSensitivity: 'ISO', shutterSpeed: 'shutter',
+    colorTemp: 'Kelvin', wbTint: 'tint', whiteBalance: 'WB',
+    ndValue: 'ND', focusPosition: 'focus',
+  })[prop] ?? prop;
+}
+
+/** Card remaining, as time rather than the daemon's display string. */
+function mediaChip(st) {
+  const secs = st.mediaSlot1Sec;
+  if (!Number.isFinite(secs) || secs < 0) {
+    // -1 means the camera did not report it. Saying so beats printing "0:00",
+    // which reads as a full card.
+    return el('span', { text: 'card —', title: 'This camera does not report card time' });
+  }
+  return el('span', { text: `card ${clockDuration(secs)}` });
+}
+
 function toast(message, kind = 'ok', ttl = 5000) {
   const t = el('div', { class: `toast ${kind}`, text: message });
   $('#toasts').append(t);
   setTimeout(() => t.remove(), ttl);
 }
 
-async function api(method, path, body) {
+let redirectingToLogin = false;
+
+async function api(method, path, body, { quiet = false } = {}) {
   const res = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -54,15 +175,95 @@ async function api(method, path, body) {
   });
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
-  // Fail loud: the operator must know a command did not land.
-  if (!res.ok) toast(data?.error ?? `${method} ${path} failed (${res.status})`, 'bad', 9000);
-  return data ?? {};
+
+  // A session that expired mid-shoot must land on the sign-in page rather than
+  // toasting "unauthorised" once per control and leaving a dead panel on screen.
+  //
+  // Guarded because location.replace() does not stop requests already in
+  // flight: the panel fires several on load, and without this each one would
+  // call replace() again on its way back.
+  if (res.status === 401 && data?.authRequired) {
+    if (!redirectingToLogin) {
+      redirectingToLogin = true;
+      location.replace('/login.html');
+    }
+    return {};
+  }
+  // 403 is different: the session is fine, the action needs admin. Say which,
+  // and stay where we are — bouncing to a login the operator would pass would
+  // teach them nothing about why it did not work.
+  // `quiet` is for callers that explain the failure better themselves. Without
+  // it they get two toasts: the raw daemon string and their own sentence.
+  if (!res.ok && !quiet) toast(data?.error ?? `${method} ${path} failed (${res.status})`, 'bad', 9000);
+  // Deliberately NOT named `ok`. Several endpoints return {ok:false} in the
+  // body with HTTP 200 to report a partial result — record-all with one camera
+  // refusing is the live example — so overwriting `ok` with the transport's
+  // view would report that as a clean success.
+  return { ...(data ?? {}), httpOk: res.ok, httpStatus: res.status };
 }
 
 const setProp = (id, prop, value) =>
   api('PUT', `/api/cameras/${encodeURIComponent(id)}/properties/${prop}`, { value });
 const doAction = (id, action, body) =>
   api('POST', `/api/cameras/${encodeURIComponent(id)}/actions/${action}`, body);
+
+/** Cameras already known to refuse a focus point, so we explain once, not per tap. */
+const noPointFocus = new Set();
+
+/**
+ * Tap-to-focus, with an honest answer when the body will not take a point.
+ *
+ * Some bodies do not expose an AF area position over the SDK at all — an FX30
+ * on the rig answered "afAreaPositionAFS is not supported by this body". Left
+ * alone that surfaced as a raw daemon string on every single tap, which reads
+ * as a broken feature rather than an unsupported one.
+ *
+ * Plain autofocus does work on those bodies, so the fallback is offered rather
+ * than merely apologised for — and offered, not performed, because AF on the
+ * camera's own area is a different thing from focusing where someone pointed,
+ * and doing it unasked would be quietly wrong.
+ */
+async function tapFocus(cam, point) {
+  if (noPointFocus.has(cam.id)) {
+    toast(`${cam.label} cannot focus on a point — use AF`, 'warn', 4000);
+    return;
+  }
+
+  const res = await api('POST',
+    `/api/cameras/${encodeURIComponent(cam.id)}/actions/tapFocus`, point, { quiet: true });
+  if (res.httpOk) return;
+
+  if (res.reason === 'afAreaUnsupported') {
+    // Remember, so the next twenty taps during a take do not each repeat it.
+    noPointFocus.add(cam.id);
+    toastAction(
+      `${cam.label} does not accept a focus point. Its autofocus still works.`,
+      'Focus with AF',
+      () => doAction(cam.id, 'autofocus'));
+    return;
+  }
+  if (res.reason === 'afAreaRefused') {
+    toastAction(
+      `${cam.label} refused a focus point in its current mode — check Focus Area on the body.`,
+      'Focus with AF',
+      () => doAction(cam.id, 'autofocus'));
+    return;
+  }
+  toast(res.error ?? 'Tap to focus failed', 'bad', 8000);
+}
+
+/** A toast with one button on it. */
+function toastAction(message, label, onClick) {
+  const t = el('div', { class: 'toast warn' });
+  add(t, el('span', { text: message }));
+  add(t, el('button', {
+    class: 'small ghost',
+    text: label,
+    onclick: () => { t.remove(); onClick(); },
+  }));
+  $('#toasts').append(t);
+  setTimeout(() => t.remove(), 12_000);
+}
 
 // --- controls ---------------------------------------------------------------
 
@@ -283,18 +484,32 @@ function cameraCard(cam) {
   add(body, stepper(cam, 'ndValue', 'ND', { coarse: 5 }));
   add(body, stepper(cam, 'colorTemp', 'Kelvin', { coarse: 1 }));
 
-  body.append(el('div', { class: 'btnrow' },
+  const recRow = el('div', { class: 'btnrow' },
     el('button', {
       class: rec ? 'big' : 'danger big',
       onclick: () => doAction(cam.id, rec ? 'recordStop' : 'recordStart'),
-    }, document.createTextNode(rec ? '■ Stop' : '● Record'))));
+    }, document.createTextNode(rec ? '■ Stop' : '● Record')));
+  add(recRow, recTimer(cam), undoButton(cam));
+  body.append(recRow);
 
   const st = cam.status ?? {};
-  body.append(el('div', { class: 'status' },
+  const statusRow = el('div', { class: 'status' });
+  add(statusRow,
     el('span', { text: `Battery ${st.battery >= 0 ? st.battery + '%' : '—'}` }),
-    el('span', { text: st.media || 'media —' }),
+    mediaChip(st),
     cam.properties?.ndDensity ? el('span', { text: cam.properties.ndDensity.label }) : null,
-    failed ? el('span', { class: 'pill bad', text: 'RECORDING FAILED' }) : null));
+    failed ? el('span', { class: 'pill bad', text: 'RECORDING FAILED' }) : null);
+  // Badges rather than another line of prose: at a glance the operator needs to
+  // know which camera, not to read a sentence.
+  for (const a of alarmsByCamera[cam.id] ?? []) {
+    if (a.code === 'offline') continue;   // the card already says so, larger
+    add(statusRow, el('span', {
+      class: `pill ${a.level === 'critical' ? 'bad' : 'warn'}`,
+      text: ALARM_BADGE[a.code] ?? a.code,
+      title: `${a.label} ${a.message}`,
+    }));
+  }
+  body.append(statusRow);
 
   // Everything else, behind a disclosure so the main card stays uncluttered.
   const more = el('details', { class: 'more', open: advanced });
@@ -403,10 +618,26 @@ function stopAllFeeds() {
   feedStops = [];
 }
 
-function startFeed(cam, img, onFailure) {
+/**
+ * Frames are decoded and drawn to a canvas rather than assigned to an <img>.
+ *
+ * The fetch loop, the one-request-in-flight rule and the consecutive-failure
+ * counting below are unchanged — that shape is why the feeds work at all, and
+ * is not something to disturb for a drawing change. What is gone is the object
+ * URL dance: createImageBitmap takes the blob directly, so there is no URL to
+ * create, assign in the right order, and revoke.
+ *
+ * The canvas is what makes scopes possible: once a frame is drawn, the pixels
+ * are readable, and exposure analysis costs no extra traffic because the camera
+ * is only ever asked for what it was already sending.
+ */
+function startFeed(cam, canvas, onFailure) {
   let stopped = false;
-  let objectUrl = null;
   let failures = 0;
+  let frame = 0;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let lastHist = null;
+  let lastClip = null;
 
   const tick = async () => {
     if (stopped) return;
@@ -417,12 +648,13 @@ function startFeed(cam, img, onFailure) {
       const blob = await r.blob();
       if (stopped) return;
       if (blob.size > 0) {
-        const next = URL.createObjectURL(blob);
-        img.src = next;
-        // Revoke the previous frame only after the new one is assigned, or the
-        // browser can be left decoding a URL that no longer exists.
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        objectUrl = next;
+        const bitmap = await createImageBitmap(blob);
+        if (stopped) { bitmap.close(); return; }
+        drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, (h, c) => {
+          lastHist = h; lastClip = c;
+        });
+        bitmap.close();
+        frame += 1;
         failures = 0;
       }
     } catch (err) {
@@ -434,10 +666,55 @@ function startFeed(cam, img, onFailure) {
   };
 
   tick();
-  return () => {
-    stopped = true;
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  };
+  return () => { stopped = true; };
+}
+
+/**
+ * Draws one frame, plus whatever scopes and guides are switched on.
+ *
+ * Scopes are recomputed every SCOPE_EVERY_N frames and the previous result is
+ * redrawn in between. A histogram that updates three times a second is
+ * indistinguishable from one that updates ten times a second to anyone reading
+ * it, and the difference is three full-frame pixel passes per second per
+ * camera on a machine that is also running the shoot.
+ */
+const SCOPE_EVERY_N = 3;
+
+function drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, remember) {
+  if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+  }
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+
+  const wantPixels = scopeMode !== 'off' || guides.histogram || guides.clipReadout;
+  let hist = lastHist;
+  let clip = lastClip;
+
+  if (wantPixels) {
+    const image = ctx.getImageData(0, 0, w, h);
+    if (scopeMode === 'false') {
+      applyFalseColour(image.data, falseColourLut);
+      ctx.putImageData(image, 0, 0);
+    } else if (scopeMode === 'clip') {
+      markClipping(image.data);
+      ctx.putImageData(image, 0, 0);
+    }
+    if (frame % SCOPE_EVERY_N === 0) {
+      hist = guides.histogram ? histogram(image.data) : null;
+      clip = guides.clipReadout ? clipStats(image.data) : null;
+      remember(hist, clip);
+    }
+  }
+
+  drawGuides(ctx, w, h, guides);
+  if (guides.histogram && hist) {
+    drawHistogram(ctx, hist, { x: w - Math.min(150, w * 0.34) - 8, y: 8,
+      w: Math.min(150, w * 0.34), h: Math.min(60, h * 0.22) });
+  }
+  if (guides.clipReadout && clip) drawClipReadout(ctx, clip, { x: 8, y: h - 25 });
 }
 
 function feedTile(cam) {
@@ -446,7 +723,8 @@ function feedTile(cam) {
   const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
 
   if (cam.state === 'connected') {
-    const img = el('img', { alt: `${cam.label} live view`, title: 'Click to focus here' });
+    const img = el('canvas', { class: 'feedcanvas', title: 'Click to focus here',
+      role: 'img', 'aria-label': `${cam.label} live view` });
     const reason = el('div', { class: 'note', text: 'Waiting for the first frame…' });
     const fallback = el('div', { class: 'placeholder' },
       el('div', { text: 'No live view from this camera' }), reason);
@@ -469,16 +747,30 @@ function feedTile(cam) {
 
     // Tap-to-focus. Coordinates go up normalised, so the browser never needs to
     // know anything about the camera's AF grid.
+    //
+    // Measured against the picture, not the element. The canvas fills the tile
+    // but `object-fit: contain` letterboxes the frame inside it, so the element
+    // rect includes bars the camera knows nothing about. Using it meant every
+    // tap on a feed whose shape differs from the 16:9 tile landed somewhere
+    // else — invisible against the fake backend's 16:9 test card, which is the
+    // one ratio where the two rects coincide.
     img.addEventListener('click', async (e) => {
       const r = img.getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width;
-      const y = (e.clientY - r.top) / r.height;
+      const point = pointToImage(
+        e.clientX - r.left, e.clientY - r.top, r.width, r.height,
+        img.width, img.height);
+
+      // A tap on a letterbox bar is not a request to focus at the edge of
+      // frame. Do nothing rather than send a coordinate nobody pointed at.
+      if (!point) return;
+
+      const box = containRect(r.width, r.height, img.width, img.height);
       const mark = el('div', { class: 'tapmark' });
-      mark.style.left = `${e.clientX - r.left}px`;
-      mark.style.top = `${e.clientY - r.top}px`;
+      mark.style.left = `${box.x + point.x * box.w}px`;
+      mark.style.top = `${box.y + point.y * box.h}px`;
       tile.append(mark);
       setTimeout(() => mark.remove(), 1100);
-      await doAction(cam.id, 'tapFocus', { x, y });
+      await tapFocus(cam, point);
     });
     tile.append(img, fallback);
   } else {
@@ -649,25 +941,8 @@ function render() {
   pill.textContent = view.camdConnected ? 'connected' : 'daemon offline';
   pill.className = `pill ${view.camdConnected ? 'ok' : 'bad'}`;
 
-  const banner = $('#banner');
-  const failed = view.cameras.filter((c) => c.status?.recordingFailed);
-  const bad = view.cameras.filter((c) => c.state !== 'connected');
-  if (!view.camdConnected) {
-    // Name the log. The panel being up means cambridge and the config are fine,
-    // so the daemon either failed to start or died — and its own log is the only
-    // place that says which.
-    banner.textContent = 'The camera daemon is not reachable — no control is possible. '
-      + (health.logDir ? `Check ${health.logDir}/camd.stdout.log` : 'Check the camd log.');
-    banner.classList.add('show');
-  } else if (failed.length) {
-    banner.textContent = `RECORDING FAILED on ${failed.map((c) => c.label).join(', ')}`;
-    banner.classList.add('show');
-  } else if (bad.length) {
-    banner.textContent = bad.map((c) => `${c.label}: ${c.state}`).join('   ·   ');
-    banner.classList.add('show');
-  } else {
-    banner.classList.remove('show');
-  }
+  renderBanner();
+  renderRollPill();
 
   const activeKey = document.activeElement?.dataset?.key ?? interacting;
   if (currentView === 'control') renderControl();
@@ -679,6 +954,86 @@ function render() {
     if (restore) restore.focus({ preventScroll: true });
   }
   renderTools();
+}
+
+/**
+ * The banner.
+ *
+ * One line, always the worst thing that is true. It used to hand-roll its own
+ * conditions — recording-failed, then any camera not connected — which the
+ * alarm evaluator now covers along with card, battery and dropped records, so
+ * the banner reads that instead of deciding for itself. The daemon being
+ * unreachable still comes first and separately: with no daemon there is no
+ * state to raise alarms from, and every camera would otherwise be reported
+ * offline individually when the real problem is one process.
+ */
+function renderBanner() {
+  const banner = $('#banner');
+  banner.textContent = '';
+  banner.classList.remove('warn');
+
+  if (!view.camdConnected) {
+    // Name the log. The panel being up means cambridge and the config are fine,
+    // so the daemon either failed to start or died — and its own log is the only
+    // place that says which.
+    banner.textContent = 'The camera daemon is not reachable — no control is possible. '
+      + (health.logDir ? `Check ${health.logDir}/camd.stdout.log` : 'Check the camd log.');
+    banner.classList.add('show');
+    return;
+  }
+
+  // An unprotected panel is worth saying so on every screen, not only in Setup
+  // where someone has to go looking. It ranks below a live alarm: a card about
+  // to fill is this minute's problem and this is this week's.
+  if (!alarmSummary && authState.enabled === false && authState.warning) {
+    add(banner, el('span', { text: `⚠️ ${authState.warning}` }));
+    add(banner, el('button', {
+      class: 'small ghost', text: 'Set a PIN',
+      onclick: () => switchView('setup'),
+    }));
+    banner.classList.add('warn', 'show');
+    return;
+  }
+
+  if (!alarmSummary) { banner.classList.remove('show'); return; }
+
+  add(banner, el('span', { text: alarmSummary.text }));
+  // Only a dropped record can be dismissed, and only because nothing else will
+  // ever clear it — the camera is not going to tell us it was noticed. A card
+  // alarm has no dismiss button on purpose: it goes away when the card does.
+  const dropped = alarms.filter((a) => a.code === 'recordDropped');
+  for (const a of dropped) {
+    add(banner, el('button', {
+      class: 'small ghost',
+      text: `Dismiss ${a.label}`,
+      onclick: () => api('POST', `/api/cameras/${encodeURIComponent(a.cameraId)}/acknowledge`),
+    }));
+  }
+  if (alarmSummary.level !== 'critical') banner.classList.add('warn');
+  banner.classList.add('show');
+}
+
+/**
+ * "3 of 3 rolling" in the top bar.
+ *
+ * The question asked most often during a shoot, and until now answerable only
+ * by reading three separate record buttons. Counts connected cameras only — an
+ * offline body has its own, louder alarm, and folding it in here would turn
+ * "all rolling" into a claim about a camera nobody can see.
+ */
+function renderRollPill() {
+  const pill = $('#roll-pill');
+  if (!pill) return;
+  if (!roll || roll.total === 0 || roll.idle) {
+    pill.style.display = 'none';
+    return;
+  }
+  pill.style.display = '';
+  pill.textContent = `${roll.rolling} of ${roll.total} rolling`;
+  pill.className = `pill ${roll.all ? 'rec' : 'warn'}`;
+  pill.title = roll.all
+    ? 'Every connected camera is recording'
+    : `Not rolling: ${roll.notRolling.map((c) => c.label).join(', ')}`;
 }
 
 function renderTools() {
@@ -732,6 +1087,56 @@ for (const b of document.querySelectorAll('nav.tabs button')) {
   b.addEventListener('click', () => switchView(b.dataset.view));
 }
 $('#mv-refresh').addEventListener('click', renderMultiview);
+
+// --- monitoring assists -----------------------------------------------------
+// None of these restart the feeds. The draw path reads the current settings on
+// every frame, so a toggle takes effect on the next one — switching a guide on
+// mid-take must not blank three pictures for a moment while they reconnect.
+$('#scope-mode').addEventListener('change', (e) => {
+  scopeMode = e.target.value;
+  saveScopePrefs();
+});
+$('#matte').addEventListener('change', (e) => {
+  guides.matte = e.target.value;
+  saveScopePrefs();
+});
+for (const chip of document.querySelectorAll('#guide-chips .chip')) {
+  chip.addEventListener('click', () => {
+    const key = chip.dataset.guide;
+    guides[key] = !guides[key];
+    chip.classList.toggle('on', guides[key]);
+    saveScopePrefs();
+  });
+}
+
+$('#scope-key').addEventListener('click', () => {
+  const table = $('#scope-key-table');
+  table.textContent = '';
+  table.append(el('tr', {}, el('th', { text: '' }), el('th', { text: 'Range' }),
+    el('th', { text: 'Means' })));
+  let from = 0;
+  for (const band of FALSE_COLOUR_BANDS) {
+    const swatch = el('td');
+    swatch.append(el('span', { class: 'swatch' }));
+    swatch.firstChild.style.background = `rgb(${band.colour.join(',')})`;
+    table.append(el('tr', {}, swatch,
+      el('td', { text: `${from}–${band.max}%` }),
+      el('td', { text: band.label })));
+    from = band.max;
+  }
+  $('#scope-key-dialog').showModal();
+});
+$('#scope-key-close').addEventListener('click', () => $('#scope-key-dialog').close());
+
+/** Puts the controls where the stored preferences say they are. */
+function restoreScopeControls() {
+  $('#scope-mode').value = scopeMode;
+  $('#matte').value = guides.matte ?? 'off';
+  for (const chip of document.querySelectorAll('#guide-chips .chip')) {
+    chip.classList.toggle('on', !!guides[chip.dataset.guide]);
+  }
+}
+restoreScopeControls();
 $('#picker-close').addEventListener('click', () => $('#picker').close());
 $('#adopt-cancel').addEventListener('click', () => $('#adopt-dialog').close());
 
@@ -814,6 +1219,75 @@ $('#gang-clear').addEventListener('click', async () => {
   gangSelection.clear();
   toast('Cameras unlinked');
   loadMeta();
+});
+
+// --- access control ---------------------------------------------------------
+
+let authState = { enabled: false, warning: null, you: { role: 'anonymous' } };
+
+async function refreshAuth() {
+  authState = await api('GET', '/api/auth/state');
+  const box = $('#auth-state');
+  if (box) {
+    box.textContent = authState.enabled
+      ? `Protected by PIN. You are signed in as ${authState.you?.role ?? 'unknown'}.`
+      : (authState.warning ?? 'No PIN is set.');
+    box.classList.toggle('bad', !authState.enabled);
+  }
+  renderBanner();
+}
+
+$('#pin-save')?.addEventListener('click', async () => {
+  const pin = $('#pin-value').value;
+  const role = $('#pin-role').value;
+  const res = await api('POST', '/api/auth/pin', { pin, role });
+  if (res.ok) {
+    $('#pin-value').value = '';
+    $('#pin-msg').textContent = `${role === 'admin' ? 'Admin' : 'Operator'} PIN set.`;
+    toast('PIN saved');
+    await refreshAuth();
+  }
+});
+
+$('#sign-out')?.addEventListener('click', async () => {
+  await api('POST', '/api/auth/logout');
+  location.replace('/login.html');
+});
+
+// The take log. Fetched on demand rather than pushed: it is read between
+// setups or after a shoot, not watched, and it grows all day.
+$('#takes-refresh').addEventListener('click', async () => {
+  const data = await api('GET', '/api/takes');
+  const table = $('#takes-table');
+  table.textContent = '';
+  if (!data.takes?.length) {
+    table.append(el('tr', {}, el('td', { class: 'note', text: 'Nothing has been recorded yet.' })));
+    return;
+  }
+  table.append(el('tr', {},
+    el('th', { text: 'Take' }), el('th', { text: 'Started' }),
+    el('th', { text: 'Length' }), el('th', { text: 'Cameras' })));
+
+  for (const t of [...data.takes].reverse()) {
+    const cams = el('td');
+    for (const c of t.cameras) {
+      add(cams, el('span', {
+        class: c.outcome === 'ok' || c.outcome === 'rolling' ? 'pill ok' : 'pill bad',
+        text: c.label,
+        title: c.outcomeText,
+      }));
+    }
+    // A camera that was in other takes but not this one is the column worth
+    // having: it separates "missed take four" from "never rolled all day".
+    for (const mcam of t.missing) {
+      add(cams, el('span', { class: 'pill warn', text: mcam.label, title: 'did not roll on this take' }));
+    }
+    table.append(el('tr', {},
+      el('td', { text: String(t.take) }),
+      el('td', { text: new Date(t.startedAt).toLocaleTimeString() }),
+      el('td', { text: t.duration }),
+      cams));
+  }
 });
 
 $('#adopt-confirm').addEventListener('click', async () => {
@@ -989,6 +1463,11 @@ function connectEvents() {
         msg.view.cameras.length !== view.cameras.length ||
         msg.view.cameras.some((c, i) => c.id !== view.cameras[i]?.id || c.state !== view.cameras[i]?.state);
       view = msg.view;
+      alarms = msg.alarms ?? [];
+      alarmsByCamera = msg.alarmsByCamera ?? {};
+      alarmSummary = msg.alarmSummary ?? null;
+      roll = msg.roll ?? null;
+      undoState = msg.undo ?? {};
       render();
       if (currentView === 'multiview' && changed) renderMultiview();
     } catch { /* ignore malformed frame */ }
@@ -1000,5 +1479,6 @@ function connectEvents() {
 }
 
 loadMeta();
+refreshAuth();
 connectEvents();
 setInterval(() => { if (currentView === 'setup') refreshSetup(); }, 5000);

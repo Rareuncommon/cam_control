@@ -46,6 +46,28 @@ struct PropertyValue {
 
 using PropertyMap = std::map<std::string, PropertyValue>;
 
+// One property exactly as the camera announced it, named or not.
+//
+// PropertyMap above is keyed by camd's own names, which means anything the
+// camera reports that camd has no name for never appears — it is dropped in
+// getProperties(). That is right for the control surface and wrong for
+// diagnosis: when a body answers "property X is not supported", there is no way
+// to tell whether the code is genuinely absent, only present in some other
+// camera mode, or simply spelled differently from the one we asked for.
+//
+// This is the shape that answers that. It carries the raw code so an unmapped
+// property can be identified against Sony's headers, and `name` is empty for
+// anything camd does not model.
+struct PropertyDescriptor {
+    std::uint32_t code = 0;
+    std::string name;         // camd's name, or empty when unmapped
+    std::int64_t current = 0;
+    int enableFlag = 0;       // raw CrPropertyEnableFlag, not interpreted here
+    bool writable = false;
+    int dataType = 0;         // raw CrDataType
+    std::size_t elementCount = 0;
+};
+
 // Raw CrMovie_Recording_State values. Named here so the daemon can reason about
 // record safety without the SDK header; kept in sync deliberately.
 enum : std::int64_t {
@@ -59,8 +81,23 @@ enum : std::int64_t {
 struct CameraStatus {
     int batteryPercent = -1;         // -1 when the camera does not report it
     std::int64_t recordingState = kRecordingUnknown;
-    std::string media;               // free-form, as reported
+    std::string media;               // free-form, for display only
     bool mediaPresent = false;
+
+    // Recording time left, in seconds, per card slot. -1 means "not reported".
+    //
+    // `media` above is a human-readable string and always has been, which is
+    // fine for a label and useless for a threshold: nothing can alarm on
+    // "SLOT1 840s remaining" without parsing prose back into a number. These
+    // carry the same figure as data so the Node layer can warn before a card
+    // fills rather than after.
+    //
+    // Slot 2 stays -1 until the SDK property for it is confirmed to exist in
+    // the 2.02.00 headers — see the grep in docs/phases-6.md. Both FX3 and
+    // FX30 have two slots, so it is worth having; guessing the property name
+    // is not.
+    std::int64_t mediaSlot1Sec = -1;
+    std::int64_t mediaSlot2Sec = -1;
 };
 
 // What discovery found on the network.
@@ -91,6 +128,16 @@ public:
     virtual ~CameraSession() = default;
 
     virtual bool getProperties(PropertyMap& out, std::string& err) = 0;
+
+    // Every property the camera announces, including ones camd has no name for.
+    //
+    // Diagnostic only — nothing in the control path reads this. It exists
+    // because getProperties() filters to camd's own surface, so a body that
+    // reports fifty properties looks like it reports the twenty we happen to
+    // name, and "not supported by this body" cannot be distinguished from
+    // "not mapped in camd" or "not offered in this camera mode".
+    virtual bool describeProperties(std::vector<PropertyDescriptor>& out,
+                                    std::string& err) = 0;
     // `applied` receives what the camera actually took, which is often a nearby
     // legal step rather than the requested value — or unchanged, if refused.
     virtual bool setProperty(const std::string& name, std::int64_t value,
@@ -144,5 +191,9 @@ std::unique_ptr<Backend> makeFakeBackend(std::vector<DiscoveredCamera> present);
 // Fake-backend hook: simulate pulling one camera's Ethernet. This is how the
 // Phase 2 kill-test behaviour is exercised without walking to a tripod.
 void fakeBackendSetLinkDown(const std::string& mac, bool down);
+
+// Fake-backend hook: force a camera's card-remaining, in seconds, so the media
+// alarm can be rehearsed. Takes effect on that camera's next status poll.
+void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds);
 
 }  // namespace camd

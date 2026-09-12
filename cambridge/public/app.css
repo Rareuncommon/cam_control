@@ -65,8 +65,30 @@ button.small   { min-height: 34px; padding: 5px 10px; font-size: 13px; }
 button.ghost   { background: transparent; }
 button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 
-#banner { display: none; padding: 11px 16px; background: var(--bad); color: #fff; font-weight: 700; }
-#banner.show { display: block; }
+#banner {
+  display: none; padding: 11px 16px; background: var(--bad); color: #fff; font-weight: 700;
+  align-items: center; gap: 12px;
+}
+#banner.show { display: flex; }
+/* A warning is not an emergency. Using the same red for a card with twelve
+   minutes left as for a camera that stopped recording teaches people to read
+   past both. */
+#banner.warn { background: var(--warn); color: #1a1200; }
+#banner button { background: rgba(0,0,0,.22); border-color: rgba(255,255,255,.35); color: inherit; }
+#banner button:hover { border-color: currentColor; }
+
+/* Recording, and every connected camera is. Loud enough to be read across a
+   booth without being the alarm red. */
+.pill.rec { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 700; }
+
+/* Scoped to .btnrow so these beat its `> *` stretch rule, which appears later
+   in the file and would otherwise win on source order and spread the timer
+   across the row. */
+.btnrow > .rectime {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums; font-weight: 700;
+  color: var(--rec); align-self: center; padding: 0 4px; min-width: 52px; text-align: right;
+}
+.btnrow > .undo { display: flex; gap: 6px; flex: 0 0 auto; }
 
 .view { display: none; }
 .view.active { display: block; }
@@ -147,6 +169,13 @@ input[type=range] { accent-color: var(--accent); min-height: 34px; }
 .btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
 .btnrow > * { flex: 1 1 auto; }
 .line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* A label bound to its control. `select` is width:100% by design for the form
+   grids, which in a flex toolbar makes every dropdown claim its own row and
+   strand its label above a different control. Pairing them and sizing to
+   content is what keeps the multiview toolbar on one line. */
+.field { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.field select { width: auto; min-width: 8.5em; }
 .status { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
 .note { font-size: 12px; color: var(--dim); }
 .note.warnnote { color: var(--warn); }
@@ -177,7 +206,12 @@ details.more .inner { display: flex; flex-direction: column; gap: 9px; padding-b
 .feed.recording { border-color: var(--rec); box-shadow: 0 0 0 2px var(--rec) inset; }
 .feed.pgm { border-color: var(--pgm); box-shadow: 0 0 0 3px var(--pgm) inset; }
 .feed.pvw { border-color: var(--pvw); box-shadow: 0 0 0 2px var(--pvw) inset; }
-.feed img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: crosshair; }
+/* The feed is a <canvas> so scopes can read the pixels; object-fit works on it
+   exactly as it did on the <img> it replaced. */
+.feed img,
+.feed canvas.feedcanvas {
+  width: 100%; height: 100%; object-fit: contain; display: block; cursor: crosshair;
+}
 .feed .overlay {
   position: absolute; left: 0; right: 0; top: 0; padding: 8px 10px;
   display: flex; align-items: center; gap: 8px; pointer-events: none;
@@ -211,6 +245,9 @@ table.list th {
 }
 table.list td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 table.list tr:last-child td { border-bottom: none; }
+/* Pills in a cell — the take log's camera column — need their own spacing;
+   inline-block siblings otherwise butt together into one unreadable run. */
+table.list td > .pill { margin: 2px 4px 2px 0; display: inline-block; }
 .formgrid { display: grid; grid-template-columns: 140px 1fr; gap: 9px; align-items: center; max-width: 580px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
@@ -219,6 +256,12 @@ table.list tr:last-child td { border-bottom: none; }
   cursor: pointer; font-size: 13px; font-weight: 600; user-select: none;
 }
 .chip.on { background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: var(--accent); }
+
+/* False-colour key swatch. */
+.swatch {
+  display: inline-block; width: 26px; height: 14px; border-radius: 3px;
+  border: 1px solid var(--line); vertical-align: middle;
+}
 
 /* --- tools drawer on the control tab --- */
 details.tools {

@@ -105,6 +105,71 @@ export function buildFeedbacks(self) {
       callback: () => !self.camdConnected,
     },
 
+    // --- shoot alarms ---
+    // Evaluated by CamBridge and shipped with the state, so a Stream Deck key
+    // and the panel banner cannot disagree about whether a card is nearly full.
+
+    cameraAlarm: {
+      name: 'Camera has an alarm (card, battery, dropped record)',
+      type: 'boolean',
+      defaultStyle: { bgcolor: RED, color: WHITE },
+      options: [
+        cameraField(),
+        {
+          type: 'dropdown', id: 'level', label: 'At least', default: 'warn',
+          choices: [
+            { id: 'warn', label: 'Warning or worse' },
+            { id: 'critical', label: 'Critical only' },
+          ],
+        },
+        {
+          type: 'dropdown', id: 'code', label: 'Of kind', default: 'any',
+          choices: [
+            { id: 'any', label: 'Any alarm' },
+            { id: 'media', label: 'Card running out' },
+            { id: 'battery', label: 'Battery low' },
+            { id: 'recordDropped', label: 'Stopped recording on its own' },
+            { id: 'recordFailed', label: 'Recording failed' },
+            { id: 'offline', label: 'Offline' },
+          ],
+        },
+      ],
+      callback: (fb) => {
+        const list = self.alarmsByCamera?.[fb.options.camera] ?? [];
+        return list.some((a) =>
+          (fb.options.code === 'any' || a.code === fb.options.code)
+          && (fb.options.level !== 'critical' || a.level === 'critical'));
+      },
+    },
+
+    anyAlarm: {
+      name: 'Any camera has an alarm',
+      type: 'boolean',
+      defaultStyle: { bgcolor: RED, color: WHITE },
+      options: [
+        {
+          type: 'dropdown', id: 'level', label: 'At least', default: 'critical',
+          choices: [
+            { id: 'warn', label: 'Warning or worse' },
+            { id: 'critical', label: 'Critical only' },
+          ],
+        },
+      ],
+      callback: (fb) => (self.alarms ?? []).some(
+        (a) => fb.options.level !== 'critical' || a.level === 'critical'),
+    },
+
+    partiallyRolling: {
+      name: 'Some but not all cameras are rolling',
+      // The state nobody wants and everybody has been in: two cameras rolling,
+      // one not, and no way to see it without checking each button. Amber
+      // because red already means recording.
+      type: 'boolean',
+      defaultStyle: { bgcolor: AMBER, color: BLACK },
+      options: [],
+      callback: () => !!self.roll?.some,
+    },
+
     propValue: {
       name: 'Exposure value is / above / below',
       type: 'boolean',

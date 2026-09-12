@@ -165,6 +165,147 @@ export async function applyValues(camera, values, applyFn, opts = {}) {
   return results;
 }
 
+// --- undo -------------------------------------------------------------------
+
+/**
+ * Per-camera history of property writes, so a mis-tap on a live camera is
+ * recoverable by something other than memory.
+ *
+ * Two things make this less trivial than a stack of writes:
+ *
+ * **Ramps.** A two-second scene recall sends about twenty writes per property.
+ * Recording each one would fill the history with intermediate steps and make
+ * undo step back a single ramp increment — useless. Writes to the same property
+ * inside `coalesceMs` therefore fold into one entry that keeps the *original*
+ * `from` and tracks the latest `to`.
+ *
+ * **Undo is itself a write.** Recording it would push a new entry whose undo is
+ * the original change, and the button would toggle between two values forever.
+ * The server suspends recording around an undo; `suspended` is that switch.
+ */
+export class UndoHistory {
+  constructor({ limit = 50, coalesceMs = 1500 } = {}) {
+    this.limit = limit;
+    this.coalesceMs = coalesceMs;
+    this.suspended = false;
+    /** @type {Map<string, object[]>} cameraId -> entries, oldest first */
+    this.entries = new Map();
+  }
+
+  #listFor(cameraId) {
+    if (!this.entries.has(cameraId)) this.entries.set(cameraId, []);
+    return this.entries.get(cameraId);
+  }
+
+  /**
+   * Records one write. `from` may be null or undefined when the previous value
+   * was not known — those entries are kept out of the history entirely rather
+   * than stored as an undo that would write null to a camera.
+   */
+  record(cameraId, prop, from, to, at = Date.now()) {
+    if (this.suspended) return null;
+    if (from === null || from === undefined) return null;
+    if (from === to) return null;
+
+    const list = this.#listFor(cameraId);
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i];
+      if (e.kind === 'mark') break;          // never fold across a mark
+      if (e.prop !== prop) continue;
+      if (at - e.at > this.coalesceMs) break;
+      e.to = to;
+      e.at = at;
+      return e;
+    }
+
+    const entry = { kind: 'write', prop, from, to, at };
+    list.push(entry);
+    while (list.length > this.limit) list.shift();
+    return entry;
+  }
+
+  /**
+   * Drops a marker, so "put this camera back to before the scene recall" is
+   * answerable. Recall drops one before it applies anything.
+   */
+  mark(cameraId, label, at = Date.now()) {
+    const list = this.#listFor(cameraId);
+    const entry = { kind: 'mark', label, at };
+    list.push(entry);
+    while (list.length > this.limit) list.shift();
+    return entry;
+  }
+
+  /** Removes and returns the newest write, or null. Marks are stepped over. */
+  popLast(cameraId) {
+    const list = this.entries.get(cameraId);
+    if (!list) return null;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].kind !== 'write') continue;
+      return list.splice(i, 1)[0];
+    }
+    return null;
+  }
+
+  /**
+   * Everything needed to get back to the most recent mark: the *earliest* `from`
+   * for each property touched since. Taking the earliest matters — three
+   * successive iris nudges after a recall must revert to where the recall left
+   * it, not to the value before the third nudge.
+   */
+  popToMark(cameraId) {
+    const list = this.entries.get(cameraId);
+    if (!list) return null;
+    let at = -1;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].kind === 'mark') { at = i; break; }
+    }
+    if (at < 0) return null;
+
+    const undone = list.splice(at);
+    const mark = undone.shift();
+    const values = {};
+    for (const e of undone) {
+      if (e.kind !== 'write') continue;
+      if (!(e.prop in values)) values[e.prop] = e.from;
+    }
+    return { mark, values, count: undone.length };
+  }
+
+  /** What the UI shows on the button: the change that undo would reverse. */
+  peek(cameraId) {
+    const list = this.entries.get(cameraId) ?? [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].kind === 'write') return list[i];
+    }
+    return null;
+  }
+
+  /** Summary for every camera, for the state push. */
+  summary() {
+    const out = {};
+    for (const [cameraId] of this.entries) {
+      const last = this.peek(cameraId);
+      const list = this.entries.get(cameraId) ?? [];
+      out[cameraId] = {
+        depth: list.filter((e) => e.kind === 'write').length,
+        hasMark: list.some((e) => e.kind === 'mark'),
+        last: last ? { prop: last.prop, from: last.from, to: last.to, at: last.at } : null,
+      };
+    }
+    return out;
+  }
+
+  /**
+   * Forgets a camera's history.
+   *
+   * Called when a camera disconnects: the values it held before an outage are
+   * not somewhere it can be put back to, and offering to undo to them would be
+   * offering to write a stale number to a body that has since been power-cycled.
+   */
+  forget(cameraId) { this.entries.delete(cameraId); }
+}
+
 // --- presets and scenes -----------------------------------------------------
 
 export class Presets {

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>CamBridge — sign in</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23171b20'/%3E%3Ccircle cx='16' cy='17' r='7' fill='none' stroke='%234da3ff' stroke-width='2.5'/%3E%3Crect x='6' y='8' width='8' height='4' rx='1' fill='%234da3ff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+<style>
+  /* A single centred card. Nothing else on the page: the one thing to do here
+     is type a PIN, and a booth iPad should be able to do it one-handed. */
+  .signin { min-height: 100dvh; display: grid; place-items: center; padding: 20px; }
+  .signin .card { width: min(420px, 100%); padding: 26px; }
+  .signin h1 { margin: 0 0 4px; font-size: 22px; }
+  /* Width is explicit: the shared stylesheet only stretches selects and ranges,
+     so without this the PIN box sits narrower than the button under it. */
+  .signin input[type=password] {
+    width: 100%; font-size: 22px; letter-spacing: .3em; text-align: center;
+  }
+  .signin .msg { min-height: 20px; margin-top: 12px; }
+  .signin .msg.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+
+<div class="signin">
+  <form class="card" id="form">
+    <h1>CamBridge</h1>
+    <div class="sub" id="sub">Enter the PIN for this studio.</div>
+
+    <div style="margin-top:18px">
+      <!-- inputmode numeric brings up a keypad on the iPad without forbidding a
+           longer passphrase on a laptop. -->
+      <input type="password" id="pin" inputmode="numeric" autocomplete="current-password"
+             autofocus placeholder="PIN" aria-label="PIN">
+    </div>
+
+    <div class="msg note" id="msg" role="status" aria-live="polite"></div>
+
+    <div class="line" style="margin-top:16px">
+      <button class="primary big" type="submit" id="go" style="flex:1">Sign in</button>
+    </div>
+  </form>
+</div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const msg = $('#msg');
+
+// An open panel has nothing to sign in to. Bouncing straight through beats
+// showing a PIN box that accepts anything.
+const state = await fetch('/api/auth/state').then((r) => r.json()).catch(() => null);
+if (state && !state.enabled) location.replace('/');
+
+$('#form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pin = $('#pin').value;
+  if (!pin) return;
+  $('#go').disabled = true;
+  msg.className = 'msg note';
+  msg.textContent = 'Checking…';
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) { location.replace('/'); return; }
+    msg.className = 'msg note bad';
+    msg.textContent = body.error ?? 'That PIN was not recognised.';
+    $('#pin').value = '';
+    $('#pin').focus();
+  } catch (err) {
+    msg.className = 'msg note bad';
+    msg.textContent = `Could not reach CamBridge: ${err.message}`;
+  } finally {
+    $('#go').disabled = false;
+  }
+});
+</script>
+</body>
+</html>

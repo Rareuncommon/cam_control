@@ -322,6 +322,47 @@ public:
         return true;
     }
 
+    // Same SDK call as getProperties, without the codeToName() filter.
+    //
+    // That one `continue` is why tap-to-focus could not be diagnosed: the
+    // control surface only ever sees codes camd already names, so a body that
+    // does not accept an AF area position looks identical whether the property
+    // is absent, offered only in another focus mode, or spelled with a code we
+    // never ask about. Dumping the unfiltered list settles it in one pass.
+    bool describeProperties(std::vector<PropertyDescriptor>& out,
+                            std::string& err) override {
+        if (!handle_) { err = "not connected"; return false; }
+        SDK::CrDeviceProperty* props = nullptr;
+        CrInt32 count = 0;
+        SDK::CrError e = SDK::GetDeviceProperties(handle_, &props, &count);
+        if (e != SDK::CrError_None || props == nullptr) {
+            err = "GetDeviceProperties failed " + hexError(e);
+            return false;
+        }
+
+        out.reserve(static_cast<std::size_t>(count));
+        for (CrInt32 i = 0; i < count; ++i) {
+            const SDK::CrDeviceProperty& p = props[i];
+            PropertyDescriptor d;
+            d.code = static_cast<std::uint32_t>(p.GetCode());
+            auto it = codeToName().find(p.GetCode());
+            if (it != codeToName().end()) d.name = it->second.name;
+            d.current = static_cast<std::int64_t>(p.GetCurrentValue());
+            const auto flag = p.GetPropertyEnableFlag();
+            d.enableFlag = static_cast<int>(flag);
+            d.writable = (flag == SDK::CrEnableValue_True ||
+                          flag == SDK::CrEnableValue_SetOnly) &&
+                         p.IsSetEnableCurrentValue();
+            d.dataType = static_cast<int>(p.GetValueType());
+            const std::size_t width = elementWidth(p.GetValueType());
+            d.elementCount = width > 0 ? p.GetValueSize() / width : 0;
+            out.push_back(std::move(d));
+        }
+
+        SDK::ReleaseDeviceProperties(handle_, props);
+        return true;
+    }
+
     bool setProperty(const std::string& name, std::int64_t value,
                      std::int64_t& applied, std::string& err) override {
         if (!handle_) { err = "not connected"; return false; }
@@ -400,6 +441,7 @@ public:
         auto media = props.find(prop::kMediaFree);
         if (media != props.end()) {
             out.mediaPresent = media->second.current > 0;
+            out.mediaSlot1Sec = media->second.current;
             out.media = "SLOT1 " + std::to_string(media->second.current) + "s remaining";
         }
         return true;
