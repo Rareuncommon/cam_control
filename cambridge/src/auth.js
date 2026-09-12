@@ -60,6 +60,9 @@ export function pinMatches(pin, stored) {
  * is added.
  */
 export const ADMIN_ROUTES = [
+  /^POST \/api\/ptz\/cameras$/,
+  /^DELETE \/api\/ptz\/cameras\/[^/]+$/,
+  /^POST \/api\/cameras\/[^/]+\/actions\/ptzPresetSave$/,
   /^POST \/api\/adopt$/,               // stores camera credentials
   /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+(?:\/adoption)?$/, // forgets or re-credentials a body
   /^POST \/api\/shutdown$/,            // stops the app for everyone
@@ -74,6 +77,7 @@ export const PUBLIC_ROUTES = [
 ];
 
 export function requiredRole(method, path) {
+  try { path = decodeURIComponent(path); } catch { return 'admin'; }
   const key = `${method} ${path}`;
   if (PUBLIC_ROUTES.some((r) => r.test(key))) return 'public';
   if (ADMIN_ROUTES.some((r) => r.test(key))) return 'admin';

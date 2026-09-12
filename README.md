@@ -1,9 +1,12 @@
 # CamBridge
 
-Multi-camera control through Sony Camera Remote SDK, with network and USB
-connection identities. The camera catalog covers all 32 models listed for SDK
+Multi-camera control through Sony Camera Remote SDK and multi-brand network
+PTZ movement, with network and USB connection identities. The camera catalog covers all 32 models listed for SDK
 2.02, including Alpha, Cinema Line, professional camcorders, PTZ, ZV and RX.
 Controls are discovered from each connected body, lens and camera mode.
+Network PTZ adds 49 named profiles across Sony, Canon, Panasonic, BirdDog,
+PTZOptics and AVer, plus four generic adapters: hold-to-move pan/tilt/zoom,
+Stop, Home and native camera presets. See [PTZ setup and limits](docs/ptz-control.md).
 
 **Hardware baseline:** 1× ILME-FX3 and 2× ILME-FX30, wired Ethernet, Apple Silicon
 Mac. The 30 additional model profiles await real-camera acceptance; adding a

@@ -19,6 +19,7 @@ import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId, cameraIdentity } from './adopt.js';
 import { cameraCatalog, modelSupport } from './camera-support.js';
+import { PtzManager, ptzCatalog } from './ptz/manager.js';
 import { AtemTally, tallyForCameras } from './atem.js';
 import { decodeCCdP, toCameraWrites, cameraForDestination, WriteCoalescer } from './atem-cc.js';
 import { ViscaServer } from './visca.js';
@@ -164,6 +165,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const presets = new Presets(store, state, log);
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log);
+  const ptz = new PtzManager({ adoption });
 
   const undo = new UndoHistory();
   const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
@@ -215,6 +217,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * the joystick would have been reported as a fault.
    */
   const runAction = async (cameraId, action, body) => {
+    if (ptz.has(cameraId)) {
+      try { return { ok: true, status: 202, body: ptz.action(cameraId, action, body ?? {}) }; }
+      catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
+    }
     if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
     if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
     return camd.action(cameraId, action, body);
@@ -340,6 +346,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    */
   function buildPush() {
     const view = state.view();
+    view.cameras.push(...ptz.view());
     const alarms = evaluateAlarms(view.cameras, thresholds);
     logNewAlarms(alarms);
     return {
@@ -393,6 +400,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       pushToClients(buildPush());
     }, 60);
   });
+
+  ptz.on('change', () => pushToClients(buildPush()));
 
   // --- camd event wiring ----------------------------------------------------
   camd.on('camdConnected', async () => {
@@ -468,7 +477,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   // --- HTTP -----------------------------------------------------------------
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+    let url;
+    try { url = new URL(req.url, 'http://localhost'); }
+    catch { return sendJson(res, 400, { error: 'Invalid request URL' }); }
     const path = url.pathname;
 
     // Reused by every path-parameter route below.
@@ -564,6 +575,27 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           sseClients.delete(res);
         });
         return;
+      }
+
+      // Outbound network PTZ configuration and motion are independent of camd.
+      if (path === '/api/ptz/catalog' && req.method === 'GET') return sendJson(res, 200, ptzCatalog());
+      if (path === '/api/ptz/cameras' && req.method === 'GET') return sendJson(res, 200, { cameras: ptz.view() });
+      if (path === '/api/ptz/cameras' && req.method === 'POST') {
+        try { return sendJson(res, 201, { ok: true, camera: ptz.add(await readBody(req)) }); }
+        catch (error) { return sendJson(res, 400, { ok: false, error: error.message }); }
+      }
+      m = path.match(/^\/api\/ptz\/cameras\/([^/]+)$/);
+      if (m && req.method === 'DELETE') {
+        try { await ptz.remove(decodeURIComponent(m[1])); return sendJson(res, 200, { ok: true }); }
+        catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+      m = path.match(/^\/api\/cameras\/([^/]+)\/actions\/(ptz[A-Za-z]+)$/);
+      if (m && req.method === 'POST') {
+        try {
+          const action = m[2];
+          const result = ptz.action(decodeURIComponent(m[1]), action, await readBody(req) ?? {}, who.id ?? who.label);
+          return sendJson(res, 202, result);
+        } catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
       }
 
       // --- state ---
@@ -787,6 +819,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const [, cameraId, action] = m.map(decodeURIComponent);
         const body = await readBody(req);
         log.info('action', `${actor()}${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
+        if (ptz.has(cameraId)) {
+          try { return sendJson(res, 202, ptz.action(cameraId, action, body ?? {}, who.id ?? who.label)); }
+          catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+        }
         const result = await runAction(cameraId, action, body ?? undefined);
         if (result.ok) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
@@ -817,6 +853,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // The launcher's PID is passed down so we can signal it rather than just
       // exiting: it owns camd too, and its trap is what stops both cleanly.
       if (path === '/api/shutdown' && req.method === 'POST') {
+        await ptz.stop();
         log.info('cambridge', 'shutdown requested from the panel');
         sendJson(res, 200, { ok: true, stopping: true });
         const launcher = Number(process.env.CAMBRIDGE_LAUNCHER_PID);
@@ -982,8 +1019,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     gangs,
     atem,
     visca,
+    ptz,
     start() {
       camd.start();
+      ptz.start();
       if (atem) {
         log.info('atem', `watching switcher at ${cfg.atem.host}:${cfg.atem.port} for tally`);
         atem.start();
@@ -1021,6 +1060,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       });
     },
     async stop() {
+      await ptz.stop();
       camd.stop();
       atem?.stop();
       atemWrites?.stop();

@@ -165,6 +165,27 @@
 <!-- ================= SETUP ================= -->
 <section class="view" id="view-setup">
   <div class="card">
+    <h3>Network PTZ cameras</h3>
+    <p class="note">Add Sony, Canon, Panasonic, BirdDog, PTZOptics or another compatible network PTZ camera. Enable remote control on the camera first.</p>
+    <form id="ptz-add-form">
+      <div class="formgrid">
+        <label for="ptz-profile">Camera / protocol</label><select id="ptz-profile"></select>
+        <label for="ptz-label">Name</label><input id="ptz-label" type="text" maxlength="256" placeholder="Stage wide">
+        <label for="ptz-host">Camera IP address</label><input id="ptz-host" type="text" required placeholder="192.168.1.100">
+        <label for="ptz-port">Control port</label><input id="ptz-port" type="number" min="1" max="65535" required>
+        <label for="ptz-reply-port">Reply port (0 = automatic)</label><input id="ptz-reply-port" type="number" min="0" max="65535" value="0">
+      </div>
+      <div id="ptz-http-auth" class="formgrid" hidden>
+        <label for="ptz-user">Camera username</label><input id="ptz-user" type="text" autocomplete="off">
+        <label for="ptz-password">Camera password</label><input id="ptz-password" type="password" autocomplete="new-password">
+        <label for="ptz-https">HTTPS</label><input id="ptz-https" type="checkbox">
+      </div>
+      <p class="note" id="ptz-connection-note"></p>
+      <button type="submit" class="primary">Add PTZ camera</button>
+    </form>
+    <div id="ptz-added" style="margin-top:12px"></div>
+  </div>
+  <div class="card">
     <h3>Connected cameras</h3>
     <div class="sub" id="discover-hint"></div>
     <table class="list" id="discovered-table"></table>
@@ -177,7 +198,7 @@
       <input id="portfolio-search" type="search" placeholder="Model or family, e.g. Alpha, FX6, PTZ">
       <table class="list" id="portfolio-table"></table>
       <p class="note">Available controls depend on the connected camera, firmware, lens and mode.
-        New models await hardware validation. PTZ movement and media transfer are not implemented.</p>
+        New models await hardware validation. For PTZ movement, add a separate network PTZ connection above. Media transfer is not implemented.</p>
     </details>
   </div>
   <div class="card">

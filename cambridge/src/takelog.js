@@ -126,7 +126,7 @@ export function report(takes, { now = Date.now(), windowMs = 10_000 } = {}) {
  * bodies we cannot see.
  */
 export function rollState(cameras) {
-  const connected = (cameras ?? []).filter((c) => c.state === 'connected');
+  const connected = (cameras ?? []).filter((c) => c.state === 'connected' && c.capabilities?.record?.available !== false);
   const rolling = connected.filter((c) => c.status?.recording);
   return {
     total: connected.length,

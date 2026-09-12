@@ -468,3 +468,19 @@ test('undo actions are registered and target the right endpoints', () => {
     'POST /api/cameras/fx3/acknowledge',
   ]);
 });
+
+test('PTZ Companion actions send bounded motion, Stop and native presets', async () => {
+  const { inst, captured } = makeInstance(); const sent = [];
+  inst.api = { request: async (method, path, body) => { sent.push({ method, path, body }); }, stop() {} };
+  const view = sampleView(); view.cameras.push({ id: 'ptz-canon', label: 'Canon', provider: 'network-ptz', state: 'connected', status: {}, properties: {}, capabilities: { panTilt: { available: true }, record: { available: false } } });
+  inst.applyState(view);
+  assert.deepEqual(captured.actions.ptzMove.options[0].choices.map(c => c.id), ['ptz-canon']);
+  await captured.actions.ptzMove.callback({ options: { camera: 'ptz-canon', direction: 'up-left', speed: 40, duration: 500 } });
+  assert.equal(sent[0].path, '/api/cameras/ptz-canon/actions/ptzMove');
+  assert.deepEqual([sent[0].body.pan, sent[0].body.tilt, sent[0].body.zoom, sent[0].body.leaseMs], [-0.4, 0.4, 0, 500]);
+  assert.ok(sent[0].body.controlId); assert.equal(sent[0].body.sequence, 1);
+  await captured.actions.ptzStop.callback({ options: { camera: 'ptz-canon' } });
+  assert.equal(sent[1].path, '/api/cameras/ptz-canon/actions/ptzStop');
+  await captured.actions.ptzCommand.callback({ options: { camera: 'ptz-canon', command: 'ptzPresetRecall', slot: '3' } });
+  assert.equal(sent[2].body.slot, 3);
+});

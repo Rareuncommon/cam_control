@@ -79,14 +79,14 @@ FX6 variants are represented by one canonical profile with FX6V/FX6T aliases.
 - Live view and autofocus availability cannot be inferred from a model name;
   their command/frame results remain authoritative. Point focus also needs real
   coordinate validation. Still-photo cameras may require movie mode to record.
-- FR7 and BRC-AM7 entries cover the shared SDK camera-control surface. Pan/tilt
-  motion and media transfer are not implemented. Do not present these as fully
-  featured PTZ controllers.
+- FR7 and BRC-AM7 SDK entries cover shared camera controls. Network PTZ is now
+  a separate adapter: see [PTZ movement](ptz-control.md) for profiles, setup and
+  validation limits. Media transfer remains unimplemented.
 - SDK device IDs are opaque connection bindings, not portable serial numbers.
   If changing ports, hosts or firmware changes an ID, rediscover and explicitly
   re-adopt that camera. The application must never guess by model instead.
-- Canon, Nikon, Panasonic, Blackmagic and generic UVC cameras need separate
-  backend adapters. No unsupported brand has been added as a cosmetic entry.
+- Canon and Panasonic network PTZ now have movement adapters. Nikon, Blackmagic
+  and generic UVC control remain outside this implementation.
 
 ## Reproducible checks
 

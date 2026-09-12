@@ -67,7 +67,7 @@ button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 
 #banner {
   display: none; padding: 11px 16px; background: var(--bad); color: #fff; font-weight: 700;
-  align-items: center; gap: 12px;
+  align-items: center; gap: 12px; overflow-wrap: anywhere; flex-wrap: wrap;
 }
 #banner.show { display: flex; }
 /* A warning is not an emergency. Using the same red for a card with twelve
@@ -318,3 +318,10 @@ dialog h3 { margin: 0 0 4px; }
   #view-setup .formgrid { grid-template-columns: 1fr; }
   #view-setup .formgrid > * { min-width: 0; max-width: 100%; }
 }
+
+.ptz-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+.ptz-pad button { min-height: 48px; touch-action: none; }
+.ptz-card button { touch-action: none; }
+.ptz-card .ptz-slot { width: 5rem; }
+[hidden] { display: none !important; }
+#ptz-added { display: grid; gap: 8px; }

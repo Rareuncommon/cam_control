@@ -1,3 +1,4 @@
+import { createPtzUi } from './ptz.js';
 import { createGamepadControl } from './gamepad.js';
 import {
   histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
@@ -44,6 +45,7 @@ let currentView = 'control';
 let soloFeed = null;
 let gangSelection = new Set();
 let interacting = null;
+const ptzUi = createPtzUi({ el, api, toast, refresh: () => render() });
 // Persisted so a booth iPad comes back the way it was left.
 let advanced = localStorage.getItem('cb.advanced') === '1';
 let rampMs = Number(localStorage.getItem('cb.rampMs') ?? 0);
@@ -586,6 +588,7 @@ function openPicker(cam, propName, title) {
 // --- views ------------------------------------------------------------------
 
 function renderControl() {
+  if (ptzUi.active) return;
   const grid = $('#grid');
   grid.textContent = '';
   if (!view.cameras.length) {
@@ -598,7 +601,7 @@ function renderControl() {
             document.createTextNode('Add a camera'))
         : el('div', { class: 'mono', text: './scripts/start.sh' }))));
   }
-  for (const cam of view.cameras) grid.append(cameraCard(cam));
+  for (const cam of view.cameras) grid.append(cam.provider === 'network-ptz' ? ptzUi.card(cam) : cameraCard(cam));
 }
 
 // Live feeds, one polling loop per tile.
@@ -816,10 +819,11 @@ function renderMultiview() {
     grid.append(el('div', { class: 'note', style: 'padding:12px', text: 'No cameras to show.' }));
     return;
   }
-  for (const cam of cams) grid.append(feedTile(cam));
+  for (const cam of cams.filter(c => c.provider !== 'network-ptz')) grid.append(feedTile(cam));
 }
 
 function renderSetup() {
+  ptzUi.renderList(view.cameras);
   $('#discover-hint').textContent = discovery.credentialHint ?? '';
   // Where this instance actually reads and writes. Invisible paths turned a
   // wrong config file into "the app forgot my cameras".
@@ -869,7 +873,7 @@ function renderSetup() {
   if (!view.cameras.length) {
     at.append(el('tr', {}, el('td', { colspan: '4', class: 'note', text: 'Nothing added yet.' })));
   }
-  for (const cam of view.cameras) {
+  for (const cam of view.cameras.filter(c => c.provider !== 'network-ptz')) {
     at.append(el('tr', {},
       el('td', { text: cam.label }),
       el('td', { class: 'note', text: cam.model || '—' }),
@@ -955,6 +959,7 @@ function renderPortfolio() {
 }
 $('#portfolio-search').addEventListener('input', renderPortfolio);
 async function refreshSetup() {
+  await ptzUi.setup();
   discovery = await api('GET', '/api/discovered');
   if (!portfolio) {
     const result = await api('GET', '/api/camera-support');
@@ -1005,7 +1010,7 @@ function renderBanner() {
     // Name the log. The panel being up means cambridge and the config are fine,
     // so the daemon either failed to start or died — and its own log is the only
     // place that says which.
-    banner.textContent = 'The camera daemon is not reachable — no control is possible. '
+    banner.textContent = 'Sony SDK camera service is offline. Network PTZ controls remain independent. '
       + (health.logDir ? `Check ${health.logDir}/camd.stdout.log` : 'Check the camd log.');
     banner.classList.add('show');
     return;
@@ -1069,7 +1074,7 @@ function renderTools() {
   const refSel = $('#match-ref');
   const prev = refSel.value;
   refSel.textContent = '';
-  for (const c of view.cameras) {
+  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz')) {
     refSel.append(el('option', { value: c.id, selected: c.id === prev },
       document.createTextNode(`${c.label}${c.state === 'connected' ? '' : ' (offline)'}`)));
   }
@@ -1081,7 +1086,7 @@ function renderTools() {
   }
   const holder = $('#gang-members');
   holder.textContent = '';
-  for (const c of view.cameras) {
+  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz')) {
     holder.append(el('div', {
       class: `chip${gangSelection.has(c.id) ? ' on' : ''}`,
       onclick: (e) => {
@@ -1095,6 +1100,7 @@ function renderTools() {
 }
 
 function switchView(name) {
+  ptzUi.stop();
   // Leaving Multiview must stop the feeds; nothing is displaying them.
   if (currentView === 'multiview' && name !== 'multiview') stopAllFeeds();
   currentView = name;
@@ -1364,8 +1370,8 @@ $('#quit').addEventListener('click', async () => {
 
 /** The camera a gamepad drives: the chosen one, or the first connected one. */
 function padTarget() {
-  const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected');
-  return chosen ?? view.cameras.find((c) => c.state === 'connected') ?? null;
+  const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected' && c.provider !== 'network-ptz');
+  return chosen ?? view.cameras.find((c) => c.state === 'connected' && c.provider !== 'network-ptz') ?? null;
 }
 
 // Properties where pushing "up" should walk *down* the raw scale. Iris is the
@@ -1456,7 +1462,7 @@ function renderPadCameras() {
   if (!sel) return;
   const target = padTarget()?.id ?? '';
   sel.textContent = '';
-  for (const c of view.cameras) {
+  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz')) {
     sel.append(el('option', { value: c.id, selected: c.id === target },
       document.createTextNode(c.label)));
   }

@@ -40,6 +40,33 @@ export function buildActions(self) {
   });
 
   return {
+    ptzMove: {
+      name: 'PTZ: move for a bounded interval',
+      options: [cameraField({ choices: cameraChoices.filter(c => self.camera(c.id)?.provider === 'network-ptz') }),
+        { type: 'dropdown', id: 'direction', label: 'Direction', default: 'left', choices: ['left', 'right', 'up', 'down', 'up-left', 'up-right', 'down-left', 'down-right', 'zoom-in', 'zoom-out'].map(id => ({ id, label: id })) },
+        { type: 'number', id: 'speed', label: 'Speed (%)', default: 25, min: 5, max: 100 },
+        { type: 'number', id: 'duration', label: 'Duration (ms; server stops automatically)', default: 500, min: 150, max: 1500 }],
+      callback: async ev => {
+        const { camera, direction, speed, duration } = ev.options;
+        const vector = { left: [-1, 0, 0], right: [1, 0, 0], up: [0, 1, 0], down: [0, -1, 0],
+          'up-left': [-1, 1, 0], 'up-right': [1, 1, 0], 'down-left': [-1, -1, 0], 'down-right': [1, -1, 0], 'zoom-in': [0, 0, 1], 'zoom-out': [0, 0, -1] }[direction];
+        if (!vector) return;
+        const [pan, tilt, zoom] = vector.map(n => n * Number(speed) / 100);
+        return self.api.request('POST', `/api/cameras/${encodeURIComponent(camera)}/actions/ptzMove`,
+          { pan, tilt, zoom, leaseMs: Number(duration), controlId: `companion-${Date.now()}-${Math.random().toString(36).slice(2)}`, sequence: 1 });
+      },
+    },
+    ptzStop: {
+      name: 'PTZ: Stop all movement', options: [cameraField()],
+      callback: ev => self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/actions/ptzStop`, {}),
+    },
+    ptzCommand: {
+      name: 'PTZ: home / check / camera preset',
+      options: [cameraField(), { type: 'dropdown', id: 'command', label: 'Command', default: 'ptzHome', choices:
+        [{ id: 'ptzHome', label: 'Home' }, { id: 'ptzProbe', label: 'Check connection' }, { id: 'ptzPresetRecall', label: 'Recall camera preset' }, { id: 'ptzPresetSave', label: 'Save camera preset (admin)' }] },
+        { type: 'number', id: 'slot', label: 'Preset slot (camera-specific range)', default: 0, min: 0, max: 99 }],
+      callback: ev => self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/actions/${ev.options.command}`, { slot: Number(ev.options.slot) }),
+    },
     record: {
       name: 'Record: start / stop / toggle',
       options: [

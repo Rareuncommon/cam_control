@@ -4,6 +4,28 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-09-12 multi-brand PTZ movement update
+
+Network PTZ is implemented in the Node service, independent of camd: Sony-framed
+VISCA UDP, raw VISCA TCP/UDP and authenticated Panasonic AW HTTP. The catalog
+contains 49 named profiles across six brands and four generic profiles. Combined
+with the SDK catalog, Companion lists 80 distinct models. See
+[ptz-control.md](ptz-control.md) for setup, model sources, API contracts and limits.
+
+The panel adds hold-to-move pan/tilt/zoom, Stop, Home and native presets. Movement
+sessions have short leases, stale-command rejection and bounded Stop retries;
+credentials are redacted and camera connections persist separately from SDK
+adoption. Companion adds bounded movement pulses and native preset commands.
+Wordtandem integration remains future work using the local API and capabilities.
+
+Verification: 204 application tests, 30 Companion tests and the existing 64 C++
+cases pass (298 total). Browser checks pass for adding a PTZ camera, probing,
+held movement, release and keyboard-focus Stop, preserved speed/preset fields,
+and mobile layout. A deliberately broken stale-movement implementation was
+rejected by its regression test. HTTP lifecycle tests cover authorization, lease Stop, redaction,
+restart and removal. Six-body SDK portfolio acceptance also passes. Physical
+PTZ acceptance has not been performed; acknowledgement does not prove position.
+
 ## 2026-09-12 camera portfolio update
 
 Current implementation expands the shared catalog from FX3/FX30 to the 32 Sony

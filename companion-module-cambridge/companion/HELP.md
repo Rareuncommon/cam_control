@@ -74,3 +74,12 @@ Global: `$(cambridge:camera_count)`, `connected_count`, `recording_count`,
 
 Tally comes from CamBridge's ATEM listener, configured in `config/cambridge.json`,
 not from Companion. If it is off, tally feedbacks simply stay dark.
+
+## Network PTZ
+
+Use PTZ: move for a bounded 150–1500 ms pulse with direction and speed. Use
+PTZ: Stop all movement to interrupt it. PTZ: home / check / camera preset exposes
+connection probing, Home, and native preset recall/save (save requires admin).
+Add network cameras in CamBridge Setup first. These controls use the independent
+network PTZ adapters and do not add recording or video to PTZ-only connections.
+Hardware validation remains model-specific. See docs/ptz-control.md in CamBridge.
