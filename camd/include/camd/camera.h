@@ -108,6 +108,8 @@ struct DiscoveredCamera {
     std::string name;
     std::string guid;
     bool sshRequired = false;  // GetSSHsupport(): body expects access auth
+    std::string deviceId;       // opaque SDK identity; never a model-name fallback
+    std::string transport;      // SDK connection type, e.g. USB or network
 };
 
 // Callbacks arrive on SDK-owned threads. Implementations must be thread-safe and

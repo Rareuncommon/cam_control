@@ -46,6 +46,7 @@
 #include <CRSDK/IDeviceCallback.h>
 
 #include "camd/camera.h"
+#include "camd/device_identity.h"
 #include "camd/log.h"
 #include "camd/properties.h"
 
@@ -641,6 +642,10 @@ private:
 
 // --- backend ----------------------------------------------------------------
 
+std::string sdkIdentity(const SDK::ICrCameraObjectInfo* info) {
+    return encodeSdkDeviceId(info->GetIdType(), info->GetId(), info->GetIdSize());
+}
+
 class SonyBackend : public Backend {
 public:
     bool init(std::string& err) override {
@@ -684,9 +689,11 @@ public:
             DiscoveredCamera d;
             d.model = crCharToString(info->GetModel());
             d.name = crCharToString(info->GetName());
-            d.guid = crCharToString(info->GetGuid());
+            d.deviceId = sdkIdentity(info);
+            d.transport = crCharToString(info->GetConnectionTypeName());
             d.ip = crCharToString(info->GetIPAddressChar());
             d.mac = macToString(info->GetMACAddressChar(), info->GetMACAddressCharSize());
+            if (d.mac == "00:00:00:00:00:00" || d.mac == "FF:FF:FF:FF:FF:FF") d.mac.clear();
             d.sshRequired = (info->GetSSHsupport() == SDK::CrSSHsupport_ON);
             out.push_back(std::move(d));
         }
@@ -700,7 +707,7 @@ public:
                                         std::string& err) override {
         if (!initialised_) { err = "SDK not initialised"; return nullptr; }
 
-        // Re-enumerate to obtain a live ICrCameraObjectInfo for this MAC. The
+        // Re-enumerate to obtain a live ICrCameraObjectInfo for this identity. The
         // objects handed out by a previous enumeration are released with their
         // list, so they cannot be cached across calls.
         SDK::ICrEnumCameraObjectInfo* list = nullptr;
@@ -715,15 +722,18 @@ public:
         for (CrInt32u i = 0; i < n; ++i) {
             const SDK::ICrCameraObjectInfo* info = list->GetCameraObjectInfo(i);
             if (!info) continue;
-            if (macToString(info->GetMACAddressChar(), info->GetMACAddressCharSize()) ==
-                target.mac) {
+            const bool sameDevice = !cfg.deviceId.empty()
+                ? sdkIdentity(info) == cfg.deviceId
+                : (!target.mac.empty() && macToString(info->GetMACAddressChar(),
+                    info->GetMACAddressCharSize()) == target.mac);
+            if (sameDevice) {
                 match = info;
                 break;
             }
         }
         if (!match) {
             list->Release();
-            err = "camera " + target.mac + " is no longer on the network";
+            err = "camera is no longer discoverable on its configured connection";
             return nullptr;
         }
 

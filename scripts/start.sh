@@ -19,7 +19,7 @@ CONFIG="${CONFIG:-./config/cambridge.json}"
 CAMD_ARGS=()
 for arg in "$@"; do
   case "${arg}" in
-    --fake|--verbose) CAMD_ARGS+=("${arg}") ;;
+    --fake|--fake-portfolio|--verbose) CAMD_ARGS+=("${arg}") ;;
     --config=*)       CONFIG="${arg#--config=}" ;;
     *) echo "start.sh: unknown option '${arg}'" >&2; exit 2 ;;
   esac

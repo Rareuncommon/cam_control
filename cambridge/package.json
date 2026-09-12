@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/*.test.js"
+    "test": "npm run check:catalog && node --test test/*.test.js",
+    "check:catalog": "node ../scripts/sync-camera-catalog.mjs"
   },
   "dependencies": {},
   "devDependencies": {}

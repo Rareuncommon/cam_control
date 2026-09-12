@@ -67,8 +67,8 @@ Manual** action first.
 ### Version
 
 Built against `@companion-module/base` **1.14.x**, which Bitfocus lists as
-compatible with every Companion from **3.0 to 4.3**. The 2.x SDK only supports
-4.3 and is marked unconfirmed, so 1.x is the safer target.
+targeting **Companion 4.2 or newer**, as required by its API 1.14.1 runtime.
+Enter a configured CamBridge API token when PIN protection is enabled.
 
 ---
 

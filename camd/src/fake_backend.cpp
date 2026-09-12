@@ -33,7 +33,7 @@ bool linkDown(const std::string& mac) {
     return it != g_linkDown.end() && it->second;
 }
 
-// Forced card-remaining, in seconds, keyed by MAC. Set by the debug endpoint so
+// Forced card-remaining, in seconds, keyed by MAC or SDK device ID. Set by the debug endpoint so
 // a nearly-full card can be rehearsed on demand: the alarm that matters most is
 // the one nobody has ever seen fire.
 std::mutex g_mediaMu;
@@ -231,9 +231,9 @@ public:
         // Matches the FX30 finding: the toggle command is not available.
         props_[prop::kRecToggleSupported] = enumerated(super35 ? 0 : 0, {0, 1}, false);
 
-        // ND: the FX30 has an internal variable ND, the FX3 does not. Modelling
-        // that difference means the UI's "this body has no ND" path is exercised.
-        if (super35) {
+        // Exercise an ND-capable profile without inventing internal ND on FX30.
+        // All fake values remain synthetic; SDK properties decide real controls.
+        if (info_.model.find("FX6") != std::string::npos) {
             props_[prop::kNdFilter] = enumerated(1, {0, 1});
             props_[prop::kNdMode] = enumerated(2, {1, 2});
             props_[prop::kNdValue] = ranged(30, 0, 100, 1);
@@ -378,7 +378,7 @@ public:
             std::chrono::duration_cast<std::chrono::seconds>(now - lastTick_).count();
 
         std::int64_t forced = 0;
-        if (takeMediaOverride(info_.mac, forced)) {
+        if (takeMediaOverride(info_.mac.empty() ? info_.deviceId : info_.mac, forced)) {
             mediaSec_ = forced < 0 ? 0 : forced;
             LOG_WARN("fake", "card for %s forced to %llds remaining", info_.mac.c_str(),
                      static_cast<long long>(mediaSec_));
@@ -473,7 +473,7 @@ public:
 private:
     bool check(std::string& err) {
         if (disconnected_) { err = "session closed"; return false; }
-        if (linkDown(info_.mac)) {
+        if (linkDown(info_.mac.empty() ? info_.deviceId : info_.mac)) {
             err = "no response from camera (simulated link down)";
             if (sink_ && !notified_) {
                 notified_ = true;
@@ -518,7 +518,7 @@ public:
         (void)timeoutMs;
         std::vector<DiscoveredCamera> out;
         for (const auto& c : present_) {
-            if (!linkDown(c.mac)) out.push_back(c);
+            if (!linkDown(c.mac.empty() ? c.deviceId : c.mac)) out.push_back(c);
         }
         return out;
     }
@@ -527,7 +527,7 @@ public:
                                         const CameraConfig& cfg,
                                         EventSink* sink,
                                         std::string& err) override {
-        if (linkDown(target.mac)) {
+        if (linkDown(target.mac.empty() ? target.deviceId : target.mac)) {
             err = "camera unreachable (simulated link down)";
             return nullptr;
         }

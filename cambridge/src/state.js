@@ -11,6 +11,7 @@
 
 import { EventEmitter } from 'node:events';
 import { decorate, RECORDING_STATE } from './normalise.js';
+import { modelSupport, cameraCapabilities } from './camera-support.js';
 
 /**
  * One camera's status, from either a snapshot or a statusUpdate event.
@@ -89,6 +90,8 @@ export class StateModel extends EventEmitter {
       model: snap.model,
       ip: snap.ip,
       mac: snap.mac,
+      deviceId: snap.deviceId ?? '',
+      transport: snap.transport ?? '',
       state: snap.state,
       discovered: !!snap.discovered,
       reconnectAttempts: snap.reconnectAttempts ?? 0,
@@ -119,6 +122,8 @@ export class StateModel extends EventEmitter {
     if (ev.model) cam.model = ev.model;
     if (ev.ip) cam.ip = ev.ip;
     if (ev.mac) cam.mac = ev.mac;
+    if (ev.deviceId) cam.deviceId = ev.deviceId;
+    if (ev.transport) cam.transport = ev.transport;
     cam.reconnectAttempts = ev.reconnectAttempts ?? cam.reconnectAttempts;
     cam.detail = ev.detail ?? null;
 
@@ -293,6 +298,10 @@ export class StateModel extends EventEmitter {
         model: cam.model,
         ip: cam.ip,
         mac: cam.mac,
+        deviceId: cam.deviceId ?? '',
+        transport: cam.transport ?? '',
+        support: modelSupport(cam.model),
+        capabilities: cameraCapabilities(cam),
         state: cam.state,
         detail: cam.detail,
         reconnectAttempts: cam.reconnectAttempts,

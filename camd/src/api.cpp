@@ -85,6 +85,8 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         for (const auto& d : registry_.lastDiscovered()) {
             json::Value v = json::Value::makeObject();
             v.set("mac", json::Value(d.mac));
+            v.set("deviceId", json::Value(d.deviceId));
+            v.set("transport", json::Value(d.transport));
             v.set("ip", json::Value(d.ip));
             v.set("model", json::Value(d.model));
             v.set("name", json::Value(d.name));
@@ -118,6 +120,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         cc.model = body["model"].asString();
         cc.ip = body["ip"].asString();
         cc.mac = body["mac"].asString();
+        cc.deviceId = body["deviceId"].asString();
         cc.fingerprint = body["fingerprint"].asString();
         if (body["auth"].isObject()) {
             cc.username = body["auth"]["username"].asString();

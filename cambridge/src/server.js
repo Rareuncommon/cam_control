@@ -17,7 +17,8 @@ import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
-import { Adoption, normaliseMac, suggestId } from './adopt.js';
+import { Adoption, normaliseMac, suggestId, cameraIdentity } from './adopt.js';
+import { cameraCatalog, modelSupport } from './camera-support.js';
 import { AtemTally, tallyForCameras } from './atem.js';
 import { decodeCCdP, toCameraWrites, cameraForDestination, WriteCoalescer } from './atem-cc.js';
 import { ViscaServer } from './visca.js';
@@ -684,44 +685,42 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Everything needed to add a camera from the browser. Discovery is annotated
       // with whether each body is already adopted, and by which entry, so the setup
       // page never offers to adopt a camera twice.
+      if (path === '/api/camera-support' && req.method === 'GET') {
+        return sendJson(res, 200, cameraCatalog());
+      }
+
       if (path === '/api/discovered' && req.method === 'GET') {
         const d = await camd.discovered();
         if (!d.ok) return sendJson(res, 502, d.body ?? { error: 'camd unreachable' });
         const adopted = adoption.adopted();
-        const byMac = new Map(adopted.map((c) => [normaliseMac(c.mac), c]));
+        const byIdentity = new Map(adopted.map((c) => [cameraIdentity(c), c]).filter(([key]) => key));
         const takenIds = new Set(adopted.map((c) => c.id));
         const list = (d.body?.discovered ?? []).map((cam) => {
           const mac = normaliseMac(cam.mac);
-          const owner = byMac.get(mac);
+          const identity = cameraIdentity(cam);
+          const owner = identity ? byIdentity.get(identity) : null;
           return {
             ...cam,
-            mac: mac ?? cam.mac,
+            identity,
+            adoptable: !!identity,
+            support: modelSupport(cam.model),
+            mac: mac ?? '',
             adopted: !!owner,
             adoptedAs: owner ? { id: owner.id, label: owner.label } : null,
-            suggestedId: owner ? owner.id : suggestId(cam.model, mac, takenIds),
+            suggestedId: owner ? owner.id : suggestId(cam.model, mac || cam.deviceId, takenIds),
           };
         });
         // The hint tracks what is actually on the network. Telling an operator to
         // go and read credentials off three screens, when none of the cameras
         // wants any, is how a setup page trains people to ignore it.
         const needAuth = list.filter((c) => c.accessAuthRequired && !c.adopted);
-        const noAuth = list.filter((c) => !c.accessAuthRequired);
-        // A camera reporting no access authentication is a warning, not a
-        // convenience: on FX3/FX30 firmware the body then refuses SDK control
-        // over the network entirely, connecting and dropping in a loop. Say so
-        // here, where someone is looking at the camera that will do it.
-        const credentialHint = noAuth.length
-          ? `${noAuth.length === 1 ? 'A camera has' : `${noAuth.length} cameras have`} ` +
-            'access authentication turned OFF. These bodies will not accept remote ' +
-            'control in that state — turn [Access Authen. Settings] back On, then ' +
-            'enter the username and password from [Access Authen. Info].'
+        const legacyAuthWarning = list.filter((c) => !c.accessAuthRequired && c.ip &&
+          ['ILME-FX3', 'ILME-FX30'].includes(c.support.model));
+        const credentialHint = legacyAuthWarning.length
+          ? 'For FX3/FX30 network control, keep Access Authentication On and enter each body’s credentials.'
           : needAuth.length
-            ? `${needAuth.length} of these ${needAuth.length === 1 ? 'needs its password' : 'need their passwords'}, ` +
-              'shown on the camera at MENU → Network → Network Option → [Access Authen. Info]. ' +
-              'Each body has its own; you only enter them once.'
-            : (list.length
-              ? 'Every camera here is already added.'
-              : 'No cameras seen yet. Check USB-LAN Connection and Remote Shooting on each body.');
+            ? 'Enter the access credentials only for cameras that request them. USB PC Remote connections may not need a password.'
+            : 'Connect using a model-supported USB PC Remote or network connection, then add the discovered camera. Controls depend on the body, lens and mode.';
 
         return sendJson(res, 200, {
           discovered: list,
@@ -732,7 +731,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 
       if (path === '/api/adopt' && req.method === 'POST') {
         const body = await readBody(req);
-        if (!body?.mac) return sendJson(res, 400, { error: 'mac is required' });
+        if (!cameraIdentity(body)) return sendJson(res, 400, { error: 'a discovered MAC or SDK device ID is required' });
         const result = await adoption.adopt(body);
         if (result.ok) await refreshEverything();
         return sendJson(res, result.ok ? 201 : 409, result);
@@ -810,7 +809,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           log.error('action',
             `record ${want ? 'start' : 'stop'} failed on: ${failed.map((f) => f.cameraId).join(', ')}`);
         }
-        return sendJson(res, 200, { ok: failed.length === 0, results });
+        return sendJson(res, 200, { ok: results.length > 0 && failed.length === 0, results });
       }
 
       // --- quit ---

@@ -622,3 +622,83 @@ TEST(a_body_without_an_af_area_property_refuses_tap_to_focus) {
     }, 2000));
     CHECK(ok->count(prop::kAfAreaPositionC) == 1);
 }
+
+TEST(two_identical_usb_bodies_keep_identity_through_disconnect_and_media_changes) {
+    auto cfg = makeTestConfig();
+    cfg.cameras.resize(2);
+    auto present = makePresent();
+    present.resize(2);
+    for (int i = 0; i < 2; ++i) {
+        auto id = "sony-sdk:1:0" + std::to_string(i + 1);
+        cfg.cameras[i].mac = "";
+        cfg.cameras[i].ip = "";
+        cfg.cameras[i].model = "ILCE-7M4";
+        cfg.cameras[i].deviceId = id;
+        present[i].mac = "";
+        present[i].ip = "";
+        present[i].model = "ILCE-7M4";
+        present[i].deviceId = id;
+        present[i].transport = "USB";
+        fakeBackendSetLinkDown(id, false);
+    }
+    Registry registry(cfg, makeFakeBackend(present));
+    std::string startError;
+    CHECK(registry.start(startError));
+    auto a = registry.find("cam1");
+    auto b = registry.find("cam2");
+    CHECK(waitFor([&] { return a->snapshot().state == ConnState::Connected &&
+        b->snapshot().state == ConnState::Connected; }, 4000));
+    CHECK_EQ(a->snapshot().deviceId, present[0].deviceId);
+    CHECK_EQ(b->snapshot().deviceId, present[1].deviceId);
+    fakeBackendSetMediaRemaining(present[0].deviceId, 45);
+    CHECK(waitFor([&] { return a->snapshot().status.mediaSlot1Sec == 45; }, 3000));
+    CHECK(b->snapshot().status.mediaSlot1Sec > 45);
+    fakeBackendSetLinkDown(present[0].deviceId, true);
+    CHECK(waitFor([&] { return a->snapshot().state != ConnState::Connected; }, 3000));
+    CHECK(b->snapshot().state == ConnState::Connected);
+    CHECK_EQ(b->snapshot().deviceId, present[1].deviceId);
+    fakeBackendSetLinkDown(present[0].deviceId, false);
+    CHECK(waitFor([&] { return a->snapshot().state == ConnState::Connected; }, 5000));
+    CHECK_EQ(a->snapshot().deviceId, present[0].deviceId);
+    auto duplicate = cfg.cameras[0];
+    duplicate.id = "duplicate";
+    std::string err;
+    CHECK(!registry.addCamera(duplicate, err));
+    registry.stop();
+}
+
+namespace {
+class UncertainRecordingSession : public CameraSession {
+public:
+    std::int64_t reported = kRecordingUnknown;
+    int presses = 0;
+    bool getProperties(PropertyMap&, std::string&) override { return true; }
+    bool describeProperties(std::vector<PropertyDescriptor>&, std::string&) override { return true; }
+    bool setProperty(const std::string&, std::int64_t, std::int64_t&, std::string&) override { return true; }
+    bool getStatus(CameraStatus& s, std::string&) override { s.recordingState = reported; return true; }
+    bool sendRecordButton(bool, std::string&) override { ++presses; return true; }
+    bool autofocus(std::string&) override { return true; }
+    bool focusNudge(int, std::string&) override { return true; }
+    bool sendKey(const std::string&, std::string&) override { return true; }
+    bool liveviewFrame(std::string&, std::string&) override { return true; }
+    bool ping(std::string&) override { return true; }
+    void disconnect() override {}
+};
+}
+TEST(unknown_failed_and_interval_record_states_never_confirm_stop_or_press_record) {
+    CameraConfig cfg;
+    cfg.id = "record-state-test";
+    auto backend = makeFakeBackend({});
+    CameraWorker worker(cfg, backend.get(), nullptr, ConnectionConfig{});
+    UncertainRecordingSession session;
+    for (auto status : {kRecordingUnknown, kRecordingFailed, kRecordingIntervalWaiting}) {
+        session.reported = status;
+        for (bool wanted : {false, true}) {
+            std::int64_t finalState = 0;
+            std::string err;
+            CHECK(!worker.setRecording(&session, wanted, finalState, err));
+            CHECK(!err.empty());
+            CHECK_EQ(session.presses, 0);
+        }
+    }
+}

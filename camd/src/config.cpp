@@ -109,6 +109,7 @@ bool Config::loadString(const std::string& text, Config& out,
             cc.label = c["label"].asString();
             cc.model = c["model"].asString();
             cc.ip = c["ip"].asString();
+            cc.deviceId = c["deviceId"].asString();
             cc.fingerprint = c["fingerprint"].asString();
             if (c["mac"].isString()) {
                 cc.mac = normaliseMac(c["mac"].asString());

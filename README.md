@@ -1,13 +1,17 @@
 # CamBridge
 
-Multi-camera control for Sony cinema bodies over wired Ethernet. Built in-house
-at a media production company for one studio, one operator, three cameras.
-Internal use only — not for redistribution.
+Multi-camera control through Sony Camera Remote SDK, with network and USB
+connection identities. The camera catalog covers all 32 models listed for SDK
+2.02, including Alpha, Cinema Line, professional camcorders, PTZ, ZV and RX.
+Controls are discovered from each connected body, lens and camera mode.
 
-**Cameras:** 1× ILME-FX3, 2× ILME-FX30
-**Transport:** USB-C → gigabit Ethernet adapters (RTL8153 / AX88179), dedicated
-production VLAN, static IPs
-**Control machine:** Apple Silicon Mac, macOS 26
+**Hardware baseline:** 1× ILME-FX3 and 2× ILME-FX30, wired Ethernet, Apple Silicon
+Mac. The 30 additional model profiles await real-camera acceptance; adding a
+profile is not a claim that every feature works on that model.
+
+**Compatibility and future Wordtandem integration:**
+[`docs/camera-support.md`](docs/camera-support.md).
+Internal studio use; Sony SDK redistribution terms still apply.
 
 ---
 
@@ -16,15 +20,16 @@ production VLAN, static IPs
 **Phases 1–5 are built. Phases 2, 4 and 5 await their hardware acceptance runs.**
 
 Phase 0 passed on hardware. Phases 1–5 are implemented and verified as far as is
-possible without the studio rig: 51 C++ tests and 27 Node tests pass, and the
-whole stack has been run end to end against a simulated three-camera setup.
+possible without the studio rig. Automated tests cover the daemon, application
+server and Companion module; the broader USB/network portfolio has its own
+simulated acceptance checks. See the compatibility document for current limits.
 What only real cameras can settle is listed in
 [`docs/phases-1-5.md`](docs/phases-1-5.md).
 
 **Setting up a Mac?** Start at [`docs/setup.md`](docs/setup.md) — it points you
 at the DMG (five minutes, nothing to install) or the full source build
-([`docs/install.md`](docs/install.md)), and covers turning the camera passwords
-off so there is nothing to type.
+([`docs/install.md`](docs/install.md)), and covers camera setup. Use access credentials when the camera requires them;
+keep Access Authentication enabled for the existing FX3/FX30 network rig.
 
 ```sh
 ./scripts/make-dmg.sh
@@ -48,6 +53,8 @@ To try it without hardware, or to run it from a terminal:
 
 ```sh
 ./scripts/start.sh --fake
+# Six mixed USB/network bodies, including two identical USB Alpha cameras:
+./scripts/start.sh --fake-portfolio
 ```
 
 ### What the panel does

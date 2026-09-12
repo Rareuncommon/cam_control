@@ -1,4 +1,4 @@
-// Camera adoption: discover a body on the network, give it credentials, and make
+// Camera adoption: discover a body over USB or a supported network connection, give it credentials, and make
 // it a permanent part of the system — all without touching a terminal.
 //
 // Two things have to happen together and stay consistent: camd has to be told
@@ -32,11 +32,29 @@ export function suggestId(model, mac, taken = new Set()) {
 
 export function normaliseMac(input) {
   const hex = String(input || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
-  if (hex.length !== 12) return null;
+  if (hex.length !== 12 || /^(0{12}|F{12})$/.test(hex)) return null;
   return hex.match(/../g).join(':');
 }
 
+export function cameraIdentity(camera) {
+  const mac = normaliseMac(camera?.mac);
+  if (mac) return `mac:${mac}`;
+  const id = camera?.deviceId;
+  return typeof id === 'string' && id.length <= 16384 && /^sony-sdk:[0-9]+:(?:[0-9a-f]{2})+$/.test(id)
+    ? `device:${id}` : null;
+}
+
 export class Adoption {
+  #pending = Promise.resolve();
+  #mutate(operation) {
+    const next = this.#pending.then(operation);
+    this.#pending = next.catch(() => {});
+    return next;
+  }
+  adopt(input) { return this.#mutate(() => this.#adopt(input)); }
+  forget(id) { return this.#mutate(() => this.#forget(id)); }
+  update(id, changes) { return this.#mutate(() => this.#update(id, changes)); }
+
   /**
    * @param {string} configPath
    * @param {import('./camd-client.js').CamdClient} camd
@@ -102,21 +120,35 @@ export class Adoption {
 
   /**
    * Adopt a discovered camera.
-   * @param {{mac:string,model?:string,ip?:string,label?:string,username?:string,password?:string,id?:string}} input
+   * @param {{mac?:string,deviceId?:string,model?:string,ip?:string,label?:string,username?:string,password?:string,id?:string}} input
    */
-  async adopt(input) {
-    const mac = normaliseMac(input.mac);
-    if (!mac) return { ok: false, error: 'a valid MAC address is required' };
+  async #adopt(input) {
+    const identity = cameraIdentity(input);
+    if (!identity) return { ok: false, error: 'a discovered MAC or SDK device ID is required' };
+    // Names, addresses and authentication requirements come from SDK discovery,
+    // not a model typed into an API request. Unknown SDK models remain usable.
+    const scan = await this.camd.request('GET', '/discovered');
+    if (!scan.ok) return { ok: false, error: 'cannot verify camera discovery' };
+    const matches = (scan.body?.discovered ?? []).filter((c) => cameraIdentity(c) === identity);
+    if (matches.length !== 1) return { ok: false, error: 'camera identity is missing or ambiguous; refresh discovery' };
+    const discovered = matches[0];
+    const mac = normaliseMac(discovered.mac);
+    const deviceId = mac ? '' : discovered.deviceId;
+    input = { ...input, model: discovered.model, ip: discovered.ip };
+    if (discovered.accessAuthRequired && (!input.username?.trim() || !input.password)) {
+      return { ok: false, error: 'this camera requires its access-authentication username and password' };
+    }
 
     const cfg = this.readConfig();
     cfg.cameras ??= [];
 
-    if (cfg.cameras.some((c) => normaliseMac(c.mac) === mac)) {
-      return { ok: false, error: `that camera is already adopted (${mac})` };
+    if (cfg.cameras.some((c) => cameraIdentity(c) === identity)) {
+      return { ok: false, error: 'that camera is already adopted' };
     }
 
     const taken = new Set(cfg.cameras.map((c) => c.id));
-    const id = input.id?.trim() || suggestId(input.model, mac, taken);
+    const id = input.id?.trim() || suggestId(input.model, mac || deviceId, taken);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(id)) return { ok: false, error: 'invalid camera id' };
     if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
 
     const entry = {
@@ -124,7 +156,9 @@ export class Adoption {
       label: input.label?.trim() || input.model || id,
       model: input.model || '',
       ip: input.ip || '',
-      mac,
+      mac: mac || '',
+      deviceId,
+      transport: discovered.transport || '',
       auth: {
         username: input.username?.trim() ?? '',
         password: input.password ?? '',
@@ -139,8 +173,15 @@ export class Adoption {
     }
 
     try {
-      cfg.cameras.push(entry);
-      this.writeConfig(cfg);
+      // Auth may have changed while camd was answering. Merge into the latest
+      // file rather than overwrite a newly saved PIN with our older snapshot.
+      const latest = this.readConfig();
+      latest.cameras ??= [];
+      if (latest.cameras.some((c) => c.id === id || cameraIdentity(c) === identity)) {
+        throw new Error('camera configuration changed during adoption; refresh and retry');
+      }
+      latest.cameras.push(entry);
+      this.writeConfig(latest);
     } catch (err) {
       // Roll the runtime change back rather than leaving a camera that works now
       // and disappears at the next restart.
@@ -153,15 +194,18 @@ export class Adoption {
     return { ok: true, camera: { ...entry, auth: undefined } };
   }
 
-  async forget(id) {
+  async #forget(id) {
     const cfg = this.readConfig();
     const before = (cfg.cameras ?? []).length;
     cfg.cameras = (cfg.cameras ?? []).filter((c) => c.id !== id);
     if (cfg.cameras.length === before) return { ok: false, error: `no camera "${id}" in config` };
 
-    await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+    const removed = await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+    if (!removed.ok) return { ok: false, error: removed.body?.error ?? 'camd refused removal' };
     try {
-      this.writeConfig(cfg);
+      const latest = this.readConfig();
+      latest.cameras = (latest.cameras ?? []).filter((c) => c.id !== id);
+      this.writeConfig(latest);
     } catch (err) {
       return { ok: false, error: `could not save config: ${err.message}` };
     }
@@ -170,7 +214,7 @@ export class Adoption {
   }
 
   /** Rename, or replace credentials, on an already-adopted camera. */
-  async update(id, changes) {
+  async #update(id, changes) {
     const cfg = this.readConfig();
     const entry = (cfg.cameras ?? []).find((c) => c.id === id);
     if (!entry) return { ok: false, error: `no camera "${id}" in config` };

@@ -61,7 +61,7 @@ export function pinMatches(pin, stored) {
  */
 export const ADMIN_ROUTES = [
   /^POST \/api\/adopt$/,               // stores camera credentials
-  /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+$/, // forgets or re-credentials a body
+  /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+(?:\/adoption)?$/, // forgets or re-credentials a body
   /^POST \/api\/shutdown$/,            // stops the app for everyone
   /^POST \/api\/auth\/pin$/,           // changes who can get in
 ];

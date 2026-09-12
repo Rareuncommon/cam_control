@@ -1,6 +1,9 @@
 # CamBridge
 
-Controls Sony FX3 and FX30 bodies through a running **CamBridge** server.
+Controls Sony Camera Remote SDK bodies through a running **CamBridge** server.
+The shared catalog lists 32 models; additional models await hardware validation.
+Controls depend on the connected body, lens and mode. PTZ motion is not implemented.
+Requires Companion 4.2 or newer (module API 1.14.1 / Node 22).
 
 ## Setup
 
@@ -8,7 +11,9 @@ Controls Sony FX3 and FX30 bodies through a running **CamBridge** server.
 2. In this connection's config, enter the address you open the CamBridge control
    panel on, and its port (8088 by default). If Companion runs on the same Mac
    as CamBridge, `127.0.0.1` is correct.
-3. The status goes green once connected. Cameras appear in every dropdown
+3. If CamBridge uses PIN protection, enter an API token configured in CamBridge.
+   The token is used for commands and live state; an operator token is sufficient.
+4. The status goes green once connected. Cameras appear in every dropdown
    automatically — a camera added in the CamBridge web panel shows up here
    without restarting anything.
 

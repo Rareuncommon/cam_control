@@ -440,7 +440,7 @@ function cameraCard(cam) {
     el('div', {},
       el('h2', { text: cam.label || cam.id }),
       el('div', { class: 'meta', text:
-        `${cam.model || 'unknown'} · ${cam.ip || '—'}` +
+        `${cam.model || 'unknown'} · ${cam.ip || cam.transport || '—'}` +
         (cam.properties?.exposureMode ? ` · ${cam.properties.exposureMode.label}` : '') })),
     el('span', { class: 'spacer' }),
     tallyBadge(cam),
@@ -487,6 +487,8 @@ function cameraCard(cam) {
   const recRow = el('div', { class: 'btnrow' },
     el('button', {
       class: rec ? 'big' : 'danger big',
+      disabled: cam.capabilities?.record?.available === false,
+      title: cam.capabilities?.record?.reason || '',
       onclick: () => doAction(cam.id, rec ? 'recordStop' : 'recordStart'),
     }, document.createTextNode(rec ? '■ Stop' : '● Record')));
   add(recRow, recTimer(cam), undoButton(cam));
@@ -790,6 +792,8 @@ function feedTile(cam) {
       document.createTextNode('AF')),
     el('button', {
       class: rec ? 'small' : 'small danger',
+      disabled: cam.capabilities?.record?.available === false,
+      title: cam.capabilities?.record?.reason || '',
       onclick: () => doAction(cam.id, rec ? 'recordStop' : 'recordStart'),
     }, document.createTextNode(rec ? '■' : '●')),
     el('button', {
@@ -828,11 +832,11 @@ function renderSetup() {
   const dt = $('#discovered-table');
   dt.textContent = '';
   dt.append(el('tr', {}, el('th', { text: 'Model' }), el('th', { text: 'Address' }),
-    el('th', { text: 'MAC' }), el('th', { text: '' })));
+    el('th', { text: 'Connection' }), el('th', { text: '' })));
   const list = discovery.discovered ?? [];
   if (!list.length) {
     dt.append(el('tr', {}, el('td', { colspan: '4', class: 'note',
-      text: 'No cameras seen yet. Check USB-LAN Connection and Remote Shooting are on.' })));
+      text: 'No cameras seen yet. Connect a supported camera in USB PC Remote mode or enable its supported network remote connection.' })));
   }
   for (const cam of list) {
     dt.append(el('tr', {},
@@ -841,15 +845,20 @@ function renderSetup() {
       // control in that state, so "no password needed" would read as good news
       // about a camera that is never going to connect.
       el('td', {}, el('div', { text: cam.model || 'unknown' }),
-        el('div', { class: cam.accessAuthRequired ? 'note' : 'note warnnote', text:
-          cam.accessAuthRequired
-            ? 'needs a password from its screen'
-            : '⚠️ authentication off — will not connect' })),
+        el('div', { class: 'note', text:
+          cam.accessAuthRequired ? 'Enter this camera’s access credentials'
+            : 'This connection does not request credentials' }),
+        el('div', { class: 'note', text: cam.support?.listedBySdk
+          ? (cam.support.verification === 'historical-rig-use' ? 'Previously used on the studio rig' : 'SDK-listed · awaiting hardware validation')
+          : 'Detected by SDK · model not in the catalog' })),
       el('td', { class: 'mono', text: cam.ip || '—' }),
-      el('td', { class: 'mono', text: cam.mac || '—' }),
+      el('td', { class: 'mono', text: cam.transport || (cam.mac ? 'Network' : 'SDK device'),
+        title: cam.mac || cam.deviceId || 'No usable device identity' }),
       el('td', {}, cam.adopted
         ? el('span', { class: 'pill ok', text: `added as ${cam.adoptedAs?.label ?? ''}` })
-        : el('button', { class: 'small primary', onclick: () => openAdopt(cam) },
+        : el('button', { class: 'small primary', disabled: cam.adoptable === false,
+            title: cam.adoptable === false ? 'SDK did not provide a usable identity; cannot safely bind this camera' : 'Add camera',
+            onclick: () => openAdopt(cam) },
             document.createTextNode('Add')))));
   }
 
@@ -896,15 +905,16 @@ function setAuthVisible(needsAuth) {
  * it does need them: asking unnecessarily is a nuisance, but hiding the fields
  * from a camera that needs them is a dead end with no way out.
  */
-function needsAuthFor(mac) {
-  const found = (discovery.discovered ?? []).find((d) => d.mac && d.mac === mac);
+function needsAuthFor(cam) {
+  const found = (discovery.discovered ?? []).find((d) =>
+    (cam.mac && d.mac === cam.mac) || (cam.deviceId && d.deviceId === cam.deviceId));
   return found ? found.accessAuthRequired !== false : true;
 }
 
 function openAdopt(cam) {
   adoptTarget = cam; editTarget = null;
   $('#adopt-title').textContent = `Add ${cam.model || 'camera'}`;
-  $('#adopt-sub').textContent = `${cam.ip || 'unknown address'} · ${cam.mac}`;
+  $('#adopt-sub').textContent = `${cam.transport || (cam.ip ? 'Network' : 'USB / SDK')} · ${cam.ip || cam.mac || 'Direct camera connection'}`;
   $('#adopt-label').value = ''; $('#adopt-user').value = ''; $('#adopt-pass').value = '';
   $('#adopt-user').placeholder = 'from the camera screen';
   $('#adopt-pass').placeholder = 'from the camera screen';
@@ -917,20 +927,39 @@ function openAdopt(cam) {
 function openEdit(cam) {
   editTarget = cam; adoptTarget = null;
   $('#adopt-title').textContent = `Edit ${cam.label}`;
-  $('#adopt-sub').textContent = `${cam.ip || 'unknown address'} · ${cam.mac}`;
+  $('#adopt-sub').textContent = `${cam.transport || (cam.ip ? 'Network' : 'USB / SDK')} · ${cam.ip || cam.mac || 'Direct camera connection'}`;
   $('#adopt-label').value = cam.label ?? '';
   $('#adopt-user').value = ''; $('#adopt-pass').value = '';
   // Credentials are never sent to the browser, so blank means "leave alone".
   $('#adopt-user').placeholder = 'leave blank to keep current';
   $('#adopt-pass').placeholder = 'leave blank to keep current';
-  setAuthVisible(needsAuthFor(cam.mac));
+  setAuthVisible(needsAuthFor(cam));
   $('#adopt-confirm').textContent = 'Save';
   $('#adopt-dialog').showModal();
   $('#adopt-label').focus();
 }
 
+let portfolio = null;
+function renderPortfolio() {
+  if (!portfolio) return;
+  const filter = ($('#portfolio-search').value || '').toLowerCase();
+  $('#portfolio-summary').textContent = `${portfolio.models.length} Sony models listed for SDK ${portfolio.sdkVersion}. ${portfolio.connectionNote}`;
+  const table = $('#portfolio-table');
+  table.textContent = '';
+  table.append(el('tr', {}, ...['Camera', 'Family', 'Validation'].map((text) => el('th', { text }))));
+  for (const m of portfolio.models.filter((m) => [m.name, m.model, m.family, ...m.aliases].join(' ').toLowerCase().includes(filter))) {
+    table.append(el('tr', {}, el('td', { text: `${m.name} (${m.model})` }),
+      el('td', { text: m.family }), el('td', { text: m.verification === 'historical-rig-use'
+        ? 'Prior studio use' : 'Hardware validation pending' })));
+  }
+}
+$('#portfolio-search').addEventListener('input', renderPortfolio);
 async function refreshSetup() {
   discovery = await api('GET', '/api/discovered');
+  if (!portfolio) {
+    const result = await api('GET', '/api/camera-support');
+    if (Array.isArray(result.models)) { portfolio = result; renderPortfolio(); }
+  }
   renderSetup();
 }
 
@@ -1299,7 +1328,7 @@ $('#adopt-confirm').addEventListener('click', async () => {
       return toast('This camera needs the username and password from its screen', 'warn', 9000);
     }
     const r = await api('POST', '/api/adopt', {
-      mac: adoptTarget.mac, model: adoptTarget.model, ip: adoptTarget.ip, label, username, password,
+      mac: adoptTarget.mac, deviceId: adoptTarget.deviceId, model: adoptTarget.model, ip: adoptTarget.ip, label, username, password,
     });
     if (r.ok) { toast(`Added ${r.camera?.label ?? label}`); $('#adopt-dialog').close(); refreshSetup(); }
     return;

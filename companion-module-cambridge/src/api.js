@@ -21,8 +21,9 @@ export class CambridgeApi {
    * @param {(up: boolean, detail?: string) => void} opts.onConnection
    * @param {typeof fetch} [opts.fetchImpl]           injected for tests
    */
-  constructor({ host, port, log, onState, onConnection, fetchImpl = fetch }) {
+  constructor({ host, port, token = '', log, onState, onConnection, fetchImpl = fetch }) {
     this.base = `http://${host}:${port}`;
+    this.authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
     this.log = log;
     this.onState = onState;
     this.onConnection = onConnection;
@@ -56,7 +57,7 @@ export class CambridgeApi {
     try {
       const res = await this.fetch(`${this.base}${path}`, {
         method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        headers: { ...this.authHeaders, ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       });
       let parsed = null;
@@ -84,7 +85,7 @@ export class CambridgeApi {
     this.controller = new AbortController();
     try {
       const res = await this.fetch(`${this.base}/api/events`, {
-        headers: { Accept: 'text/event-stream' },
+        headers: { ...this.authHeaders, Accept: 'text/event-stream' },
         signal: this.controller.signal,
       });
       if (!res.ok || !res.body) throw new Error(`events endpoint returned ${res.status}`);

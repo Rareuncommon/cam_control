@@ -67,6 +67,8 @@ class CambridgeInstance extends InstanceBase {
         type: 'textinput', id: 'host', label: 'CamBridge address', width: 8,
         default: '127.0.0.1', regex: Regex.HOSTNAME,
       },
+      { type: 'textinput', id: 'token', label: 'Access token (when a PIN is enabled)',
+        width: 12, default: '', isPassword: true },
       {
         type: 'number', id: 'port', label: 'Port', width: 4,
         default: 8088, min: 1, max: 65535,
@@ -78,6 +80,7 @@ class CambridgeInstance extends InstanceBase {
     this.api = new CambridgeApi({
       host: this.config?.host || '127.0.0.1',
       port: Number(this.config?.port) || 8088,
+      token: this.config?.token || '',
       log: (level, msg) => this.log(level, msg),
       onState: (view) => this.applyState(view),
       onConnection: (up, detail) => {

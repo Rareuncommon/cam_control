@@ -165,9 +165,20 @@
 <!-- ================= SETUP ================= -->
 <section class="view" id="view-setup">
   <div class="card">
-    <h3>Cameras on the network</h3>
+    <h3>Connected cameras</h3>
     <div class="sub" id="discover-hint"></div>
     <table class="list" id="discovered-table"></table>
+  </div>
+  <div class="card">
+    <details>
+      <summary>Camera compatibility</summary>
+      <p class="sub" id="portfolio-summary">Loading camera portfolio…</p>
+      <label for="portfolio-search">Find a camera</label>
+      <input id="portfolio-search" type="search" placeholder="Model or family, e.g. Alpha, FX6, PTZ">
+      <table class="list" id="portfolio-table"></table>
+      <p class="note">Available controls depend on the connected camera, firmware, lens and mode.
+        New models await hardware validation. PTZ movement and media transfer are not implemented.</p>
+    </details>
   </div>
   <div class="card">
     <h3>Who can control the cameras</h3>
@@ -246,14 +257,10 @@
 
   <!-- Not a convenience. FX3/FX30 firmware refuses SDK control over the network
        when access authentication is off, so this is the state to warn about. -->
-  <p class="note" id="adopt-noauth" style="display:none;margin:12px 0 0">
-    ⚠️ This camera reports access authentication <strong>turned off</strong>.
-    These bodies will not accept remote control in that state — they connect and
-    drop in a loop. On the camera, set
-    <strong>MENU → Network → Network Option → [Access Authen. Settings]</strong>
-    back to <strong>On</strong>, then add it with the username and password from
-    <strong>[Access Authen. Info]</strong>.
-  </p>
+  <p id="adopt-noauth" class="note" style="display:none">
+      This connection does not request credentials. USB cameras usually use PC Remote mode.
+      For FX3/FX30 network connections, keep Access Authentication On.
+    </p>
   <div class="line" style="margin-top:14px;justify-content:flex-end">
     <button id="adopt-cancel" class="ghost">Cancel</button>
     <button id="adopt-confirm" class="primary">Add camera</button>

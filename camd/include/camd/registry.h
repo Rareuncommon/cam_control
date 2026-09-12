@@ -54,6 +54,8 @@ public:
         std::string reportedModel;
         std::string ip;
         std::string mac;
+        std::string deviceId;
+        std::string transport;
         ConnState state = ConnState::Offline;
         CameraStatus status;
         int reconnectAttempts = 0;

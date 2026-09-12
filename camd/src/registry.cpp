@@ -102,6 +102,7 @@ CameraWorker::CameraWorker(CameraConfig cfg, Backend* backend,
     snap_.configuredModel = cfg_.model;
     snap_.ip = cfg_.ip;
     snap_.mac = cfg_.mac;
+    snap_.deviceId = cfg_.deviceId;
     snap_.state = ConnState::Offline;
 }
 
@@ -169,6 +170,8 @@ void CameraWorker::offerDiscovery(const DiscoveredCamera& d) {
         snap_.reportedModel = d.model;
         if (!d.ip.empty()) snap_.ip = d.ip;
         if (!d.mac.empty()) snap_.mac = d.mac;
+        snap_.deviceId = d.deviceId;
+        snap_.transport = d.transport;
     }
     jobCv_.notify_all();
 }
@@ -214,6 +217,8 @@ void CameraWorker::publishConnectionState() {
     ev.set("model", json::Value(s.reportedModel.empty() ? s.configuredModel : s.reportedModel));
     ev.set("ip", json::Value(s.ip));
     ev.set("mac", json::Value(s.mac));
+    ev.set("deviceId", json::Value(s.deviceId));
+    ev.set("transport", json::Value(s.transport));
     ev.set("reconnectAttempts", json::Value(static_cast<std::int64_t>(s.reconnectAttempts)));
     if (!s.lastError.empty()) ev.set("detail", json::Value(s.lastError));
     publisher_->publish(ev.dump());
@@ -353,6 +358,8 @@ void CameraWorker::stepConnecting() {
         snap_.reportedModel = target.model;
         snap_.ip = target.ip;
         snap_.mac = target.mac;
+        snap_.deviceId = target.deviceId;
+        snap_.transport = target.transport;
     }
     setState(ConnState::Connected, "");
 
@@ -515,6 +522,11 @@ bool CameraWorker::setRecording(CameraSession* session, bool wantRecording,
     }
     finalState = st.recordingState;
 
+    if (st.recordingState != kRecordingRecording &&
+        st.recordingState != kRecordingNotRecording) {
+        err = "camera does not report a usable RecordingState; refusing to press REC blind";
+        return false;
+    }
     const bool isRecording = (st.recordingState == kRecordingRecording);
     if (isRecording == wantRecording) {
         // Already in the requested state. Doing nothing is the whole point: the
@@ -523,11 +535,6 @@ bool CameraWorker::setRecording(CameraSession* session, bool wantRecording,
         LOG_INFO(cfg_.id.c_str(), "record %s requested; already %s, no action",
                  wantRecording ? "start" : "stop", isRecording ? "recording" : "idle");
         return true;
-    }
-
-    if (st.recordingState == kRecordingUnknown) {
-        err = "camera does not report RecordingState; refusing to press REC blind";
-        return false;
     }
 
     // Observed on the FX30 during Phase 0: Down starts recording, Up stops it.
@@ -556,8 +563,8 @@ bool CameraWorker::setRecording(CameraSession* session, bool wantRecording,
                       wantRecording ? "start" : "stop");
             return false;
         }
-        const bool nowRecording = (check.recordingState == kRecordingRecording);
-        if (nowRecording == wantRecording) {
+        const auto wantedState = wantRecording ? kRecordingRecording : kRecordingNotRecording;
+        if (check.recordingState == wantedState) {
             LOG_INFO(cfg_.id.c_str(), "record %s confirmed (state 0x%llX)",
                      wantRecording ? "start" : "stop",
                      static_cast<unsigned long long>(check.recordingState));
@@ -616,6 +623,10 @@ bool Registry::addCamera(const CameraConfig& cc, std::string& err) {
             if (w->id() == cc.id) { err = "a camera with id '" + cc.id + "' already exists"; return false; }
         }
         for (const auto& existing : cfg_.cameras) {
+            if (!cc.deviceId.empty() && existing.deviceId == cc.deviceId) {
+                err = "SDK device is already adopted as '" + existing.id + "'";
+                return false;
+            }
             if (!cc.mac.empty() && existing.mac == cc.mac) {
                 err = "camera " + cc.mac + " is already adopted as '" + existing.id + "'";
                 return false;
@@ -634,10 +645,11 @@ bool Registry::addCamera(const CameraConfig& cc, std::string& err) {
     // the next sweep. Without this, a camera adopted through the UI sits at
     // "offline" for up to a full discovery interval and the operator is shown a
     // red banner for a camera that is in fact fine.
-    if (!cc.mac.empty()) {
+    if (!cc.mac.empty() || !cc.deviceId.empty()) {
         std::lock_guard<std::mutex> lock(discMu_);
         for (const auto& d : discovered_) {
-            if (upperMac(d.mac) == cc.mac) {
+            if ((!cc.deviceId.empty() && d.deviceId == cc.deviceId) ||
+                (cc.deviceId.empty() && !cc.mac.empty() && upperMac(d.mac) == cc.mac)) {
                 worker->offerDiscovery(d);
                 break;
             }
@@ -763,10 +775,20 @@ void Registry::discoveryLoop() {
             workers[widx]->offerDiscovery(found[fidx]);
         };
 
-        // Pass 1 — MAC. Authoritative.
+        // Opaque SDK identities pin USB cameras before any weaker matching.
+        // An unplugged USB body must never steal another body of the same model.
         for (std::size_t wi = 0; wi < workers.size(); ++wi) {
             const CameraConfig* cc = configFor(workers[wi]->id());
-            if (!cc || cc->mac.empty()) continue;
+            if (!cc || cc->deviceId.empty()) continue;
+            for (std::size_t i = 0; i < found.size(); ++i) {
+                if (!claimed[i] && found[i].deviceId == cc->deviceId) { claim(wi, i); break; }
+            }
+        }
+
+        // Pass 1 — MAC. Authoritative for legacy/network configuration.
+        for (std::size_t wi = 0; wi < workers.size(); ++wi) {
+            const CameraConfig* cc = configFor(workers[wi]->id());
+            if (assigned[wi] || !cc || !cc->deviceId.empty() || cc->mac.empty()) continue;
             for (std::size_t i = 0; i < found.size(); ++i) {
                 if (!claimed[i] && upperMac(found[i].mac) == cc->mac) { claim(wi, i); break; }
             }
@@ -779,7 +801,7 @@ void Registry::discoveryLoop() {
             // A config entry that names a MAC is pinned to that body. Never fall
             // back for it: binding "FX30 — Center" to whatever FX30 happens to be
             // reachable is worse than leaving it offline and saying so.
-            if (!cc || !cc->mac.empty() || cc->ip.empty()) continue;
+            if (!cc || !cc->deviceId.empty() || !cc->mac.empty() || cc->ip.empty()) continue;
             for (std::size_t i = 0; i < found.size(); ++i) {
                 if (!claimed[i] && found[i].ip == cc->ip) { claim(wi, i); break; }
             }
@@ -789,7 +811,7 @@ void Registry::discoveryLoop() {
         for (std::size_t wi = 0; wi < workers.size(); ++wi) {
             if (assigned[wi]) continue;
             const CameraConfig* cc = configFor(workers[wi]->id());
-            if (!cc || !cc->mac.empty() || cc->model.empty()) continue;
+            if (!cc || !cc->deviceId.empty() || !cc->mac.empty() || cc->model.empty()) continue;
             int matches = 0;
             int candidate = -1;
             for (std::size_t i = 0; i < found.size(); ++i) {
@@ -840,6 +862,8 @@ json::Value cameraSnapshotJson(const CameraWorker::Snapshot& s) {
     v.set("reportedModel", json::Value(s.reportedModel));
     v.set("ip", json::Value(s.ip));
     v.set("mac", json::Value(s.mac));
+    v.set("deviceId", json::Value(s.deviceId));
+    v.set("transport", json::Value(s.transport));
     v.set("state", json::Value(connStateName(s.state)));
     v.set("discovered", json::Value(s.discovered));
     v.set("reconnectAttempts", json::Value(static_cast<std::int64_t>(s.reconnectAttempts)));

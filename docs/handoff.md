@@ -4,6 +4,26 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-09-12 camera portfolio update
+
+Current implementation expands the shared catalog from FX3/FX30 to the 32 Sony
+SDK 2.02 model profiles and adds SDK device identities for USB discovery,
+adoption and reconnection. See [camera-support.md](camera-support.md) for the
+model list, live capability contract, Wordtandem boundary and acceptance steps.
+The old three-body rig below remains historical context, not the portfolio limit.
+New bodies await hardware validation, and the modified Sony adapter still needs
+compilation with the licensed SDK; only SDK-free compilation was available here.
+
+Automated verification: 64 C++ tests, 184 application tests and 29 Companion tests
+pass. The six-body mixed USB/network HTTP/WebSocket acceptance test adopts,
+controls and restores all bodies after a full restart. Browser checks cover the
+32-profile search and separate adoption of two identical USB cameras. A deliberate
+Companion/catalog mismatch was rejected by the synchronization guard.
+
+No Wordtandem prompter changes or deployment were made. Use the local CamBridge
+API boundary for future integration. The remaining issues in the September 12
+full audit still require work before production rollout.
+
 ## What this is
 
 A replacement for Middle Control: a multi-camera control system for Sony cine
