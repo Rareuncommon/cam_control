@@ -85,8 +85,9 @@ FX6 variants are represented by one canonical profile with FX6V/FX6T aliases.
 - SDK device IDs are opaque connection bindings, not portable serial numbers.
   If changing ports, hosts or firmware changes an ID, rediscover and explicitly
   re-adopt that camera. The application must never guess by model instead.
-- Canon and Panasonic network PTZ now have movement adapters. Nikon, Blackmagic
-  and generic UVC control remain outside this implementation.
+- Canon and Panasonic network PTZ have movement adapters. Non-Sony USB stills
+  and Blackmagic cinema cameras now have [separate adapters](stills-cinema-control.md).
+  Generic UVC camera control remains outside this implementation.
 
 ## Reproducible checks
 

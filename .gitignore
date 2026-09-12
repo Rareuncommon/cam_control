@@ -65,3 +65,6 @@ config/*.bak
 # it; useful to produce, never something to commit.
 session-export/
 *.session-export/
+
+# Local optional libgphoto2 helper (dynamic library paths are host-specific)
+cambridge/native/gphoto-control

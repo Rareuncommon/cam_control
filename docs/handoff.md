@@ -4,6 +4,33 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-09-12 stills and cinema expansion
+
+Added 416 production libgphoto2 USB profiles (including regional/driver aliases)
+and 12 Blackmagic REST profiles; combined catalog is 508 entries, not 508
+independently tested physical models. Source metadata is generated with the
+read-only catalog helper. See [stills-cinema-control.md](stills-cinema-control.md).
+
+USB supports discovered writable exposure settings and guarded photo capture to
+memory card. A compiled libgphoto helper binds serial validation and mutation to
+one camera handle; it rejects changed identities, changed choice meanings,
+invalid values, RAM targets and Bulb capture. Optional gphoto dependencies and
+the helper are installed/built on this development Mac, not bundled portably.
+Blackmagic supports native metadata-driven exposure and recording with readback.
+Stop cancels queued Starts, guards delayed dispatch and serializes mutations.
+
+Added Setup/search/control UI and Companion native actions. External credentials
+are redacted, configuration persists, and unknown recording stays unknown.
+Sony matching/gangs/scenes/undo, live view, take logs and unexpected-stop tracking
+are not available for these external adapters; USB movie recording is not added.
+Wordtandem itself is unchanged; use the local provider/capability API later.
+
+Verification: 219 application tests, 31 Companion tests and 64 existing C++ tests
+pass (314 total), plus seven native-helper guard scenarios and browser tests for
+USB/Blackmagic setup, exposure, photo capture, recording, Stop, live updates while
+editing and mobile width. Existing six-body Sony and PTZ workflows pass. Physical
+camera and licensed-SDK acceptance remain outstanding.
+
 ## 2026-09-12 multi-brand PTZ movement update
 
 Network PTZ is implemented in the Node service, independent of camd: Sony-framed

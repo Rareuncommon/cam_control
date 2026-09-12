@@ -1,3 +1,4 @@
+import { createExternalUi } from './external.js';
 import { createPtzUi } from './ptz.js';
 import { createGamepadControl } from './gamepad.js';
 import {
@@ -45,6 +46,7 @@ let currentView = 'control';
 let soloFeed = null;
 let gangSelection = new Set();
 let interacting = null;
+const externalUi = createExternalUi({ el, api, toast });
 const ptzUi = createPtzUi({ el, api, toast, refresh: () => render() });
 // Persisted so a booth iPad comes back the way it was left.
 let advanced = localStorage.getItem('cb.advanced') === '1';
@@ -589,6 +591,17 @@ function openPicker(cam, propName, title) {
 
 function renderControl() {
   if (ptzUi.active) return;
+  const editing = document.activeElement?.matches('.external-control input, .external-control select') ? document.activeElement.closest('.external-card') : null;
+  if (editing) {
+    const old = [...$('#grid').children];
+    view.cameras.forEach((cam, i) => {
+      if (old[i] === editing && editing.dataset.externalId === cam.id) return;
+      const card = cam.provider === 'network-ptz' ? ptzUi.card(cam) : cam.external ? externalUi.card(cam) : cameraCard(cam);
+      if (old[i]) old[i].replaceWith(card); else $('#grid').append(card);
+    });
+    old.slice(view.cameras.length).forEach(c => c.remove());
+    return;
+  }
   const grid = $('#grid');
   grid.textContent = '';
   if (!view.cameras.length) {
@@ -601,7 +614,7 @@ function renderControl() {
             document.createTextNode('Add a camera'))
         : el('div', { class: 'mono', text: './scripts/start.sh' }))));
   }
-  for (const cam of view.cameras) grid.append(cam.provider === 'network-ptz' ? ptzUi.card(cam) : cameraCard(cam));
+  for (const cam of view.cameras) grid.append(cam.provider === 'network-ptz' ? ptzUi.card(cam) : cam.external ? externalUi.card(cam) : cameraCard(cam));
 }
 
 // Live feeds, one polling loop per tile.
@@ -819,11 +832,12 @@ function renderMultiview() {
     grid.append(el('div', { class: 'note', style: 'padding:12px', text: 'No cameras to show.' }));
     return;
   }
-  for (const cam of cams.filter(c => c.provider !== 'network-ptz')) grid.append(feedTile(cam));
+  for (const cam of cams.filter(c => c.provider !== 'network-ptz' && !c.external)) grid.append(feedTile(cam));
 }
 
 function renderSetup() {
   ptzUi.renderList(view.cameras);
+  externalUi.renderList(view.cameras);
   $('#discover-hint').textContent = discovery.credentialHint ?? '';
   // Where this instance actually reads and writes. Invisible paths turned a
   // wrong config file into "the app forgot my cameras".
@@ -873,7 +887,7 @@ function renderSetup() {
   if (!view.cameras.length) {
     at.append(el('tr', {}, el('td', { colspan: '4', class: 'note', text: 'Nothing added yet.' })));
   }
-  for (const cam of view.cameras.filter(c => c.provider !== 'network-ptz')) {
+  for (const cam of view.cameras.filter(c => c.provider !== 'network-ptz' && !c.external)) {
     at.append(el('tr', {},
       el('td', { text: cam.label }),
       el('td', { class: 'note', text: cam.model || '—' }),
@@ -960,6 +974,7 @@ function renderPortfolio() {
 $('#portfolio-search').addEventListener('input', renderPortfolio);
 async function refreshSetup() {
   await ptzUi.setup();
+  await externalUi.setup();
   discovery = await api('GET', '/api/discovered');
   if (!portfolio) {
     const result = await api('GET', '/api/camera-support');
@@ -1074,7 +1089,7 @@ function renderTools() {
   const refSel = $('#match-ref');
   const prev = refSel.value;
   refSel.textContent = '';
-  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz')) {
+  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz' && !c.external)) {
     refSel.append(el('option', { value: c.id, selected: c.id === prev },
       document.createTextNode(`${c.label}${c.state === 'connected' ? '' : ' (offline)'}`)));
   }
@@ -1086,7 +1101,7 @@ function renderTools() {
   }
   const holder = $('#gang-members');
   holder.textContent = '';
-  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz')) {
+  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz' && !c.external)) {
     holder.append(el('div', {
       class: `chip${gangSelection.has(c.id) ? ' on' : ''}`,
       onclick: (e) => {
@@ -1370,8 +1385,8 @@ $('#quit').addEventListener('click', async () => {
 
 /** The camera a gamepad drives: the chosen one, or the first connected one. */
 function padTarget() {
-  const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected' && c.provider !== 'network-ptz');
-  return chosen ?? view.cameras.find((c) => c.state === 'connected' && c.provider !== 'network-ptz') ?? null;
+  const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected' && c.provider !== 'network-ptz' && !c.external);
+  return chosen ?? view.cameras.find((c) => c.state === 'connected' && c.provider !== 'network-ptz' && !c.external) ?? null;
 }
 
 // Properties where pushing "up" should walk *down* the raw scale. Iris is the
@@ -1415,7 +1430,7 @@ async function padAction(action) {
   } else if (action === 'autofocus') {
     await doAction(cam.id, 'autofocus');
   } else if (action === 'nextCamera' || action === 'prevCamera') {
-    const live = view.cameras.filter((c) => c.state === 'connected');
+    const live = view.cameras.filter(c => c.state === 'connected' && c.provider !== 'network-ptz' && !c.external);
     if (live.length < 2) return;
     const at = live.findIndex((c) => c.id === cam.id);
     const step = action === 'nextCamera' ? 1 : -1;
@@ -1462,7 +1477,7 @@ function renderPadCameras() {
   if (!sel) return;
   const target = padTarget()?.id ?? '';
   sel.textContent = '';
-  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz')) {
+  for (const c of view.cameras.filter(c => c.provider !== 'network-ptz' && !c.external)) {
     sel.append(el('option', { value: c.id, selected: c.id === target },
       document.createTextNode(c.label)));
   }

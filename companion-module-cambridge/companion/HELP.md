@@ -83,3 +83,12 @@ connection probing, Home, and native preset recall/save (save requires admin).
 Add network cameras in CamBridge Setup first. These controls use the independent
 network PTZ adapters and do not add recording or video to PTZ-only connections.
 Hardware validation remains model-specific. See docs/ptz-control.md in CamBridge.
+
+## Stills and cinema cameras
+
+Add non-Sony USB or Blackmagic cameras in CamBridge Setup. Native-control and
+refresh actions use the returned external controls; USB dropdown values are
+choice indices. Still capture requires a memory-card target and non-Bulb shutter.
+Existing Record actions support Blackmagic. Unconfirmed recording displays
+unknown. SDK presets, matching, undo and live view do not apply to these adapters.
+See docs/stills-cinema-control.md for installation and model-specific limits.

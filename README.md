@@ -7,6 +7,9 @@ Controls are discovered from each connected body, lens and camera mode.
 Network PTZ adds 49 named profiles across Sony, Canon, Panasonic, BirdDog,
 PTZOptics and AVer, plus four generic adapters: hold-to-move pan/tilt/zoom,
 Stop, Home and native camera presets. See [PTZ setup and limits](docs/ptz-control.md).
+Stills/cinema support adds 416 libgphoto2 USB profiles (including regional aliases)
+and 12 Blackmagic REST profiles, with native exposure controls, guarded still
+capture and Blackmagic recording/readback. See [stills/cinema setup](docs/stills-cinema-control.md).
 
 **Hardware baseline:** 1× ILME-FX3 and 2× ILME-FX30, wired Ethernet, Apple Silicon
 Mac. The 30 additional model profiles await real-camera acceptance; adding a

@@ -325,3 +325,7 @@ dialog h3 { margin: 0 0 4px; }
 .ptz-card .ptz-slot { width: 5rem; }
 [hidden] { display: none !important; }
 #ptz-added { display: grid; gap: 8px; }
+
+.external-control { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; margin-top: 10px; }
+.external-control > * { min-width: 0; max-width: 100%; }
+.external-card .note { overflow-wrap: anywhere; }

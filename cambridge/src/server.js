@@ -19,6 +19,7 @@ import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
 import { Adoption, normaliseMac, suggestId, cameraIdentity } from './adopt.js';
 import { cameraCatalog, modelSupport } from './camera-support.js';
+import { ExternalManager, externalCatalog } from './external/manager.js';
 import { PtzManager, ptzCatalog } from './ptz/manager.js';
 import { AtemTally, tallyForCameras } from './atem.js';
 import { decodeCCdP, toCameraWrites, cameraForDestination, WriteCoalescer } from './atem-cc.js';
@@ -166,6 +167,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log);
   const ptz = new PtzManager({ adoption });
+  const external = new ExternalManager({ adoption });
 
   const undo = new UndoHistory();
   const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
@@ -217,6 +219,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * the joystick would have been reported as a fault.
    */
   const runAction = async (cameraId, action, body) => {
+    if (external.has(cameraId)) {
+      try { return { ok: true, status: 200, body: await external.action(cameraId, action, body ?? {}) }; }
+      catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
+    }
     if (ptz.has(cameraId)) {
       try { return { ok: true, status: 202, body: ptz.action(cameraId, action, body ?? {}) }; }
       catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
@@ -346,7 +352,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    */
   function buildPush() {
     const view = state.view();
-    view.cameras.push(...ptz.view());
+    view.cameras.push(...ptz.view(), ...external.view());
     const alarms = evaluateAlarms(view.cameras, thresholds);
     logNewAlarms(alarms);
     return {
@@ -402,6 +408,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
 
   ptz.on('change', () => pushToClients(buildPush()));
+  external.on('change', () => pushToClients(buildPush()));
 
   // --- camd event wiring ----------------------------------------------------
   camd.on('camdConnected', async () => {
@@ -577,6 +584,25 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         return;
       }
 
+      if (path === '/api/external/catalog' && req.method === 'GET') return sendJson(res, 200, externalCatalog());
+      if (path === '/api/external/discovered' && req.method === 'GET') {
+        try { return sendJson(res, 200, { cameras: await external.discover() }); }
+        catch (error) { return sendJson(res, 503, { ok: false, error: error.message }); }
+      }
+      if (path === '/api/external/cameras' && req.method === 'POST') {
+        try { return sendJson(res, 201, { ok: true, camera: await external.add(await readBody(req)) }); }
+        catch (error) { return sendJson(res, 400, { ok: false, error: error.message }); }
+      }
+      m = path.match(/^\/api\/external\/cameras\/([^/]+)(?:\/(refresh|set|capture))?$/);
+      if (m && req.method === 'DELETE' && !m[2]) {
+        try { external.remove(decodeURIComponent(m[1])); return sendJson(res, 200, { ok: true }); }
+        catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+      if (m && req.method === 'POST' && m[2]) {
+        try { return sendJson(res, 200, await external.action(decodeURIComponent(m[1]), m[2], await readBody(req) ?? {})); }
+        catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+
       // Outbound network PTZ configuration and motion are independent of camd.
       if (path === '/api/ptz/catalog' && req.method === 'GET') return sendJson(res, 200, ptzCatalog());
       if (path === '/api/ptz/cameras' && req.method === 'GET') return sendJson(res, 200, { cameras: ptz.view() });
@@ -612,12 +638,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Same evaluation the SSE push uses, for anything that polls rather than
       // subscribes — a monitoring script, or curl at 3am.
       if (path === '/api/alarms' && req.method === 'GET') {
-        const alarms = evaluateAlarms(state.view().cameras, thresholds);
+        const alarms = evaluateAlarms([...state.view().cameras, ...ptz.view(), ...external.view()], thresholds);
         return sendJson(res, 200, {
           alarms,
           summary: summarise(alarms),
           thresholds,
-          roll: rollState(state.list()),
+          roll: rollState([...state.list(), ...external.view()]),
         });
       }
 
@@ -651,7 +677,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
             detail: 'nothing to undo on this camera' });
         }
         const [result] = await applyWithoutHistory(cameraId, { [entry.prop]: entry.from });
-        if (result.ok) await refreshProperties(cameraId);
+        if (result.ok && !external.has(cameraId)) await refreshProperties(cameraId);
         log.info('undo', `${actor()}${cameraId} ${entry.prop} ${entry.to} -> ${entry.from}` +
           (result.ok ? '' : ` FAILED: ${result.error}`));
         return sendJson(res, result.ok ? 200 : 502, {
@@ -824,7 +850,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
         }
         const result = await runAction(cameraId, action, body ?? undefined);
-        if (result.ok) await refreshProperties(cameraId);
+        if (result.ok && !external.has(cameraId)) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
           ok: result.ok, cameraId, action, ...(result.body ?? {}),
         });
@@ -834,7 +860,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/record-all' && req.method === 'POST') {
         const body = await readBody(req);
         const want = body?.start !== false;
-        const targets = state.list().filter((c) => c.state === 'connected');
+        const targets = [...state.list().filter(c => c.state === 'connected'), ...external.view().filter(c => want ? c.capabilities.record.available : c.provider === 'blackmagic-rest')];
         log.info('action', `${actor()}record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
         const results = await Promise.all(targets.map(async (cam) => {
           const r = await runAction(cam.id, want ? 'recordStart' : 'recordStop');
@@ -853,7 +879,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // The launcher's PID is passed down so we can signal it rather than just
       // exiting: it owns camd too, and its trap is what stops both cleanly.
       if (path === '/api/shutdown' && req.method === 'POST') {
-        await ptz.stop();
+        await external.stop();
+      await ptz.stop();
         log.info('cambridge', 'shutdown requested from the panel');
         sendJson(res, 200, { ok: true, stopping: true });
         const launcher = Number(process.env.CAMBRIDGE_LAUNCHER_PID);
@@ -1020,9 +1047,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     atem,
     visca,
     ptz,
+    external,
     start() {
       camd.start();
       ptz.start();
+      external.start();
       if (atem) {
         log.info('atem', `watching switcher at ${cfg.atem.host}:${cfg.atem.port} for tally`);
         atem.start();
@@ -1060,6 +1089,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       });
     },
     async stop() {
+      await external.stop();
       await ptz.stop();
       camd.stop();
       atem?.stop();

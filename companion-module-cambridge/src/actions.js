@@ -40,6 +40,21 @@ export function buildActions(self) {
   });
 
   return {
+    externalControl: {
+      name: 'Stills / cinema: set a native camera control',
+      options: [cameraField({ choices: cameraChoices.filter(c => self.camera(c.id)?.external) }),
+        { type: 'textinput', id: 'key', label: 'Native control key (from camera state)', default: 'iso' },
+        { type: 'number', id: 'value', label: 'Value (USB: choice index)', default: 0 }],
+      callback: ev => self.api.request('POST', `/api/external/cameras/${encodeURIComponent(ev.options.camera)}/set`, { key: ev.options.key, value: Number(ev.options.value) }),
+    },
+    externalRefresh: {
+      name: 'Stills / cinema: refresh controls', options: [cameraField({ choices: cameraChoices.filter(c => self.camera(c.id)?.external) })],
+      callback: ev => self.api.request('POST', `/api/external/cameras/${encodeURIComponent(ev.options.camera)}/refresh`, {}),
+    },
+    externalCapture: {
+      name: 'Stills: take photo to memory card', options: [cameraField({ choices: cameraChoices.filter(c => self.camera(c.id)?.provider === 'gphoto2') })],
+      callback: ev => self.api.request('POST', `/api/external/cameras/${encodeURIComponent(ev.options.camera)}/capture`, {}),
+    },
     ptzMove: {
       name: 'PTZ: move for a bounded interval',
       options: [cameraField({ choices: cameraChoices.filter(c => self.camera(c.id)?.provider === 'network-ptz') }),

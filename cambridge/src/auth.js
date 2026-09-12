@@ -60,6 +60,8 @@ export function pinMatches(pin, stored) {
  * is added.
  */
 export const ADMIN_ROUTES = [
+  /^POST \/api\/external\/cameras$/,
+  /^DELETE \/api\/external\/cameras\/[^/]+$/,
   /^POST \/api\/ptz\/cameras$/,
   /^DELETE \/api\/ptz\/cameras\/[^/]+$/,
   /^POST \/api\/cameras\/[^/]+\/actions\/ptzPresetSave$/,

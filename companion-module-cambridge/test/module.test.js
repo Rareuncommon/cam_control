@@ -484,3 +484,14 @@ test('PTZ Companion actions send bounded motion, Stop and native presets', async
   await captured.actions.ptzCommand.callback({ options: { camera: 'ptz-canon', command: 'ptzPresetRecall', slot: '3' } });
   assert.equal(sent[2].body.slot, 3);
 });
+
+test('external camera actions use native routes and unknown recording stays unknown', async () => {
+  const { inst, captured } = makeInstance(), sent = [];
+  inst.api = { request: async (...args) => sent.push(args), stop() {} };
+  const view = sampleView(); view.cameras.push({ id: 'ext-usb', label: 'Stills', provider: 'gphoto2', state: 'connected', status: { recording: null }, properties: {}, external: { controls: [] } });
+  inst.applyState(view);
+  assert.equal(captured.variables.ext_usb_recording, 'unknown');
+  await captured.actions.externalControl.callback({ options: { camera: 'ext-usb', key: '/main/imgsettings/iso', value: 1 } });
+  assert.deepEqual(sent[0], ['POST', '/api/external/cameras/ext-usb/set', { key: '/main/imgsettings/iso', value: 1 }]);
+  await captured.actions.externalCapture.callback({ options: { camera: 'ext-usb' } }); assert.equal(sent[1][1], '/api/external/cameras/ext-usb/capture');
+});

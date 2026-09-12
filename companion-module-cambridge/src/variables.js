@@ -10,7 +10,7 @@ const PER_CAMERA = [
   ['label', 'Name'],
   ['model', 'Model'],
   ['state', 'Connection state'],
-  ['recording', 'Recording (REC / idle / FAILED)'],
+  ['recording', 'Recording (REC / idle / unknown / FAILED)'],
   ['iris', 'Iris'],
   ['iso', 'ISO'],
   ['shutter', 'Shutter'],
@@ -95,7 +95,7 @@ export function buildVariableValues(cameras, {
     values[`${v}_model`] = cam.model ?? '';
     values[`${v}_state`] = cam.state ?? 'unknown';
     values[`${v}_recording`] = cam.status?.recordingFailed ? 'FAILED'
-      : cam.status?.recording ? 'REC' : 'idle';
+      : cam.status?.recording === true ? 'REC' : cam.status?.recording === false ? 'idle' : 'unknown';
     values[`${v}_iris`] = label(cam, 'fNumber');
     values[`${v}_iso`] = label(cam, 'isoSensitivity');
     values[`${v}_shutter`] = label(cam, 'shutterSpeed');

@@ -1,0 +1,3429 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "bmd-cinema-camera-6k",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Cinema Camera 6K",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-micro-studio-camera-4k-g2",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Micro Studio Camera 4K G2",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-pyxis-6k",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic PYXIS 6K",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-studio-camera-4k-plus",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Studio Camera 4K Plus",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-studio-camera-4k-plus-g2",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Studio Camera 4K Plus G2",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-studio-camera-4k-pro",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Studio Camera 4K Pro",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-studio-camera-4k-pro-g2",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Studio Camera 4K Pro G2",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-studio-camera-6k-pro",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic Studio Camera 6K Pro",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-ursa-broadcast-g2",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic URSA Broadcast G2",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-ursa-cine-12k-lf",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic URSA Cine 12K LF",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-ursa-cine-17k-65",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic URSA Cine 17K 65",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "bmd-ursa-cine-immersive",
+      "brand": "Blackmagic Design",
+      "model": "Blackmagic URSA Cine Immersive",
+      "provider": "blackmagic-rest",
+      "source": "https://documents.blackmagicdesign.com/DeveloperManuals/RESTAPIforBlackmagicCameras.pdf",
+      "verification": "protocol-documented; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-180",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 180",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-30-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 30 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-300",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 300",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-330",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 330",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-400-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 400 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-430-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 430 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-500-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS 500 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-ii-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS II (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-iis-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS IIs (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-i5-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS i5 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-v",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS v",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-v2",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS v2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-v3-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS v3 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-ixus-v3-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Digital IXUS v3 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-powershot-sx730hs",
+      "brand": "Canon",
+      "model": "Canon Digital PowerShot SX730HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-rebel-xt-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Digital Rebel XT (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-digital-unknown-3",
+      "brand": "Canon",
+      "model": "Canon Digital unknown 3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1000d",
+      "brand": "Canon",
+      "model": "Canon EOS 1000D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-100d",
+      "brand": "Canon",
+      "model": "Canon EOS 100D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-10d",
+      "brand": "Canon",
+      "model": "Canon EOS 10D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1100d",
+      "brand": "Canon",
+      "model": "Canon EOS 1100D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1200d",
+      "brand": "Canon",
+      "model": "Canon EOS 1200D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1300d",
+      "brand": "Canon",
+      "model": "Canon EOS 1300D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1500d",
+      "brand": "Canon",
+      "model": "Canon EOS 1500D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1d-c",
+      "brand": "Canon",
+      "model": "Canon EOS 1D C",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1d-mark-iii-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 1D Mark III (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1d-mark-iv",
+      "brand": "Canon",
+      "model": "Canon EOS 1D Mark IV",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1d-x",
+      "brand": "Canon",
+      "model": "Canon EOS 1D X",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1d-x-markii",
+      "brand": "Canon",
+      "model": "Canon EOS 1D X MarkII",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-1d-x-markiii",
+      "brand": "Canon",
+      "model": "Canon EOS 1D X MarkIII",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-2000d",
+      "brand": "Canon",
+      "model": "Canon EOS 2000D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-200d",
+      "brand": "Canon",
+      "model": "Canon EOS 200D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-20d-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 20D (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-250d",
+      "brand": "Canon",
+      "model": "Canon EOS 250D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-300d-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 300D (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-30d-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 30D (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-350d-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 350D (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-4000d",
+      "brand": "Canon",
+      "model": "Canon EOS 4000D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-400d-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 400D (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-40d-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 40D (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-450d-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 450D (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-500d",
+      "brand": "Canon",
+      "model": "Canon EOS 500D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-50d",
+      "brand": "Canon",
+      "model": "Canon EOS 50D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-550d",
+      "brand": "Canon",
+      "model": "Canon EOS 550D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5d-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS 5D (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5d-mark-ii",
+      "brand": "Canon",
+      "model": "Canon EOS 5D Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5d-mark-iii",
+      "brand": "Canon",
+      "model": "Canon EOS 5D Mark III",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5d-mark-iv",
+      "brand": "Canon",
+      "model": "Canon EOS 5D Mark IV",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5ds",
+      "brand": "Canon",
+      "model": "Canon EOS 5DS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5ds-r",
+      "brand": "Canon",
+      "model": "Canon EOS 5DS R",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-5rm2",
+      "brand": "Canon",
+      "model": "Canon EOS 5Rm2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-600d",
+      "brand": "Canon",
+      "model": "Canon EOS 600D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-60d",
+      "brand": "Canon",
+      "model": "Canon EOS 60D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-650d",
+      "brand": "Canon",
+      "model": "Canon EOS 650D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-6d",
+      "brand": "Canon",
+      "model": "Canon EOS 6D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-6d-mark-ii",
+      "brand": "Canon",
+      "model": "Canon EOS 6d Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-700d",
+      "brand": "Canon",
+      "model": "Canon EOS 700D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-70d",
+      "brand": "Canon",
+      "model": "Canon EOS 70D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-750d",
+      "brand": "Canon",
+      "model": "Canon EOS 750D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-760d",
+      "brand": "Canon",
+      "model": "Canon EOS 760D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-77d",
+      "brand": "Canon",
+      "model": "Canon EOS 77D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-7d",
+      "brand": "Canon",
+      "model": "Canon EOS 7D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-7d-markii",
+      "brand": "Canon",
+      "model": "Canon EOS 7D MarkII",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-800d",
+      "brand": "Canon",
+      "model": "Canon EOS 800D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-80d",
+      "brand": "Canon",
+      "model": "Canon EOS 80D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-850d",
+      "brand": "Canon",
+      "model": "Canon EOS 850D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-90d",
+      "brand": "Canon",
+      "model": "Canon EOS 90D",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-d30",
+      "brand": "Canon",
+      "model": "Canon EOS D30",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-d60",
+      "brand": "Canon",
+      "model": "Canon EOS D60",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-digital-rebel-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Digital Rebel (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-digital-rebel-xti-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Digital Rebel XTi (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-kiss-digital-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Kiss Digital (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-kiss-digital-n-normal-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Kiss Digital N (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-kiss-digital-x-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Kiss Digital X (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-kiss-x2-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Kiss X2 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-kiss-x3",
+      "brand": "Canon",
+      "model": "Canon EOS Kiss X3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m10",
+      "brand": "Canon",
+      "model": "Canon EOS M10",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m100",
+      "brand": "Canon",
+      "model": "Canon EOS M100",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m2",
+      "brand": "Canon",
+      "model": "Canon EOS M2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m200",
+      "brand": "Canon",
+      "model": "Canon EOS M200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m3",
+      "brand": "Canon",
+      "model": "Canon EOS M3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m5",
+      "brand": "Canon",
+      "model": "Canon EOS M5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m50",
+      "brand": "Canon",
+      "model": "Canon EOS M50",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m50m2",
+      "brand": "Canon",
+      "model": "Canon EOS M50m2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m6",
+      "brand": "Canon",
+      "model": "Canon EOS M6",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-m6-mark-ii",
+      "brand": "Canon",
+      "model": "Canon EOS M6 Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r",
+      "brand": "Canon",
+      "model": "Canon EOS R",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r1",
+      "brand": "Canon",
+      "model": "Canon EOS R1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r10",
+      "brand": "Canon",
+      "model": "Canon EOS R10",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r100",
+      "brand": "Canon",
+      "model": "Canon EOS R100",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r3",
+      "brand": "Canon",
+      "model": "Canon EOS R3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r5",
+      "brand": "Canon",
+      "model": "Canon EOS R5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r5-c",
+      "brand": "Canon",
+      "model": "Canon EOS R5 C",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r50",
+      "brand": "Canon",
+      "model": "Canon EOS R50",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r50-v",
+      "brand": "Canon",
+      "model": "Canon EOS R50 V",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r6",
+      "brand": "Canon",
+      "model": "Canon EOS R6",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r6-mark-iii",
+      "brand": "Canon",
+      "model": "Canon EOS R6 Mark III",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r6m2",
+      "brand": "Canon",
+      "model": "Canon EOS R6m2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r7",
+      "brand": "Canon",
+      "model": "Canon EOS R7",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-r8",
+      "brand": "Canon",
+      "model": "Canon EOS R8",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-rp",
+      "brand": "Canon",
+      "model": "Canon EOS RP",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-rebel-t1i",
+      "brand": "Canon",
+      "model": "Canon EOS Rebel T1i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-rebel-t6",
+      "brand": "Canon",
+      "model": "Canon EOS Rebel T6",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-rebel-t7i",
+      "brand": "Canon",
+      "model": "Canon EOS Rebel T7i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-rebel-t8i",
+      "brand": "Canon",
+      "model": "Canon EOS Rebel T8i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-eos-rebel-xsi-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon EOS Rebel XSi (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-elura-50-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Elura 50 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-fv-m1-normal-mode",
+      "brand": "Canon",
+      "model": "Canon FV M1 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-ixy-digital-300",
+      "brand": "Canon",
+      "model": "Canon IXY DIGITAL 300",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-ixy-dv-m",
+      "brand": "Canon",
+      "model": "Canon IXY DV M",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-ixy-dv-m2-normal-mode",
+      "brand": "Canon",
+      "model": "Canon IXY DV M2 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-ixy-digital-40-normal-mode",
+      "brand": "Canon",
+      "model": "Canon IXY Digital 40 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-ixy-digital-l2-normal-mode",
+      "brand": "Canon",
+      "model": "Canon IXY Digital L2 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mv630i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon MV630i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mv650i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon MV650i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mvx-10i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon MVX 10i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mvx-3i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon MVX 3i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mvx100i",
+      "brand": "Canon",
+      "model": "Canon MVX100i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mvx150i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon MVX150i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mvx25i-normal-mode",
+      "brand": "Canon",
+      "model": "Canon MVX25i (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-mvx2i",
+      "brand": "Canon",
+      "model": "Canon MVX2i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-10",
+      "brand": "Canon",
+      "model": "Canon Optura 10",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-20",
+      "brand": "Canon",
+      "model": "Canon Optura 20",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-20-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Optura 20 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-200-mc",
+      "brand": "Canon",
+      "model": "Canon Optura 200 MC",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-300-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Optura 300 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-40-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Optura 40 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-optura-xi-normal-mode",
+      "brand": "Canon",
+      "model": "Canon Optura Xi (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a10",
+      "brand": "Canon",
+      "model": "Canon PowerShot A10",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a100",
+      "brand": "Canon",
+      "model": "Canon PowerShot A100",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a20",
+      "brand": "Canon",
+      "model": "Canon PowerShot A20",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a200",
+      "brand": "Canon",
+      "model": "Canon PowerShot A200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a30",
+      "brand": "Canon",
+      "model": "Canon PowerShot A30",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a300-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A300 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a310-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A310 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a40",
+      "brand": "Canon",
+      "model": "Canon PowerShot A40",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a400-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A400 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a460-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A460 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a510-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A510 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a520-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A520 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a60-ptp",
+      "brand": "Canon",
+      "model": "Canon PowerShot A60 (PTP)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a620-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A620 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a640-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A640 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a650is-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A650IS (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a70-ptp",
+      "brand": "Canon",
+      "model": "Canon PowerShot A70 (PTP)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a75-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A75 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a80-ptp",
+      "brand": "Canon",
+      "model": "Canon PowerShot A80 (PTP)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a85-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A85 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-a95-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot A95 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g1",
+      "brand": "Canon",
+      "model": "Canon PowerShot G1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g10",
+      "brand": "Canon",
+      "model": "Canon PowerShot G10",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g2",
+      "brand": "Canon",
+      "model": "Canon PowerShot G2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g3-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot G3 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g3-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot G3 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g3-x",
+      "brand": "Canon",
+      "model": "Canon PowerShot G3 X",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g5-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot G5 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g5x",
+      "brand": "Canon",
+      "model": "Canon PowerShot G5X",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g7-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot G7 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g7-x",
+      "brand": "Canon",
+      "model": "Canon PowerShot G7 X",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g7-x-mark-ii",
+      "brand": "Canon",
+      "model": "Canon PowerShot G7 X Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g7-x-mark-iii",
+      "brand": "Canon",
+      "model": "Canon PowerShot G7 X Mark III",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g9-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot G9 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g9-x-mark-ii",
+      "brand": "Canon",
+      "model": "Canon PowerShot G9 X Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-ixy-digital-l-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot IXY Digital L (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-pro90-is",
+      "brand": "Canon",
+      "model": "Canon PowerShot Pro90 IS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s1-is-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S1 IS (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s110-2001",
+      "brand": "Canon",
+      "model": "Canon PowerShot S110 (2001)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s2-is-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S2 IS (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s200",
+      "brand": "Canon",
+      "model": "Canon PowerShot S200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s230-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S230 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s230-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S230 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s3-is-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S3 IS (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s30",
+      "brand": "Canon",
+      "model": "Canon PowerShot S30",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s300",
+      "brand": "Canon",
+      "model": "Canon PowerShot S300",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s330",
+      "brand": "Canon",
+      "model": "Canon PowerShot S330",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s40",
+      "brand": "Canon",
+      "model": "Canon PowerShot S40",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s400-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S400 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s410-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S410 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s45-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S45 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s5-is-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S5 IS (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s50-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S50 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s500-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S500 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s80-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot S80 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sd10-digital-elph-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot SD10 Digital ELPH (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sd100-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot SD100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sd110-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot SD110 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sd20-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot SD20 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sd200-normal-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot SD200 (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sd500-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon PowerShot SD500 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx110-is",
+      "brand": "Canon",
+      "model": "Canon PowerShot SX110 IS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx530-hs",
+      "brand": "Canon",
+      "model": "Canon PowerShot SX530 HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx540-hs",
+      "brand": "Canon",
+      "model": "Canon PowerShot SX540 HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx600-hs",
+      "brand": "Canon",
+      "model": "Canon PowerShot SX600 HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx70-hs",
+      "brand": "Canon",
+      "model": "Canon PowerShot SX70 HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx740-hs",
+      "brand": "Canon",
+      "model": "Canon PowerShot SX740 HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-unknown-1",
+      "brand": "Canon",
+      "model": "Canon PowerShot unknown 1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-unknown-2",
+      "brand": "Canon",
+      "model": "Canon PowerShot unknown 2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-g6-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Powershot G6 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s60-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Powershot S60 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-s70-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Powershot S70 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-powershot-sx100-is-ptp-mode",
+      "brand": "Canon",
+      "model": "Canon Powershot SX100 IS (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-rebel-t2i",
+      "brand": "Canon",
+      "model": "Canon Rebel T2i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-rebel-t3",
+      "brand": "Canon",
+      "model": "Canon Rebel T3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-rebel-t3i",
+      "brand": "Canon",
+      "model": "Canon Rebel T3i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-rebel-t4i",
+      "brand": "Canon",
+      "model": "Canon Rebel T4i",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-sx-620hs",
+      "brand": "Canon",
+      "model": "Canon SX 620HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-sx-720hs",
+      "brand": "Canon",
+      "model": "Canon SX 720HS",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-canon-zr70mc-normal-mode",
+      "brand": "Canon",
+      "model": "Canon ZR70MC (normal mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-gfx-100s",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm GFX 100S",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-gfx-100s-2nd",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm GFX 100S (2nd)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-gfx100",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm GFX100",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-gfx100-ii",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm GFX100 II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-e3",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-E3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-h1",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-H1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-h2",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-H2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-m5",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-M5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-pro2",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-Pro2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-pro3",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-Pro3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-t1",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-T1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-t2",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-T2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-t3",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-T3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-t4",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-T4",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-fujifilm-x-t5",
+      "brand": "Fujifilm",
+      "model": "Fuji Fujifilm X-T5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-gfx-50-r",
+      "brand": "Fujifilm",
+      "model": "Fuji GFX 50 R",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-gfx-50-s",
+      "brand": "Fujifilm",
+      "model": "Fuji GFX 50 S",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-fuji-s5-pro",
+      "brand": "Fujifilm",
+      "model": "Fuji S5 Pro",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-leica-m11-monochrom",
+      "brand": "Leica",
+      "model": "Leica M11 Monochrom",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-leica-m9",
+      "brand": "Leica",
+      "model": "Leica M9",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-leica-q3",
+      "brand": "Leica",
+      "model": "Leica Q3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-leica-sl-typ-601",
+      "brand": "Leica",
+      "model": "Leica SL (Typ 601)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-leica-sl3",
+      "brand": "Leica",
+      "model": "Leica SL3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-2100-sierra-mode",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 2100 (Sierra Mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-2500-sierra-mode",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 2500 (Sierra Mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-3500-sierra-mode",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 3500 (Sierra Mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-4100-sierra-mode",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 4100 (Sierra Mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-4300-sierra-mode",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 4300 (Sierra Mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-880",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 880",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-990",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 990",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-995",
+      "brand": "Nikon",
+      "model": "Nikon CoolPix 995",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-2200-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 2200 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-2200v1-1-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 2200v1.1 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-3700-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 3700 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-4100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 4100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-4600a-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 4600a (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-5000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 5000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-5400-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 5400 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-5600-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 5600 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-5700-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 5700 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-5900-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 5900 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-7600-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 7600 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-7900-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 7900 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-8800-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 8800 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-9400-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix 9400  (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-a-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix A (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-a900-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix A900 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-aw100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix AW100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-aw110-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix AW110 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-aw130-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix AW130 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-b500",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix B500",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-b700-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix B700 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l110-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L110 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l12-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L12 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l120-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L120 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l16-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L16 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l19-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L19 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l20-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L20 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l23-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L23 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l27",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L27",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l340",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L340",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l810-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L810  (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l820-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L820  (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-l840",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix L840",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p1-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P1 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p1000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P1000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p1100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P1100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p2-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P2 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p330-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P330 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p4-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P4 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p500-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P500 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p5000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P5000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p60-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P60 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p6000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P6000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p7000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P7000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p7100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P7100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p80-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P80 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p80-v1-1-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P80 v1.1 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-p900-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix P900 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s01",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S01",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s02",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S02",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s200-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S200 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s220-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S220 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s225-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S225 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s2500-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S2500 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s2600-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S2600 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s2700",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S2700",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s2900",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S2900",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3200",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3300-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3300 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3500",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3500",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3600",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3600",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s3700",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S3700",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s4300-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S4300 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s6300-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S6300 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s6800",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S6800",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s9100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S9100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s9500-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S9500 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-coolpix-s9700",
+      "brand": "Nikon",
+      "model": "Nikon Coolpix S9700",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-d100-sierra-mode",
+      "brand": "Nikon",
+      "model": "Nikon D100 (Sierra Mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-d2hs-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon D2Hs (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-d2x-slr-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon D2X SLR (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-d3-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon D3 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-d50-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon D50 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d200-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D200 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d2xs-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D2Xs (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d300-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D300 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d300s-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D300s (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3200",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3300",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3300",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3400",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3400",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3500",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3500",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3s-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3s (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d3x-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D3x (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d4",
+      "brand": "Nikon",
+      "model": "Nikon DSC D4",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d40-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D40 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d40x-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D40x (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d4s",
+      "brand": "Nikon",
+      "model": "Nikon DSC D4s",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d500",
+      "brand": "Nikon",
+      "model": "Nikon DSC D500",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5100-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5100 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5200",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5300",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5300",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5500",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5500",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d5600",
+      "brand": "Nikon",
+      "model": "Nikon DSC D5600",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d6",
+      "brand": "Nikon",
+      "model": "Nikon DSC D6",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d60-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D60 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d600",
+      "brand": "Nikon",
+      "model": "Nikon DSC D600",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d610",
+      "brand": "Nikon",
+      "model": "Nikon DSC D610",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d70-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D70 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d700-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D700 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d7000-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D7000 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d70s-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D70s (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d7100",
+      "brand": "Nikon",
+      "model": "Nikon DSC D7100",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d7200",
+      "brand": "Nikon",
+      "model": "Nikon DSC D7200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d750",
+      "brand": "Nikon",
+      "model": "Nikon DSC D750",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d7500",
+      "brand": "Nikon",
+      "model": "Nikon DSC D7500",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d780",
+      "brand": "Nikon",
+      "model": "Nikon DSC D780",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d80-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D80 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d800",
+      "brand": "Nikon",
+      "model": "Nikon DSC D800",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d800e",
+      "brand": "Nikon",
+      "model": "Nikon DSC D800E",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d810",
+      "brand": "Nikon",
+      "model": "Nikon DSC D810",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d810a",
+      "brand": "Nikon",
+      "model": "Nikon DSC D810A",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d850",
+      "brand": "Nikon",
+      "model": "Nikon DSC D850",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-d90-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon DSC D90 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-dsc-df",
+      "brand": "Nikon",
+      "model": "Nikon DSC Df",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-j1",
+      "brand": "Nikon",
+      "model": "Nikon J1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-j2",
+      "brand": "Nikon",
+      "model": "Nikon J2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-j3",
+      "brand": "Nikon",
+      "model": "Nikon J3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-j4",
+      "brand": "Nikon",
+      "model": "Nikon J4",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-j5",
+      "brand": "Nikon",
+      "model": "Nikon J5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-keymission-170",
+      "brand": "Nikon",
+      "model": "Nikon KeyMission 170",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-keymission-360-ptp-mode",
+      "brand": "Nikon",
+      "model": "Nikon KeyMission 360 (PTP mode)",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-p950",
+      "brand": "Nikon",
+      "model": "Nikon P950",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-s1",
+      "brand": "Nikon",
+      "model": "Nikon S1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-s2",
+      "brand": "Nikon",
+      "model": "Nikon S2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-v1",
+      "brand": "Nikon",
+      "model": "Nikon V1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-v2",
+      "brand": "Nikon",
+      "model": "Nikon V2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-v3",
+      "brand": "Nikon",
+      "model": "Nikon V3",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z30",
+      "brand": "Nikon",
+      "model": "Nikon Z30",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z5",
+      "brand": "Nikon",
+      "model": "Nikon Z5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z50",
+      "brand": "Nikon",
+      "model": "Nikon Z50",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z50-2",
+      "brand": "Nikon",
+      "model": "Nikon Z50_2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z6",
+      "brand": "Nikon",
+      "model": "Nikon Z6",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z6-iii",
+      "brand": "Nikon",
+      "model": "Nikon Z6 III",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z6-2",
+      "brand": "Nikon",
+      "model": "Nikon Z6_2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z7",
+      "brand": "Nikon",
+      "model": "Nikon Z7",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z7-2",
+      "brand": "Nikon",
+      "model": "Nikon Z7_2",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z8",
+      "brand": "Nikon",
+      "model": "Nikon Z8",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-z9",
+      "brand": "Nikon",
+      "model": "Nikon Z9",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-zf",
+      "brand": "Nikon",
+      "model": "Nikon Zf",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-nikon-zfc",
+      "brand": "Nikon",
+      "model": "Nikon Zfc",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-2040z",
+      "brand": "Olympus",
+      "model": "Olympus C-2040Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-2100uz",
+      "brand": "Olympus",
+      "model": "Olympus C-2100UZ",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-3000z",
+      "brand": "Olympus",
+      "model": "Olympus C-3000Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-3020z",
+      "brand": "Olympus",
+      "model": "Olympus C-3020Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-3030z",
+      "brand": "Olympus",
+      "model": "Olympus C-3030Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-3040z",
+      "brand": "Olympus",
+      "model": "Olympus C-3040Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-370z",
+      "brand": "Olympus",
+      "model": "Olympus C-370Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-4040z",
+      "brand": "Olympus",
+      "model": "Olympus C-4040Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-5050z",
+      "brand": "Olympus",
+      "model": "Olympus C-5050Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-700uz",
+      "brand": "Olympus",
+      "model": "Olympus C-700UZ",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-750uz",
+      "brand": "Olympus",
+      "model": "Olympus C-750UZ",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-c-770uz",
+      "brand": "Olympus",
+      "model": "Olympus C-770UZ",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-d-535z",
+      "brand": "Olympus",
+      "model": "Olympus D-535Z",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-e-m1",
+      "brand": "Olympus",
+      "model": "Olympus E-M1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-e-m1-mii",
+      "brand": "Olympus",
+      "model": "Olympus E-M1 MII",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-e-m1-mark-ii",
+      "brand": "Olympus",
+      "model": "Olympus E-M1 Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-e-m5-mark-ii",
+      "brand": "Olympus",
+      "model": "Olympus E-M5 Mark II",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-om-1",
+      "brand": "Olympus",
+      "model": "Olympus OM-1",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-om-1markii",
+      "brand": "Olympus",
+      "model": "Olympus OM-1MarkII",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-sp-500uz",
+      "brand": "Olympus",
+      "model": "Olympus SP-500UZ",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-x-450",
+      "brand": "Olympus",
+      "model": "Olympus X-450",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-olympus-fe-200",
+      "brand": "Olympus",
+      "model": "Olympus fe-200",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-panasonic-dc-gh5",
+      "brand": "Panasonic",
+      "model": "Panasonic DC-GH5",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-panasonic-dmc-gx8",
+      "brand": "Panasonic",
+      "model": "Panasonic DMC-GX8",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-pentax-optio-33wr",
+      "brand": "Pentax",
+      "model": "Pentax Optio 33WR",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-pentax-optio-450",
+      "brand": "Pentax",
+      "model": "Pentax Optio 450",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-sigma-fp",
+      "brand": "Sigma",
+      "model": "Sigma fp",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    },
+    {
+      "id": "usb-sigma-fp-l",
+      "brand": "Sigma",
+      "model": "Sigma fp L",
+      "provider": "gphoto2",
+      "source": "https://github.com/gphoto/libgphoto2/releases/tag/v2.5.34",
+      "verification": "libgphoto2-2.5.34-production-driver-capture-and-config; hardware-validation-pending"
+    }
+  ]
+}
