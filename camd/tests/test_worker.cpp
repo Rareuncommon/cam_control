@@ -702,3 +702,17 @@ TEST(unknown_failed_and_interval_record_states_never_confirm_stop_or_press_recor
         }
     }
 }
+
+#include "camd/connection_ready.h"
+TEST(sony_connection_requires_callback_confirmation) {
+    ConnectionReady pending;
+    CHECK(!pending.wait(std::chrono::milliseconds(5)));
+    std::thread callback([&] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); pending.connected(); });
+    CHECK(pending.wait(std::chrono::milliseconds(300)));
+    callback.join();
+    pending.disconnected();
+    CHECK(!pending.wait(std::chrono::milliseconds(5)));
+    ConnectionReady failed;
+    failed.disconnected();
+    CHECK(!failed.wait(std::chrono::milliseconds(5)));
+}

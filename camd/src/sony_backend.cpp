@@ -46,6 +46,7 @@
 #include <CRSDK/IDeviceCallback.h>
 
 #include "camd/camera.h"
+#include "camd/connection_ready.h"
 #include "camd/device_identity.h"
 #include "camd/log.h"
 #include "camd/properties.h"
@@ -232,10 +233,13 @@ class Callback : public SDK::IDeviceCallback {
 public:
     Callback(EventSink* sink, std::string id) : sink_(sink), id_(std::move(id)) {}
 
+    ConnectionReady ready;
     void OnConnected(SDK::DeviceConnectionVersioin version) override {
+        ready.connected();
         LOG_INFO(id_.c_str(), "SDK OnConnected (version %d)", static_cast<int>(version));
     }
     void OnDisconnected(CrInt32u error) override {
+        ready.disconnected();
         if (sink_) sink_->onDisconnected(static_cast<int>(error));
     }
     void OnPropertyChanged() override {
@@ -609,20 +613,18 @@ public:
         CrInt32 count = 0;
         CrInt32u code = SDK::CrDeviceProperty_RecordingState;
         SDK::CrError e = SDK::GetSelectDeviceProperties(handle_, 1, &code, &props, &count);
-        if (e == SDK::CrError_None) {
-            if (props) SDK::ReleaseDeviceProperties(handle_, props);
-            return true;
-        }
+        const bool selectedAlive = e == SDK::CrError_None && props && count > 0;
+        if (props) SDK::ReleaseDeviceProperties(handle_, props);
+        if (selectedAlive) return true;
 
         SDK::CrDeviceProperty* all = nullptr;
         CrInt32 allCount = 0;
         SDK::CrError e2 = SDK::GetDeviceProperties(handle_, &all, &allCount);
-        if (e2 == SDK::CrError_None) {
-            if (all) SDK::ReleaseDeviceProperties(handle_, all);
-            return true;
-        }
+        const bool allAlive = e2 == SDK::CrError_None && all && allCount > 0;
+        if (all) SDK::ReleaseDeviceProperties(handle_, all);
+        if (allAlive) return true;
 
-        err = "heartbeat probe failed " + hexError(e) + " and " + hexError(e2);
+        err = "heartbeat returned no usable properties: " + hexError(e) + " and " + hexError(e2);
         return false;
     }
 
@@ -794,6 +796,12 @@ public:
             return nullptr;
         }
 
+        if (!cb->ready.wait(std::chrono::seconds(10))) {
+            SDK::Disconnect(handle);
+            SDK::ReleaseDevice(handle);
+            err = "Sony did not confirm the camera connection. Check PC Remote mode, camera access credentials, and other camera apps.";
+            return nullptr;
+        }
         LOG_INFO(cfg.id.c_str(), "connected: %s %s at %s", target.model.c_str(),
                  target.mac.c_str(), target.ip.c_str());
         return std::make_unique<SonySession>(handle, std::move(cb), cfg.id);
