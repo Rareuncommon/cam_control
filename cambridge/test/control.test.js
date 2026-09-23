@@ -490,3 +490,75 @@ test('a camera that drops loses its history', () => {
   undo.forget('cam1');
   assert.equal(undo.popLast('cam1'), null);
 });
+
+// --- DC-9 (audit 2026-09-23): a rejected write is not "saved" ---------------
+
+function failingStore() {
+  const store = newStore();
+  store.save = () => false;   // disk full, permissions, read-only volume
+  return store;
+}
+
+test('preset, scene and gang changes report failure and keep the durable state when the store refuses', () => {
+  const state = makeState();
+  const store = failingStore();
+  const presets = new Presets(store, state, quietLog);
+  const gangs = new Gangs(store, state, quietLog);
+
+  const preset = presets.savePreset('cam1', 'wide');
+  assert.equal(preset.ok, false, 'savePreset must not report ok when persistence failed');
+  assert.match(preset.error, /could not be saved/);
+  assert.deepEqual(presets.listPresets('cam1'), [], 'the unsaved preset must not linger in memory');
+
+  const scene = presets.saveScene('opening');
+  assert.equal(scene.ok, false);
+  assert.deepEqual(presets.listScenes(), []);
+
+  const gang = gangs.define('pair', { cam1: {}, cam2: {} });
+  assert.equal(gang.ok, false);
+  assert.deepEqual(gangs.list(), {});
+});
+
+test('deletes and toggles that cannot be persisted are rolled back', () => {
+  const state = makeState();
+  const store = newStore();
+  const presets = new Presets(store, state, quietLog);
+  const gangs = new Gangs(store, state, quietLog);
+  assert.equal(presets.savePreset('cam1', 'wide').ok, true);
+  assert.equal(presets.saveScene('opening').ok, true);
+  assert.equal(gangs.define('pair', { cam1: {}, cam2: {} }).ok, true);
+
+  store.save = () => false;
+  assert.equal(presets.deletePreset('cam1', 'wide').ok, false);
+  assert.deepEqual(presets.listPresets('cam1'), ['wide']);
+  assert.equal(presets.deleteScene('opening').ok, false);
+  assert.deepEqual(presets.listScenes(), ['opening']);
+  assert.equal(gangs.setEnabled('pair', false).ok, false);
+  assert.equal(gangs.list().pair.enabled, true);
+  assert.equal(gangs.remove('pair').ok, false);
+  assert.ok(gangs.list().pair);
+});
+
+// --- DC-10 (audit 2026-09-23): daemon loss closes open takes as unknown ------
+
+test('losing camd closes rolling takes with an unknown outcome and stops claiming recording', () => {
+  const state = new StateModel();
+  state.setCamdConnected(true);
+  state.applyConnectionState({ cameraId: 'x', state: 'connected' });
+  state.applyStatus({ cameraId: 'x', recording: true, recordingState: 1 });
+  assert.equal(state.takes.length, 1);
+  state.setCamdConnected(false);
+  const take = state.takes[0];
+  assert.notEqual(take.endedAt, null, 'the take must not stay open after the daemon is lost');
+  assert.equal(take.dropped, null, 'the outcome is unknown, not a drop and not a clean stop');
+  assert.equal(state.get('x').status.recording, false);
+  assert.equal(state.get('x').recordStartedAt, null);
+
+  // Reconnecting to a camera that is still rolling opens a fresh take rather
+  // than resurrecting the closed one.
+  state.setCamdConnected(true);
+  state.applyConnectionState({ cameraId: 'x', state: 'connected' });
+  state.applyStatus({ cameraId: 'x', recording: true, recordingState: 1 });
+  assert.equal(state.takes.length, 2);
+  assert.equal(state.takes[1].endedAt, null);
+});

@@ -1260,14 +1260,16 @@ $('#gang-save').addEventListener('click', async () => {
   if (gangSelection.size < 2) return toast('Pick at least two cameras to link', 'warn');
   const members = {};
   for (const id of gangSelection) members[id] = { offsets: {} };
-  await api('PUT', '/api/gangs/main', { members });
-  toast(`Linked ${[...gangSelection].join(', ')}`);
+  const r = await api('PUT', '/api/gangs/main', { members });
+  if (r.ok) toast(`Linked ${[...gangSelection].join(', ')}`);
   loadMeta();
 });
 $('#gang-clear').addEventListener('click', async () => {
-  await api('DELETE', '/api/gangs/main');
-  gangSelection.clear();
-  toast('Cameras unlinked');
+  const r = await api('DELETE', '/api/gangs/main');
+  if (r.ok) {
+    gangSelection.clear();
+    toast('Cameras unlinked');
+  }
   loadMeta();
 });
 

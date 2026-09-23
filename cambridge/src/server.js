@@ -88,6 +88,15 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+/**
+ * Sends a store-backed result with a status that matches it. These used to go
+ * out as HTTP 200 even with {ok:false}, so a panel checking the transport saw
+ * success when the store had refused the write (audit DC-9).
+ */
+function sendResult(res, result) {
+  return sendJson(res, result?.ok === false ? 409 : 200, result);
+}
+
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
   res.writeHead(status, {
@@ -927,8 +936,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       m = path.match(/^\/api\/cameras\/([^/]+)\/presets\/([^/]+)$/);
       if (m) {
         const [, cameraId, name] = m.map(decodeURIComponent);
-        if (req.method === 'PUT')    return sendJson(res, 200, presets.savePreset(cameraId, name));
-        if (req.method === 'DELETE') return sendJson(res, 200, presets.deletePreset(cameraId, name));
+        if (req.method === 'PUT')    return sendResult(res, presets.savePreset(cameraId, name));
+        if (req.method === 'DELETE') return sendResult(res, presets.deletePreset(cameraId, name));
         if (req.method === 'POST') {
           const body = await readBody(req);
           undo.mark(cameraId, `preset "${name}"`);
@@ -945,8 +954,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       m = path.match(/^\/api\/scenes\/([^/]+)$/);
       if (m) {
         const name = decodeURIComponent(m[1]);
-        if (req.method === 'PUT')    return sendJson(res, 200, presets.saveScene(name));
-        if (req.method === 'DELETE') return sendJson(res, 200, presets.deleteScene(name));
+        if (req.method === 'PUT')    return sendResult(res, presets.saveScene(name));
+        if (req.method === 'DELETE') return sendResult(res, presets.deleteScene(name));
         if (req.method === 'POST') {
           const body = await readBody(req);
           // A mark on every camera, not just the ones the scene names — the
@@ -971,12 +980,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const name = decodeURIComponent(m[1]);
         if (req.method === 'PUT') {
           const body = await readBody(req);
-          return sendJson(res, 200, gangs.define(name, body?.members ?? {}));
+          return sendResult(res, gangs.define(name, body?.members ?? {}));
         }
-        if (req.method === 'DELETE') return sendJson(res, 200, gangs.remove(name));
+        if (req.method === 'DELETE') return sendResult(res, gangs.remove(name));
         if (req.method === 'POST') {
           const body = await readBody(req);
-          return sendJson(res, 200, gangs.setEnabled(name, body?.enabled !== false));
+          return sendResult(res, gangs.setEnabled(name, body?.enabled !== false));
         }
       }
 
