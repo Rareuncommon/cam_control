@@ -45,9 +45,13 @@ export class PanasonicClient {
     const cfg = this.config;
     const url = new URL(`${cfg.https ? 'https' : 'http'}://${cfg.host}:${cfg.port}/cgi-bin/aw_ptz`);
     url.searchParams.set('cmd', command); url.searchParams.set('res', '1');
-    const options = { redirect: 'error', signal: AbortSignal.timeout(cfg.timeoutMs ?? 700), headers: { Connection: 'close' } };
+    // Each request gets its own deadline. One shared signal made the Digest
+    // retry inherit whatever the challenge round trip and pacing delay had
+    // already spent, so an authenticated command could time out spuriously.
+    const options = { redirect: 'error', headers: { Connection: 'close' } };
+    const deadline = () => AbortSignal.timeout(cfg.timeoutMs ?? 700);
     this.lastSent = Date.now();
-    let res = await fetch(url, options);
+    let res = await fetch(url, { ...options, signal: deadline() });
     this.lastSent = Date.now();
     if (res.status === 401 && cfg.username) {
       const challenge = res.headers.get('www-authenticate') ?? '';
@@ -58,7 +62,7 @@ export class PanasonicClient {
       await delay(Math.max(0, 130 - (Date.now() - this.lastSent)));
       if (!valid()) throw new Error('PTZ command superseded before authenticated dispatch');
       this.lastSent = Date.now();
-      res = await fetch(url, options);
+      res = await fetch(url, { ...options, signal: deadline() });
       this.lastSent = Date.now();
     }
     if (!res.ok) { await res.body?.cancel(); throw new Error(`Panasonic returned HTTP ${res.status}`); }
