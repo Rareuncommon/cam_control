@@ -155,6 +155,25 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         res.json(201, v.dump());
     });
 
+    // Rename in place (audit DC-4). A label is cosmetic, so this never tears
+    // down the session: live view and control carry on uninterrupted.
+    server.route("PUT", "/cameras/:id/label", [this](const http::Request& req, http::Response& res) {
+        auto w = registry_.find(req.param("id"));
+        if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
+        json::Value body;
+        std::string perr;
+        if (!json::parse(req.body, body, perr) || !body.isObject() || !body["label"].isString() ||
+            body["label"].asString().empty() || body["label"].asString().size() > 256) {
+            res.error(400, "body must be {\"label\": \"<1-256 characters>\"}");
+            return;
+        }
+        w->setLabel(body["label"].asString());
+        json::Value v = json::Value::makeObject();
+        v.set("id", json::Value(req.param("id")));
+        v.set("label", body["label"]);
+        res.json(200, v.dump());
+    });
+
     server.route("DELETE", "/cameras/:id", [this](const http::Request& req, http::Response& res) {
         std::string err;
         if (!registry_.removeCamera(req.param("id"), err)) { res.error(404, err); return; }

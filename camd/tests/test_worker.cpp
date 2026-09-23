@@ -716,3 +716,21 @@ TEST(sony_connection_requires_callback_confirmation) {
     failed.disconnected();
     CHECK(!failed.wait(std::chrono::milliseconds(5)));
 }
+
+// DC-4 (audit 2026-09-23): a rename is cosmetic and must never cycle the
+// session. The Node layer used to DELETE and re-add the camera to change it.
+TEST(dc4_set_label_renames_without_touching_the_session) {
+    Rig rig;
+    CHECK(rig.waitConnected("cam1"));
+    auto w = rig.registry->find("cam1");
+    const int attemptsBefore = w->snapshot().reconnectAttempts;
+    w->setLabel("Wide left");
+    bool stayedConnected = true;
+    for (int i = 0; i < 30; ++i) {
+        if (w->snapshot().state != ConnState::Connected) stayedConnected = false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(stayedConnected);
+    CHECK_EQ(w->snapshot().label, std::string("Wide left"));
+    CHECK_EQ(w->snapshot().reconnectAttempts, attemptsBefore);
+}

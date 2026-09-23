@@ -105,6 +105,9 @@ public:
     // Forces a teardown and immediate reconnect attempt.
     void requestReconnect();
 
+    // Cosmetic: changes the display label only. Never touches the session.
+    void setLabel(const std::string& label);
+
     // Record control with read-before-write. The FX30 has no toggle command, so a
     // blind button press would flip a live recording; this reads RecordingState,
     // acts only if the state differs from the request, then verifies the result.

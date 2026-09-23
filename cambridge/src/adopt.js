@@ -219,17 +219,26 @@ export class Adoption {
     const entry = (cfg.cameras ?? []).find((c) => c.id === id);
     if (!entry) return { ok: false, error: `no camera "${id}" in config` };
 
-    if (typeof changes.label === 'string' && changes.label.trim()) {
+    let labelChanged = false;
+    if (typeof changes.label === 'string' && changes.label.trim() && changes.label.trim() !== entry.label) {
       entry.label = changes.label.trim();
+      labelChanged = true;
     }
+    // Only an actual change of connection identity needs a fresh SDK session.
+    // Re-submitting the credentials a camera already has is not a change.
     let credentialsChanged = false;
-    if (typeof changes.username === 'string' && changes.username.trim()) {
+    if (typeof changes.username === 'string' && changes.username.trim() &&
+        changes.username.trim() !== entry.auth?.username) {
       entry.auth = { ...(entry.auth ?? {}), username: changes.username.trim() };
       credentialsChanged = true;
     }
-    if (typeof changes.password === 'string' && changes.password) {
+    if (typeof changes.password === 'string' && changes.password &&
+        changes.password !== entry.auth?.password) {
       entry.auth = { ...(entry.auth ?? {}), password: changes.password };
       credentialsChanged = true;
+    }
+    if (!labelChanged && !credentialsChanged) {
+      return { ok: true, unchanged: true, camera: { ...entry, auth: undefined } };
     }
 
     try {
@@ -238,13 +247,25 @@ export class Adoption {
       return { ok: false, error: `could not save config: ${err.message}` };
     }
 
-    // A label change is cosmetic and can be applied live. New credentials only
-    // take effect on a fresh connection, so the camera is re-adopted in place —
-    // which is still far better than restarting the daemon and dropping the rest.
-    await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
-    const res = await this.camd.request('POST', '/cameras', entry);
-    if (!res.ok) {
-      return { ok: false, error: res.body?.error ?? 'camd refused the updated camera' };
+    // A label is cosmetic and is applied live (audit DC-4: renaming used to
+    // drop and re-adopt the camera, interrupting live view and control during
+    // a shoot). New credentials only take effect on a fresh connection, so
+    // only then is the camera re-adopted in place — still far better than
+    // restarting the daemon and dropping the rest.
+    if (credentialsChanged) {
+      await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+      const res = await this.camd.request('POST', '/cameras', entry);
+      if (!res.ok) {
+        return { ok: false, error: res.body?.error ?? 'camd refused the updated camera' };
+      }
+    } else {
+      const res = await this.camd.request('PUT', `/cameras/${encodeURIComponent(id)}/label`, { label: entry.label });
+      if (!res.ok) {
+        // Saved, and shown from config on the next daemon start; the live
+        // connection is deliberately left alone rather than reconnected.
+        this.log.warn?.('adopt', `label for ${id} saved; camd did not apply it live: ${res.body?.error ?? res.status}`);
+        return { ok: true, camera: { ...entry, auth: undefined }, liveLabel: false };
+      }
     }
 
     this.log.info('adopt',

@@ -229,6 +229,15 @@ void CameraWorker::offerMissing() {
     // still retried rather than being forgotten.
 }
 
+void CameraWorker::setLabel(const std::string& label) {
+    {
+        std::lock_guard<std::mutex> lock(stateMu_);
+        snap_.label = label;
+    }
+    // Republish so event consumers see the new label without a reconnect.
+    publishConnectionState();
+}
+
 void CameraWorker::requestReconnect() {
     reconnectRequested_ = true;
     jobCv_.notify_all();
@@ -259,6 +268,7 @@ void CameraWorker::publishConnectionState() {
     ev.set("event", json::Value("connectionState"));
     ev.set("cameraId", json::Value(s.id));
     ev.set("state", json::Value(connStateName(s.state)));
+    ev.set("label", json::Value(s.label));
     ev.set("model", json::Value(s.reportedModel.empty() ? s.configuredModel : s.reportedModel));
     ev.set("ip", json::Value(s.ip));
     ev.set("mac", json::Value(s.mac));

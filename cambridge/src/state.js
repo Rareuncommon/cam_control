@@ -119,6 +119,7 @@ export class StateModel extends EventEmitter {
     const cam = this.ensure(ev.cameraId);
     const previous = cam.state;
     cam.state = ev.state;
+    if (typeof ev.label === 'string' && ev.label) cam.label = ev.label;
     if (ev.model) cam.model = ev.model;
     if (ev.ip) cam.ip = ev.ip;
     if (ev.mac) cam.mac = ev.mac;

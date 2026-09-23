@@ -67,3 +67,27 @@ test('editing the actual adoption route requires admin, while live controls rema
   assert.equal(requiredRole('DELETE', '/api/cameras/usb/adoption'), 'admin');
   assert.equal(requiredRole('POST', '/api/cameras/usb/actions/recordStart'), 'operator');
 });
+// DC-4 (audit 2026-09-23): a cosmetic rename used to DELETE and re-POST the
+// runtime camera, dropping live view and control mid-shoot.
+test('renaming a camera updates the label live without reconnecting it', async t => {
+  const { adoption, calls } = rig(t, [{ ...usb(1), accessAuthRequired: true }]);
+  const adopted = await adoption.adopt({ ...usb(1), username: 'user', password: 'test-only' });
+  assert.equal(adopted.ok, true);
+  calls.length = 0;
+  const renamed = await adoption.update(adopted.camera.id, { label: 'New' });
+  assert.equal(renamed.ok, true);
+  assert.equal(adoption.adopted()[0].label, 'New');
+  assert.deepEqual(calls.map(c => c.method), ['PUT'], 'label-only change must not DELETE/POST the camera');
+  assert.equal(calls[0].path, `/cameras/${encodeURIComponent(adopted.camera.id)}/label`);
+  assert.deepEqual(calls[0].body, { label: 'New' });
+
+  // Re-submitting the credentials the camera already has is not a change.
+  calls.length = 0;
+  assert.equal((await adoption.update(adopted.camera.id, { label: 'New', username: 'user', password: 'test-only' })).ok, true);
+  assert.deepEqual(calls.map(c => c.method), [], 'unchanged label and credentials touch nothing');
+
+  // A real credential change needs a fresh SDK session, so it reconnects.
+  calls.length = 0;
+  assert.equal((await adoption.update(adopted.camera.id, { password: 'rotated' })).ok, true);
+  assert.deepEqual(calls.map(c => c.method), ['DELETE', 'POST']);
+});
