@@ -35,6 +35,21 @@ public:
     virtual void publish(const std::string& jsonText) = 0;
 };
 
+// What happened to a job the caller waited on. The distinction matters for
+// anything with a physical effect: NotExecuted means the job was withdrawn and
+// will never run, so the caller may safely report failure (or retry). Unknown
+// means the job had already started on the camera when the caller stopped
+// waiting; the effect may or may not have happened, and must be read back
+// rather than assumed — never blindly retried, which could toggle REC twice.
+enum class RunOutcome { Completed, NotExecuted, InFlightUnknown };
+
+// Record Stop outranks everything queued: it jumps the queue, and it withdraws
+// any record Start still waiting, which would otherwise run after the Stop and
+// leave the camera rolling.
+enum class JobKind { Generic, RecordStart, RecordStop };
+
+const char* runOutcomeName(RunOutcome o);
+
 class CameraWorker {
 public:
     CameraWorker(CameraConfig cfg, Backend* backend, EventPublisher* publisher,
@@ -70,7 +85,13 @@ public:
     // the job did not complete within timeoutMs — in which case the job may still
     // execute later, so anything it writes must outlive the call (capture a
     // shared_ptr, never a stack reference).
+    //
+    // A job still queued when the caller gives up is withdrawn and never runs
+    // (audit DC-2: a timed-out Start used to fire later, after the operator had
+    // been told it failed).
     bool run(std::function<void(CameraSession*)> fn, int timeoutMs);
+    RunOutcome runJob(std::function<void(CameraSession*)> fn, int timeoutMs,
+                      JobKind kind = JobKind::Generic);
 
     // Offered by the discovery thread when a matching body appears on the network.
     // A camera reappearing after being absent cancels any pending backoff: the
@@ -108,9 +129,13 @@ private:
     void refreshAndPublishProperties();
     int backoffDelayMs() const;
 
+    enum JobPhase : int { kPending = 0, kRunning = 1, kDone = 2, kCancelled = 3 };
     struct Job {
         std::function<void(CameraSession*)> fn;
         std::shared_ptr<std::promise<void>> done;
+        std::shared_ptr<std::atomic<int>> phase;
+        std::chrono::steady_clock::time_point deadline;
+        JobKind kind = JobKind::Generic;
     };
 
     CameraConfig cfg_;

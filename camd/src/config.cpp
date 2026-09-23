@@ -1,6 +1,7 @@
 #include "camd/config.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <set>
@@ -32,11 +33,41 @@ std::string normaliseMac(const std::string& in) {
     return out;
 }
 
+// Reads an optional integer field and applies it only when it is a whole number
+// inside [lo, hi]. Anything else is reported and the documented default kept:
+// a negative rotation size used to become a huge unsigned value, and a port of
+// 4294975083 silently truncated to 7787 through a plain int cast.
+void readInt(const json::Value& obj, const char* key, std::int64_t lo, std::int64_t hi,
+             const std::string& where, int& target, std::vector<std::string>& errors) {
+    const json::Value& v = obj[key];
+    if (v.isNull() && !obj.contains(key)) return;
+    const double d = v.asNumber(std::nan(""));
+    if (!v.isNumber() || !std::isfinite(d) || d != std::floor(d) ||
+        d < static_cast<double>(lo) || d > static_cast<double>(hi)) {
+        errors.push_back(where + "." + key + " must be a whole number from " +
+                         std::to_string(lo) + " to " + std::to_string(hi));
+        return;
+    }
+    target = static_cast<int>(d);
+}
+
+constexpr std::int64_t kMaxMs = 10 * 60 * 1000;  // ten minutes: longer is a typo, not a policy
+
 }  // namespace
 
-bool Config::loadString(const std::string& text, Config& out,
+bool Config::loadString(const std::string& text, Config& result,
                         std::vector<std::string>& errors) {
     errors.clear();
+    // Parse into a fresh object and hand it over at the end. Loading used to
+    // append cameras to whatever the caller passed in, so a second load of the
+    // same file doubled every camera and kept settings the new file dropped.
+    // The result is still handed over when there are errors, because camd
+    // deliberately starts with the valid part of a partly broken config.
+    Config out;
+    struct Commit {
+        Config& from; Config& to;
+        ~Commit() { to = std::move(from); }
+    } commit{out, result};
     json::Value root;
     std::string perr;
     if (!json::parse(text, root, perr)) {
@@ -51,24 +82,37 @@ bool Config::loadString(const std::string& text, Config& out,
     const json::Value& camd = root["camd"];
     if (camd.isObject()) {
         if (camd["bind"].isString())     out.bind = camd["bind"].asString();
-        if (camd["restPort"].isNumber()) out.restPort = static_cast<int>(camd["restPort"].asInt());
+        readInt(camd, "restPort", 1, 65535, "camd", out.restPort, errors);
         if (camd["wsPath"].isString())   out.wsPath = camd["wsPath"].asString();
+        if (camd["authToken"].isString()) out.authToken = camd["authToken"].asString();
 
         const json::Value& conn = camd["connection"];
         if (conn.isObject()) {
             auto& c = out.connection;
-            if (conn["heartbeatIntervalMs"].isNumber()) c.heartbeatIntervalMs = static_cast<int>(conn["heartbeatIntervalMs"].asInt());
-            if (conn["heartbeatTimeoutMs"].isNumber())  c.heartbeatTimeoutMs  = static_cast<int>(conn["heartbeatTimeoutMs"].asInt());
-            if (conn["reconnectBackoffMaxMs"].isNumber()) c.reconnectBackoffMaxMs = static_cast<int>(conn["reconnectBackoffMaxMs"].asInt());
-            if (conn["commandTimeoutMs"].isNumber())    c.commandTimeoutMs    = static_cast<int>(conn["commandTimeoutMs"].asInt());
-            if (conn["discoveryIntervalMs"].isNumber()) c.discoveryIntervalMs = static_cast<int>(conn["discoveryIntervalMs"].asInt());
+            const std::string w = "camd.connection";
+            readInt(conn, "heartbeatIntervalMs", 1, kMaxMs, w, c.heartbeatIntervalMs, errors);
+            readInt(conn, "heartbeatTimeoutMs", 1, kMaxMs, w, c.heartbeatTimeoutMs, errors);
+            readInt(conn, "reconnectBackoffMaxMs", 1, kMaxMs, w, c.reconnectBackoffMaxMs, errors);
+            readInt(conn, "commandTimeoutMs", 1, kMaxMs, w, c.commandTimeoutMs, errors);
+            readInt(conn, "discoveryIntervalMs", 1, kMaxMs, w, c.discoveryIntervalMs, errors);
             if (conn["reconnectBackoffMs"].isArray()) {
                 std::vector<int> steps;
+                bool bad = false;
                 for (std::size_t i = 0; i < conn["reconnectBackoffMs"].size(); ++i) {
-                    const json::Value& v = conn["reconnectBackoffMs"].at(i);
-                    if (v.isNumber() && v.asInt() > 0) steps.push_back(static_cast<int>(v.asInt()));
+                    int step = 0;
+                    std::vector<std::string> stepErr;
+                    json::Value holder = json::Value::makeObject();
+                    holder.set("step", conn["reconnectBackoffMs"].at(i));
+                    readInt(holder, "step", 1, kMaxMs, w + ".reconnectBackoffMs", step, stepErr);
+                    if (!stepErr.empty()) { bad = true; continue; }
+                    steps.push_back(step);
                 }
-                if (!steps.empty()) c.reconnectBackoffMs = std::move(steps);
+                if (bad) {
+                    errors.push_back(w + ".reconnectBackoffMs entries must be whole numbers from 1 to " +
+                                     std::to_string(kMaxMs));
+                } else if (!steps.empty()) {
+                    c.reconnectBackoffMs = std::move(steps);
+                }
             }
         }
     }
@@ -79,11 +123,12 @@ bool Config::loadString(const std::string& text, Config& out,
         if (logging["level"].isString()) out.logging.level = logging["level"].asString();
         const json::Value& rot = logging["rotate"];
         if (rot.isObject()) {
-            if (rot["maxSizeMb"].isNumber())
-                out.logging.maxSizeBytes =
-                    static_cast<std::uint64_t>(rot["maxSizeMb"].asInt()) * 1024ull * 1024ull;
-            if (rot["maxFiles"].isNumber())
-                out.logging.maxFiles = static_cast<int>(rot["maxFiles"].asInt());
+            int sizeMb = -1;
+            std::size_t before = errors.size();
+            readInt(rot, "maxSizeMb", 1, 1024, "logging.rotate", sizeMb, errors);
+            if (errors.size() == before && sizeMb > 0)
+                out.logging.maxSizeBytes = static_cast<std::uint64_t>(sizeMb) * 1024ull * 1024ull;
+            readInt(rot, "maxFiles", 1, 1000, "logging.rotate", out.logging.maxFiles, errors);
         }
     }
 
@@ -142,8 +187,6 @@ bool Config::loadString(const std::string& text, Config& out,
         }
     }
 
-    if (out.restPort <= 0 || out.restPort > 65535)
-        errors.push_back("camd.restPort must be between 1 and 65535");
     if (out.wsPath.empty() || out.wsPath[0] != '/')
         errors.push_back("camd.wsPath must start with '/'");
     if (out.connection.heartbeatTimeoutMs <= out.connection.heartbeatIntervalMs)

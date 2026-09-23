@@ -12,7 +12,7 @@ import { networkInterfaces } from 'node:os';
 import { dirname, join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CamdClient } from './camd-client.js';
+import { CamdClient, resolveCamdToken } from './camd-client.js';
 import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
@@ -148,9 +148,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const camdWs = cfg.cambridge.camdUrl
     ?? `ws://127.0.0.1:${cfg.camd.restPort}${cfg.camd.wsPath}`;
 
+  const camdToken = resolveCamdToken(cfg.camd);
+  if (!camdToken) {
+    log.warn('camd', 'no camd access token (CAMD_AUTH_TOKEN or camd.authToken); camd will refuse every request');
+  }
   const camd = new CamdClient({
     baseUrl: camdBase,
     wsUrl: camdWs,
+    token: camdToken,
     log: (level, msg) => log.write(level, 'camd', msg),
   });
 
@@ -991,9 +996,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'GET') {
         const cameraId = decodeURIComponent(m[1]);
         const single = url.searchParams.get('single') === '1';
-        const upstream = `${camd.liveviewUrl(cameraId)}${single ? '?single=1' : ''}`;
+        // Abort the upstream MJPEG read when the browser goes away, so a
+        // closed tab does not keep a camd stream (and a camera worker job per
+        // frame) alive.
+        const upstreamAbort = new AbortController();
+        res.on('close', () => upstreamAbort.abort());
         try {
-          const r = await fetch(upstream);
+          const r = await camd.fetchLiveview(cameraId, single, upstreamAbort.signal);
           res.writeHead(r.status, {
             'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream',
             'Cache-Control': 'no-store',

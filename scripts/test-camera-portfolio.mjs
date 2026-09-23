@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../cambridge/src/server.js';
@@ -25,7 +26,8 @@ async function freePort() {
   return port;
 }
 const port = await freePort();
-const cfg = { cameras: [], camd: { bind: '127.0.0.1', restPort: port,
+const camdToken = randomBytes(32).toString('hex');
+const cfg = { cameras: [], camd: { bind: '127.0.0.1', restPort: port, authToken: camdToken,
   connection: { discoveryIntervalMs: 100, heartbeatIntervalMs: 100, heartbeatTimeoutMs: 500,
     reconnectBackoffMs: [100], reconnectBackoffMaxMs: 100 } },
   cambridge: { bind: '127.0.0.1', port: 0, camdUrl: `ws://127.0.0.1:${port}/ws` },
@@ -49,12 +51,12 @@ async function request(path, method = 'GET', body, token = 'test-admin') {
 }
 async function start() {
   output = '';
-  daemon = spawn(join(root, 'camd/build/camd'), ['--config', configPath, '--fake-portfolio'],
+  daemon = spawn(process.env.CAMD_BIN || join(root, 'camd/build/camd'), ['--config', configPath, '--fake-portfolio'],
     { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
   daemon.stdout.on('data', chunk => { output += chunk; });
   daemon.stderr.on('data', chunk => { output += chunk; });
   daemon.on('error', error => { output += error.message; });
-  await until(async () => (await fetch(`http://127.0.0.1:${port}/health`)).ok, 'daemon startup');
+  await until(async () => (await fetch(`http://127.0.0.1:${port}/health`, { headers: { Authorization: `Bearer ${camdToken}` } })).ok, 'daemon startup');
   app = createApp({ configPath });
   const address = await app.start();
   base = `http://127.0.0.1:${address.port}`;

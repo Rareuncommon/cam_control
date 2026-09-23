@@ -417,10 +417,11 @@ public:
     bool autofocus(std::string& err) override {
         if (!check(err)) return false;
         std::lock_guard<std::mutex> lock(mu_);
-        // Pretend AF landed somewhere plausible and different.
-        static std::mt19937 rng{1234};
+        // Pretend AF landed somewhere plausible and different. The generator
+        // is per session: a function-static one was shared by every fake body
+        // but guarded only by each body's own mutex, so concurrent AF raced.
         std::uniform_int_distribution<int> d(300, 700);
-        props_[prop::kFocusPosition].current = d(rng);
+        props_[prop::kFocusPosition].current = d(afRng_);
         if (sink_) sink_->onPropertyChanged();
         return true;
     }
@@ -489,6 +490,7 @@ private:
     EventSink* sink_;
     std::vector<std::int64_t> fullIso_;
     std::mutex mu_;
+    std::mt19937 afRng_{1234};
     PropertyMap props_;
     bool recording_ = false;
     std::string lastKey_;

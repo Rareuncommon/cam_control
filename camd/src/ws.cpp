@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <sys/socket.h>
 
 #include "camd/log.h"
 
@@ -84,11 +85,63 @@ DecodeResult decodeFrame(std::string& buf, DecodedFrame& out) {
     return DecodeResult::Ok;
 }
 
-void Hub::serve(http::Connection&& conn) {
+void Hub::enqueue(const std::shared_ptr<Client>& c, std::string frame) {
+    bool overflow = false;
+    {
+        std::lock_guard<std::mutex> lock(c->qMu);
+        if (!c->alive) return;
+        if (c->queue.size() >= kMaxQueuedFrames ||
+            c->queuedBytes + frame.size() > kMaxQueuedBytes) {
+            overflow = true;
+        } else {
+            c->queuedBytes += frame.size();
+            c->queue.push_back(std::move(frame));
+        }
+    }
+    if (overflow) {
+        LOG_WARN("ws", "client is not reading its events; disconnecting it");
+        kill(c);
+        return;
+    }
+    c->qCv.notify_one();
+}
+
+void Hub::kill(const std::shared_ptr<Client>& c) {
+    if (c->alive.exchange(false)) {
+        // shutdown() wakes a writer blocked in send() and a reader blocked in
+        // recv() on other threads; the owning serve() thread closes the fd.
+        if (c->conn.valid()) ::shutdown(c->conn.fd(), SHUT_RDWR);
+    }
+    c->qCv.notify_all();
+}
+
+void Hub::writerLoop(const std::shared_ptr<Client>& c) {
+    while (true) {
+        std::string frame;
+        {
+            std::unique_lock<std::mutex> lock(c->qMu);
+            c->qCv.wait(lock, [&] { return !c->alive || !c->queue.empty(); });
+            if (!c->alive) return;
+            frame = std::move(c->queue.front());
+            c->queue.pop_front();
+            c->queuedBytes -= frame.size();
+        }
+        // Bounded by SO_SNDTIMEO: a peer that stops reading fails this write
+        // within kWriteDeadlineMs rather than parking the thread forever.
+        if (!c->conn.writeAll(frame)) {
+            LOG_WARN("ws", "write to client failed or stalled; disconnecting it");
+            kill(c);
+            return;
+        }
+    }
+}
+
+void Hub::serve(http::Connection&& conn, const std::string& greeting) {
     auto client = std::make_shared<Client>(std::move(conn));
     // Short read timeout so the loop can send keepalive pings and notice
     // shutdown without waiting on a silent peer.
     client->conn.setReadTimeout(1000);
+    client->conn.setWriteTimeout(kWriteDeadlineMs);
 
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -96,6 +149,8 @@ void Hub::serve(http::Connection&& conn) {
         clients_.push_back(client);
         LOG_INFO("ws", "client connected (%zu total)", clients_.size());
     }
+    if (!greeting.empty()) enqueue(client, encodeFrame(Opcode::Text, greeting));
+    std::thread writer([client] { writerLoop(client); });
 
     std::string inbuf;
     char chunk[2048];
@@ -111,38 +166,46 @@ void Hub::serve(http::Connection&& conn) {
                 if (r == DecodeResult::NeedMore) break;
                 if (r == DecodeResult::Error) {
                     LOG_WARN("ws", "protocol error from client, dropping");
-                    client->alive = false;
+                    kill(client);
                     break;
                 }
                 if (frame.op == Opcode::Close) {
-                    std::lock_guard<std::mutex> wl(client->writeMu);
-                    client->conn.writeAll(encodeFrame(Opcode::Close, ""));
-                    client->alive = false;
+                    // Best effort: queue the close reply, give the writer a
+                    // moment, then tear down regardless.
+                    enqueue(client, encodeFrame(Opcode::Close, ""));
+                    for (int i = 0; i < 20; ++i) {
+                        {
+                            std::lock_guard<std::mutex> lock(client->qMu);
+                            if (client->queue.empty()) break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                    kill(client);
                     break;
                 }
                 if (frame.op == Opcode::Ping) {
-                    std::lock_guard<std::mutex> wl(client->writeMu);
-                    if (!client->conn.writeAll(encodeFrame(Opcode::Pong, frame.payload)))
-                        client->alive = false;
+                    enqueue(client, encodeFrame(Opcode::Pong, frame.payload));
                     continue;
                 }
                 // Text and binary from the client are ignored: this channel is
                 // push-only, and commands belong on REST.
             }
         } else if (n == 0) {
-            client->alive = false;  // clean close
+            kill(client);  // clean close
         }
         // n < 0 is usually the read timeout expiring, which is the normal idle path.
 
         auto now = std::chrono::steady_clock::now();
         if (now - lastPing > std::chrono::seconds(20)) {
             lastPing = now;
-            std::lock_guard<std::mutex> wl(client->writeMu);
-            if (!client->conn.writeAll(encodeFrame(Opcode::Ping, ""))) client->alive = false;
+            enqueue(client, encodeFrame(Opcode::Ping, ""));
         }
     }
 
+    kill(client);
+    writer.join();
     drop(client);
+    client->conn.close();
 }
 
 void Hub::drop(const std::shared_ptr<Client>& c) {
@@ -156,8 +219,8 @@ void Hub::drop(const std::shared_ptr<Client>& c) {
 }
 
 void Hub::broadcast(const std::string& textPayload) {
-    // Snapshot under the lock, write outside it: a camera worker publishing an
-    // event must never be blocked by another thread's socket write.
+    // Snapshot under the lock and only enqueue: no socket I/O happens on the
+    // publishing thread, which is usually a camera worker.
     std::vector<std::shared_ptr<Client>> snapshot;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -167,17 +230,7 @@ void Hub::broadcast(const std::string& textPayload) {
     if (snapshot.empty()) return;
 
     const std::string frame = encodeFrame(Opcode::Text, textPayload);
-    for (auto& c : snapshot) {
-        if (!c->alive) continue;
-        std::lock_guard<std::mutex> wl(c->writeMu);
-        if (!c->conn.writeAll(frame)) {
-            // Mark dead and let the client's own serve loop clean up. Dropping a
-            // stuck consumer is correct: event delivery to the working clients
-            // matters more than completeness for a broken one.
-            c->alive = false;
-            c->conn.close();
-        }
-    }
+    for (auto& c : snapshot) enqueue(c, frame);
 }
 
 std::size_t Hub::clientCount() const {
@@ -192,10 +245,7 @@ void Hub::shutdown() {
         std::lock_guard<std::mutex> lock(mu_);
         snapshot = clients_;
     }
-    for (auto& c : snapshot) {
-        c->alive = false;
-        c->conn.close();
-    }
+    for (auto& c : snapshot) kill(c);
 }
 
 }  // namespace camd::ws

@@ -255,7 +255,7 @@ or for rehearsing a shoot without the rig.
 You can also rehearse a camera dropping out:
 
 ```sh
-curl -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
 ```
 
 ## Handing the project to someone else

@@ -48,6 +48,12 @@ struct Config {
     std::string bind = "127.0.0.1";
     int restPort = 8787;
     std::string wsPath = "/ws";
+    // Per-launch shared secret every REST and WebSocket request must present as
+    // "Authorization: Bearer <token>". The CAMD_AUTH_TOKEN environment variable
+    // overrides it. camd refuses to start without one: a loopback port is
+    // reachable by every local process and, through DNS rebinding or a lax local
+    // network policy, by web pages too, so it is not an access control.
+    std::string authToken;
     ConnectionConfig connection;
     LoggingConfig logging;
     std::vector<CameraConfig> cameras;

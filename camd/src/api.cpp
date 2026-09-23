@@ -43,6 +43,23 @@ void applyOutcome(const std::shared_ptr<Outcome>& out, http::Response& res) {
     res.error(out->status ? out->status : 500, out->error);
 }
 
+// A camera that did not answer in time. The body says whether the command was
+// withdrawn before it reached the camera ("notExecuted": safe to report as not
+// done) or had already started ("unknown": read the camera back, do not retry
+// blindly). Callers branch on `outcome`; the sentence is for people.
+void timedOut(http::Response& res, RunOutcome outcome, int budgetMs) {
+    json::Value v = json::Value::makeObject();
+    const bool unknown = outcome == RunOutcome::InFlightUnknown;
+    v.set("error", json::Value(
+        unknown ? "camera did not finish within " + std::to_string(budgetMs) +
+                      "ms; the command had started and its outcome is unknown"
+                : "camera did not respond within " + std::to_string(budgetMs) +
+                      "ms; the command was withdrawn and not sent"));
+    v.set("outcome", json::Value(runOutcomeName(outcome)));
+    v.set("executed", unknown ? json::Value() : json::Value(false));
+    res.json(504, v.dump());
+}
+
 }  // namespace
 
 Api::Api(Registry& registry, ws::Hub& hub, bool fakeMode)
@@ -154,7 +171,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
 
         auto out = std::make_shared<Outcome>();
-        const bool completed = w->run([out](CameraSession* s) {
+        const RunOutcome outcome = w->runJob([out](CameraSession* s) {
             if (!s) {
                 out->status = 503;
                 out->error = "camera not connected";
@@ -172,10 +189,10 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             out->body = json::Value::makeObject();
             out->body.set("cameraId", json::Value(std::string{}));
             out->body.set("properties", propertyMapJson(props));
-        }, timeoutMs);
+        }, timeoutMs, JobKind::Generic);
 
-        if (!completed) {
-            res.error(504, "camera did not respond within " + std::to_string(timeoutMs) + "ms");
+        if (outcome != RunOutcome::Completed) {
+            timedOut(res, outcome, timeoutMs);
             return;
         }
         if (out->ok) out->body.set("cameraId", json::Value(req.param("id")));
@@ -197,7 +214,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
 
         auto out = std::make_shared<Outcome>();
-        const bool completed = w->run([out](CameraSession* s) {
+        const RunOutcome outcome = w->runJob([out](CameraSession* s) {
             if (!s) {
                 out->status = 503;
                 out->error = "camera not connected";
@@ -233,10 +250,10 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             out->body = json::Value::makeObject();
             out->body.set("count", json::Value(static_cast<std::int64_t>(descriptors.size())));
             out->body.set("properties", std::move(arr));
-        }, timeoutMs);
+        }, timeoutMs, JobKind::Generic);
 
-        if (!completed) {
-            res.error(504, "camera did not respond within " + std::to_string(timeoutMs) + "ms");
+        if (outcome != RunOutcome::Completed) {
+            timedOut(res, outcome, timeoutMs);
             return;
         }
         if (out->ok) out->body.set("cameraId", json::Value(req.param("id")));
@@ -270,7 +287,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
 
         const std::string propName = req.param("prop");
         auto out = std::make_shared<Outcome>();
-        const bool completed = w->run([out, propName, want](CameraSession* s) {
+        const RunOutcome outcome = w->runJob([out, propName, want](CameraSession* s) {
             if (!s) {
                 out->status = 503;
                 out->error = "camera not connected";
@@ -292,10 +309,10 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             // legal step, or unchanged if the camera refused in its current mode.
             out->body.set("applied", json::Value(applied));
             out->body.set("exact", json::Value(applied == want));
-        }, timeoutMs);
+        }, timeoutMs, JobKind::Generic);
 
-        if (!completed) {
-            res.error(504, "camera did not respond within " + std::to_string(timeoutMs) + "ms");
+        if (outcome != RunOutcome::Completed) {
+            timedOut(res, outcome, timeoutMs);
             return;
         }
         applyOutcome(out, res);
@@ -329,6 +346,9 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         // read-back after pressing REC can take up to two seconds by design.
         const bool isRecord = (action == "recordStart" || action == "recordStop");
         const int budgetMs = isRecord ? std::max(timeoutMs, 5000) : timeoutMs;
+        const JobKind kind = action == "recordStart" ? JobKind::RecordStart
+                           : action == "recordStop"  ? JobKind::RecordStop
+                                                     : JobKind::Generic;
 
         auto out = std::make_shared<Outcome>();
         const int nudge = parsed.isObject() && parsed["steps"].isNumber()
@@ -338,7 +358,7 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         const double tapX = parsed.isObject() ? parsed["x"].asNumber(0.5) : 0.5;
         const double tapY = parsed.isObject() ? parsed["y"].asNumber(0.5) : 0.5;
 
-        const bool completed = w->run([out, action, nudge, keyName, tapX, tapY, w](CameraSession* s) {
+        const RunOutcome outcome = w->runJob([out, action, nudge, keyName, tapX, tapY, w](CameraSession* s) {
             if (!s) {
                 out->status = 503;
                 out->error = "camera not connected";
@@ -454,10 +474,10 @@ void Api::install(http::Server& server, const std::string& wsPath) {
             }
             out->status = 404;
             out->error = "unknown action: " + action;
-        }, budgetMs);
+        }, budgetMs, kind);
 
-        if (!completed) {
-            res.error(504, "camera did not respond within " + std::to_string(budgetMs) + "ms");
+        if (outcome != RunOutcome::Completed) {
+            timedOut(res, outcome, budgetMs);
             return;
         }
         applyOutcome(out, res);
@@ -589,8 +609,9 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         json::Value arr = json::Value::makeArray();
         for (const auto& w : registry_.all()) arr.push(cameraSnapshotJson(w->snapshot()));
         hello.set("cameras", std::move(arr));
-        conn.writeAll(ws::encodeFrame(ws::Opcode::Text, hello.dump()));
-        hub_.serve(std::move(conn));
+        // Queued through the hub like every other frame, so even the greeting
+        // write is bounded and never blocks on a slow consumer.
+        hub_.serve(std::move(conn), hello.dump());
     });
 }
 

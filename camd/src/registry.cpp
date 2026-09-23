@@ -125,6 +125,7 @@ void CameraWorker::stop() {
         leftover.swap(jobs_);
     }
     for (auto& j : leftover) {
+        if (j.phase) j.phase->store(kCancelled);
         if (j.done) j.done->set_value();
     }
 }
@@ -134,21 +135,65 @@ CameraWorker::Snapshot CameraWorker::snapshot() const {
     return snap_;
 }
 
+const char* runOutcomeName(RunOutcome o) {
+    switch (o) {
+        case RunOutcome::Completed:       return "completed";
+        case RunOutcome::NotExecuted:     return "notExecuted";
+        case RunOutcome::InFlightUnknown: return "unknown";
+    }
+    return "unknown";
+}
+
 bool CameraWorker::run(std::function<void(CameraSession*)> fn, int timeoutMs) {
+    return runJob(std::move(fn), timeoutMs, JobKind::Generic) == RunOutcome::Completed;
+}
+
+RunOutcome CameraWorker::runJob(std::function<void(CameraSession*)> fn, int timeoutMs,
+                                JobKind kind) {
     if (!running_) {
         // Answer immediately rather than making the caller wait for a timeout on a
         // worker that will never service the job.
         fn(nullptr);
-        return true;
+        return RunOutcome::Completed;
     }
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
+    auto phase = std::make_shared<std::atomic<int>>(kPending);
+    Job job{std::move(fn), done, phase,
+            clock_t_::now() + std::chrono::milliseconds(std::max(0, timeoutMs)), kind};
+    std::vector<std::shared_ptr<std::promise<void>>> withdrawn;
     {
         std::lock_guard<std::mutex> lock(jobMu_);
-        jobs_.push_back(Job{std::move(fn), done});
+        if (kind == JobKind::RecordStop) {
+            // A queued Start would run after this Stop and leave the camera
+            // rolling. Withdraw it: its caller is told it never executed.
+            for (auto it = jobs_.begin(); it != jobs_.end();) {
+                int expected = kPending;
+                if (it->kind == JobKind::RecordStart &&
+                    it->phase->compare_exchange_strong(expected, kCancelled)) {
+                    withdrawn.push_back(it->done);
+                    it = jobs_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            jobs_.push_front(std::move(job));
+        } else {
+            jobs_.push_back(std::move(job));
+        }
     }
+    for (auto& w : withdrawn) w->set_value();
     jobCv_.notify_all();
-    return future.wait_for(std::chrono::milliseconds(timeoutMs)) == std::future_status::ready;
+
+    if (future.wait_for(std::chrono::milliseconds(timeoutMs)) == std::future_status::ready) {
+        return phase->load() == kDone ? RunOutcome::Completed : RunOutcome::NotExecuted;
+    }
+    // Withdraw it if the worker has not picked it up. If it has, the camera may
+    // be acting on it right now and the result is genuinely unknown.
+    int expected = kPending;
+    if (phase->compare_exchange_strong(expected, kCancelled)) return RunOutcome::NotExecuted;
+    if (expected == kDone) return RunOutcome::Completed;
+    return RunOutcome::InFlightUnknown;
 }
 
 void CameraWorker::offerDiscovery(const DiscoveredCamera& d) {
@@ -293,6 +338,22 @@ void CameraWorker::drainJobs(CameraSession* session) {
             job = std::move(jobs_.front());
             jobs_.pop_front();
         }
+        // Claim the job. It fails when the caller already withdrew it; a job
+        // whose deadline passed while it queued is withdrawn here too, so the
+        // caller's timeout and the worker agree even if the caller has not woken.
+        int expected = kPending;
+        const bool expired = clock_t_::now() > job.deadline;
+        if (expired) {
+            if (job.phase->compare_exchange_strong(expected, kCancelled)) {
+                LOG_WARN(cfg_.id.c_str(), "dropped a command that expired while queued");
+            }
+            if (job.done) job.done->set_value();
+            continue;
+        }
+        if (!job.phase->compare_exchange_strong(expected, kRunning)) {
+            if (job.done) job.done->set_value();
+            continue;
+        }
         try {
             job.fn(session);
         } catch (const std::exception& e) {
@@ -300,6 +361,7 @@ void CameraWorker::drainJobs(CameraSession* session) {
         } catch (...) {
             LOG_ERROR(cfg_.id.c_str(), "job threw a non-exception");
         }
+        job.phase->store(kDone);
         if (job.done) job.done->set_value();
     }
 }

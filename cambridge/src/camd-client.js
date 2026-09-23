@@ -10,15 +10,36 @@
 
 import { EventEmitter } from 'node:events';
 
+/**
+ * camd's per-launch access token (audit DC-1). The environment wins so a
+ * launcher can hand the same fresh secret to both processes without writing it
+ * into a hand-edited config; the Wordtandem launcher writes camd.authToken into
+ * its own generated, owner-only config instead. camd refuses to start without
+ * one, so a missing token here means requests will be refused with 401.
+ */
+export function resolveCamdToken(camdConfig = {}, env = process.env) {
+  const fromEnv = env.CAMD_AUTH_TOKEN;
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
+  const fromConfig = camdConfig?.authToken;
+  return typeof fromConfig === 'string' && fromConfig.length > 0 ? fromConfig : null;
+}
+
 export class CamdClient extends EventEmitter {
   /**
    * @param {object} opts
    * @param {string} opts.baseUrl  e.g. http://127.0.0.1:8787
    * @param {string} opts.wsUrl    e.g. ws://127.0.0.1:8787/ws
+   * @param {string|null} [opts.token]  camd's per-launch bearer token
    * @param {(level: string, msg: string) => void} [opts.log]
    */
-  constructor({ baseUrl, wsUrl, log = () => {} }) {
+  constructor({ baseUrl, wsUrl, token = null, log = () => {} }) {
     super();
+    // Kept off the instance's enumerable fields so it never lands in a log line
+    // or JSON dump of the client.
+    Object.defineProperty(this, 'authHeaders', {
+      value: () => (token ? { Authorization: `Bearer ${token}` } : {}),
+      enumerable: false,
+    });
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.wsUrl = wsUrl;
     this.log = log;
@@ -49,7 +70,9 @@ export class CamdClient extends EventEmitter {
     if (this.stopped) return;
     let ws;
     try {
-      ws = new WebSocket(this.wsUrl);
+      // Node's WebSocket (undici) accepts headers and sends no Origin, which
+      // camd rejects outright. Verified on the bundled Node 22.23.2.
+      ws = new WebSocket(this.wsUrl, { headers: this.authHeaders() });
     } catch (err) {
       this.#scheduleReconnect(`cannot construct socket: ${err.message}`);
       return;
@@ -125,7 +148,7 @@ export class CamdClient extends EventEmitter {
     const init = {
       method,
       signal: AbortSignal.timeout(10_000),
-      headers: {},
+      headers: { ...this.authHeaders() },
     };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
@@ -142,10 +165,16 @@ export class CamdClient extends EventEmitter {
     } catch (err) {
       // camd being down must surface as a clean failure the UI can display, not an
       // unhandled rejection that takes the Node process with it.
+      //
+      // A refused connection never delivered the request, so nothing ran. A
+      // timeout or a connection dropped mid-request may have: camd could be
+      // acting on it right now, so its outcome is unknown and must be read back,
+      // never assumed failed and retried (DC-2).
+      const refused = err.cause?.code === 'ECONNREFUSED';
       const message = err.name === 'TimeoutError'
-        ? 'camd did not respond within 10s'
+        ? 'camd did not respond within 10s; the command may still have run'
         : `cannot reach camd: ${err.message}`;
-      return { ok: false, status: 503, body: { error: message } };
+      return { ok: false, status: 503, body: { error: message, outcome: refused ? 'notExecuted' : 'unknown' } };
     }
   }
 
@@ -172,5 +201,13 @@ export class CamdClient extends EventEmitter {
 
   liveviewUrl(id) {
     return `${this.baseUrl}/cameras/${encodeURIComponent(id)}/liveview`;
+  }
+
+  /** Live view from camd, authenticated. Returns the fetch Response. */
+  fetchLiveview(id, single = false, signal) {
+    return fetch(`${this.liveviewUrl(id)}${single ? '?single=1' : ''}`, {
+      headers: this.authHeaders(),
+      ...(signal ? { signal } : {}),
+    });
   }
 }

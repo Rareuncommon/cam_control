@@ -5,11 +5,13 @@
 #include <cstring>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <utility>
 
 #include "camd/log.h"
@@ -175,6 +177,8 @@ const char* statusText(int code) {
         case 201: return "Created";
         case 204: return "No Content";
         case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 403: return "Forbidden";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 409: return "Conflict";
@@ -185,6 +189,69 @@ const char* statusText(int code) {
         case 504: return "Gateway Timeout";
         default:  return "Status";
     }
+}
+
+// --- access control ---------------------------------------------------------
+
+bool isLoopbackBind(const std::string& bindAddr) {
+    in_addr a{};
+    if (::inet_pton(AF_INET, bindAddr.c_str(), &a) != 1) return false;
+    return (ntohl(a.s_addr) >> 24) == 127;
+}
+
+bool isLoopbackHost(const std::string& hostHeader) {
+    std::string host = hostHeader;
+    if (!host.empty() && host[0] == '[') {
+        const auto close = host.find(']');
+        if (close == std::string::npos) return false;
+        const std::string rest = host.substr(close + 1);
+        host = host.substr(1, close - 1);
+        if (!rest.empty() && rest[0] != ':') return false;
+        return host == "::1";
+    }
+    const auto colon = host.find(':');
+    if (colon != std::string::npos) {
+        const std::string port = host.substr(colon + 1);
+        if (port.empty() || port.find_first_not_of("0123456789") != std::string::npos) return false;
+        host = host.substr(0, colon);
+    }
+    for (char& c : host) c = lowerAscii(c);
+    if (host == "localhost") return true;
+    return isLoopbackBind(host);
+}
+
+namespace {
+bool constantTimeEquals(const std::string& a, const std::string& b) {
+    // Length is not secret (the token format is fixed); the contents are.
+    if (a.size() != b.size()) return false;
+    unsigned char diff = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+}  // namespace
+
+int checkAccess(const Request& req, const std::string& token, std::string& why) {
+    if (token.empty()) { why = "no token configured"; return 503; }
+    if (req.headers.find("Origin") != req.headers.end()) {
+        why = "request carried an Origin header";
+        return 403;
+    }
+    auto host = req.headers.find("Host");
+    if (host == req.headers.end() || !isLoopbackHost(host->second)) {
+        why = "Host is not a loopback name";
+        return 403;
+    }
+    auto auth = req.headers.find("Authorization");
+    static const std::string kBearer = "Bearer ";
+    if (auth == req.headers.end() || auth->second.size() <= kBearer.size() ||
+        auth->second.compare(0, kBearer.size(), kBearer) != 0 ||
+        !constantTimeEquals(auth->second.substr(kBearer.size()), token)) {
+        why = "missing or wrong bearer token";
+        return 401;
+    }
+    return 0;
 }
 
 // --- Connection -------------------------------------------------------------
@@ -211,6 +278,14 @@ void Connection::setReadTimeout(int ms) {
     tv.tv_sec = ms / 1000;
     tv.tv_usec = (ms % 1000) * 1000;
     ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+void Connection::setWriteTimeout(int ms) {
+    if (fd_ < 0) return;
+    struct timeval tv{};
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
 bool Connection::writeAll(const char* data, std::size_t len) {
@@ -299,6 +374,10 @@ const Server::Route* Server::match(const std::string& method, const std::string&
 }
 
 bool Server::start(const std::string& bindAddr, int port) {
+    if (token_.empty()) {
+        LOG_ERROR("http", "refusing to listen without an access token");
+        return false;
+    }
     listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listenFd_ < 0) {
         LOG_ERROR("http", "socket() failed: %s", std::strerror(errno));
@@ -347,18 +426,32 @@ bool Server::start(const std::string& bindAddr, int port) {
 
 void Server::stop() {
     if (!running_.exchange(false)) return;
-    if (listenFd_ >= 0) {
-        ::shutdown(listenFd_, SHUT_RDWR);
-        ::close(listenFd_);
-        listenFd_ = -1;
-    }
+    // The accept loop polls with a short timeout and rechecks running_, so it
+    // exits by itself; the descriptor is closed only after it has, so the loop
+    // can never accept on a recycled fd. (shutdown() does not wake accept() on
+    // macOS, and closing under a blocked accept() raced the reader thread.)
     if (acceptThread_.joinable()) acceptThread_.join();
+    const int fd = listenFd_.exchange(-1);
+    if (fd >= 0) ::close(fd);
+
+    // Wake every connection still open (idle keep-alive, MJPEG, WebSocket) and
+    // wait for its thread to leave, bounded so a wedged camera job cannot hang
+    // shutdown forever. The owning thread closes its own descriptor.
+    std::unique_lock<std::mutex> lock(connMu_);
+    for (const auto& [id, watch] : openConns_) ::shutdown(watch, SHUT_RDWR);
+    if (!connCv_.wait_for(lock, std::chrono::seconds(10), [this] { return openConns_.empty(); })) {
+        LOG_WARN("http", "%zu connection(s) still busy at shutdown", openConns_.size());
+    }
     LOG_INFO("http", "stopped");
 }
 
 void Server::acceptLoop() {
+    const int listenFd = listenFd_.load();
     while (running_) {
-        int fd = ::accept(listenFd_, nullptr, nullptr);
+        pollfd pfd{listenFd, POLLIN, 0};
+        const int ready = ::poll(&pfd, 1, 200);
+        if (ready <= 0) continue;  // timeout or EINTR: recheck running_
+        int fd = ::accept(listenFd, nullptr, nullptr);
         if (fd < 0) {
             if (!running_) break;
             if (errno == EINTR) continue;
@@ -373,14 +466,32 @@ void Server::acceptLoop() {
 
         // Detached: a client that stalls is bounded by the read timeout, and a
         // long-lived MJPEG or WebSocket connection must outlive this loop
-        // iteration anyway.
-        std::thread([this, fd] { serveConnection(fd); }).detach();
+        // iteration anyway. Registered so stop() can wake and await it.
+        std::uint64_t id = 0;
+        {
+            std::lock_guard<std::mutex> lock(connMu_);
+            id = ++nextConnId_;
+            openConns_[id] = ::dup(fd);
+        }
+        std::thread([this, fd, id] {
+            serveConnection(fd);
+            std::lock_guard<std::mutex> lock(connMu_);
+            auto it = openConns_.find(id);
+            if (it != openConns_.end()) {
+                if (it->second >= 0) ::close(it->second);
+                openConns_.erase(it);
+            }
+            connCv_.notify_all();
+        }).detach();
     }
 }
 
 void Server::serveConnection(int fd) {
     Connection conn(fd);
     conn.setReadTimeout(15000);
+    // Writes are bounded too: a response or MJPEG part that cannot be delivered
+    // in this time means the reader has stalled.
+    conn.setWriteTimeout(5000);
 
     std::string buf;
     std::size_t headEnd = std::string::npos;
@@ -432,6 +543,22 @@ void Server::serveConnection(int fd) {
 
 bool Server::dispatch(const Request& reqIn, Connection& conn) {
     Request req = reqIn;
+
+    // Access control precedes everything, including the WebSocket upgrade,
+    // OPTIONS and 404s, so an unauthenticated caller learns nothing.
+    std::string why;
+    if (const int refuse = checkAccess(req, token_, why)) {
+        LOG_WARN("http", "refused %s %s: %s", req.method.c_str(), req.path.c_str(), why.c_str());
+        Response res;
+        res.error(refuse, refuse == 401 ? "authentication required" : "forbidden");
+        std::string out = "HTTP/1.1 " + std::to_string(refuse) + " " + statusText(refuse) + "\r\n";
+        if (refuse == 401) out += "WWW-Authenticate: Bearer\r\n";
+        out += "Content-Type: application/json; charset=utf-8\r\n";
+        out += "Content-Length: " + std::to_string(res.body.size()) + "\r\n";
+        out += "Connection: close\r\n\r\n" + res.body;
+        conn.writeAll(out);
+        return true;
+    }
 
     // WebSocket upgrade takes precedence on its own path.
     if (!wsPath_.empty() && req.path == wsPath_ && wsHandler_) {

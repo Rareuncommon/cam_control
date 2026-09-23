@@ -6,6 +6,7 @@
 // record and a silent exit is the hardest failure to diagnose.
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -40,6 +41,9 @@ void usage() {
         "  --fake-portfolio  simulate mixed Sony families and two same-model USB bodies\n"
         "  --port <n>        override camd.restPort\n"
         "  --verbose         force debug logging regardless of config\n"
+        "\n"
+        "Every request must carry Authorization: Bearer <token>, where the token\n"
+        "comes from CAMD_AUTH_TOKEN or camd.authToken (at least 32 characters).\n"
         "  --help            this text\n";
 }
 
@@ -91,6 +95,26 @@ int main(int argc, char** argv) {
     }
 
     if (portOverride > 0) cfg.restPort = portOverride;
+
+    // Access control (audit DC-1). The launcher generates a fresh secret per
+    // launch and hands the same value to the Node service. No token, no daemon:
+    // a loopback port is reachable by every process on the machine.
+    if (const char* envToken = std::getenv("CAMD_AUTH_TOKEN"); envToken && *envToken) {
+        cfg.authToken = envToken;
+    }
+    if (cfg.authToken.size() < 32) {
+        std::cerr << "camd: no usable access token. Set CAMD_AUTH_TOKEN (or camd.authToken in "
+                     "the config) to a random secret of at least 32 characters; the Node "
+                     "service must use the same value. scripts/start.sh does this for you.\n";
+        LOG_ERROR("camd", "refusing to start without an access token of at least 32 characters");
+        return 2;
+    }
+    if (!camd::http::isLoopbackBind(cfg.bind)) {
+        std::cerr << "camd: camd.bind must be a loopback address (127.x.x.x), not '" << cfg.bind
+                  << "'. The Node service is the network-facing boundary.\n";
+        LOG_ERROR("camd", "refusing non-loopback bind %s", cfg.bind.c_str());
+        return 2;
+    }
 
     LOG_INFO("camd", "starting: %zu camera(s), REST on %s:%d, WS at %s",
              cfg.cameras.size(), cfg.bind.c_str(), cfg.restPort, cfg.wsPath.c_str());
@@ -158,6 +182,7 @@ int main(int argc, char** argv) {
     }
 
     camd::http::Server server;
+    server.requireToken(cfg.authToken);
     camd::Api api(registry, hub, fake);
     api.install(server, cfg.wsPath);
 
