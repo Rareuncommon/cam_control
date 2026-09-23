@@ -38,6 +38,71 @@ const ERR_NOT_EXECUTABLE = [0x61, 0x41];
 /** f-number is transported ×100 by camd; VISCA iris positions are a table index. */
 const IRIS_STEP = 1;
 
+// A VISCA message is at most 16 bytes including its address byte and 0xFF
+// terminator. Anything claiming more is not VISCA.
+const MAX_MESSAGE = 16;
+// Per-connection bounds (audit CS5): bytes waiting for a terminator/header,
+// and complete messages waiting for the camera. A peer beyond either is not a
+// controller and is disconnected.
+const MAX_BUFFERED = 1024;
+const MAX_QUEUED = 32;
+
+/**
+ * Splits a byte stream into complete VISCA messages.
+ *
+ * TCP delivers bytes, not packets: one read may hold half a command or three.
+ * Each connection gets its own decoder; UDP datagrams go through
+ * parseDatagram() instead, since a datagram is exactly one message.
+ * push() returns complete messages, or throws on a stream that cannot be
+ * VISCA (the caller drops the connection).
+ */
+export class ViscaStreamDecoder {
+  constructor() { this.buf = Buffer.alloc(0); }
+  push(chunk) {
+    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : Buffer.from(chunk);
+    const out = [];
+    while (this.buf.length) {
+      if ((this.buf[0] & 0x80) === 0) {
+        // Header-framed.
+        if (this.buf.length < 8) break;
+        const type = this.buf.readUInt16BE(0);
+        const length = this.buf.readUInt16BE(2);
+        if ((type !== PAYLOAD_COMMAND && type !== PAYLOAD_REPLY) || length < 3 || length > MAX_MESSAGE) {
+          throw new Error('not a VISCA-over-IP header');
+        }
+        if (this.buf.length < 8 + length) break;
+        const message = this.buf.subarray(8, 8 + length);
+        const sequence = this.buf.readUInt32BE(4);
+        this.buf = this.buf.subarray(8 + length);
+        if (message[length - 1] !== 0xff || (message[0] & 0x80) === 0) throw new Error('unterminated VISCA message');
+        out.push({ message: Buffer.from(message), sequence, framed: true, type });
+      } else {
+        // Raw VISCA: runs to the first 0xFF.
+        const end = this.buf.indexOf(0xff);
+        if (end < 0) {
+          if (this.buf.length > MAX_MESSAGE) throw new Error('unterminated VISCA message');
+          break;
+        }
+        if (end + 1 > MAX_MESSAGE) throw new Error('oversized VISCA message');
+        out.push({ message: Buffer.from(this.buf.subarray(0, end + 1)), sequence: 0, framed: false });
+        this.buf = this.buf.subarray(end + 1);
+      }
+    }
+    if (this.buf.length > MAX_BUFFERED) throw new Error('too much unframed VISCA data');
+    return out;
+  }
+}
+
+/** One complete message from a datagram, or null when it is not exactly one. */
+export function parseDatagram(buf) {
+  if (!buf || buf.length === 0) return null;
+  const decoder = new ViscaStreamDecoder();
+  let messages;
+  try { messages = decoder.push(buf); } catch { return null; }
+  if (messages.length !== 1 || decoder.buf.length !== 0) return null;
+  return messages[0];
+}
+
 export class ViscaServer {
   /**
    * @param {object} opts
@@ -94,27 +159,62 @@ export class ViscaServer {
       });
       this.udp.on('message', async (msg, rinfo) => {
         const reply = await this.handlePacket(msg);
-        for (const frame of reply) this.udp.send(frame, rinfo.port, rinfo.address);
+        const udp = this.udp;
+        if (!udp) return;
+        for (const frame of reply) udp.send(frame, rinfo.port, rinfo.address);
       });
       this.udp.bind(this.port, this.bind, () => {
         if (!this.useTcp) return resolve();
-        this.tcpServer = createServer((socket) => {
-          this.sockets.add(socket);
-          socket.on('close', () => this.sockets.delete(socket));
-          // A controller that goes away mid-command must not take the server
-          // with it; a booth joystick unplugged during a shoot is routine.
-          socket.on('error', (err) => this.log('debug', `VISCA TCP client: ${err.message}`));
-          socket.on('data', async (data) => {
-            const reply = await this.handlePacket(data);
-            for (const frame of reply) socket.write(frame);
-          });
-        });
+        this.tcpServer = createServer((socket) => this.#serveTcp(socket));
         this.tcpServer.on('error', (err) => {
           this.log('error', `VISCA TCP error: ${err.message}`);
           reject(err);
         });
         this.tcpServer.listen(this.port, this.bind, () => resolve());
       });
+    });
+  }
+
+  /**
+   * One TCP controller. Bytes are decoded incrementally (audit CS5) and each
+   * complete message is executed in arrival order, one at a time, so replies
+   * cannot interleave and a slow camera cannot pile up unbounded work.
+   */
+  #serveTcp(socket) {
+    this.sockets.add(socket);
+    socket.on('close', () => this.sockets.delete(socket));
+    // A controller that goes away mid-command must not take the server
+    // with it; a booth joystick unplugged during a shoot is routine.
+    socket.on('error', (err) => this.log('debug', `VISCA TCP client: ${err.message}`));
+    const decoder = new ViscaStreamDecoder();
+    const queue = [];
+    let running = false;
+    const drain = async () => {
+      if (running) return;
+      running = true;
+      try {
+        while (queue.length && !socket.destroyed) {
+          const m = queue.shift();
+          const frames = await this.#executeMessage(m);
+          for (const frame of frames) if (!socket.destroyed) socket.write(frame);
+        }
+      } finally { running = false; }
+    };
+    socket.on('data', (data) => {
+      let messages;
+      try { messages = decoder.push(data); }
+      catch (err) {
+        this.log('warn', `VISCA TCP client dropped: ${err.message}`);
+        socket.destroy();
+        return;
+      }
+      if (queue.length + messages.length > MAX_QUEUED) {
+        this.log('warn', 'VISCA TCP client dropped: too many commands waiting');
+        socket.destroy();
+        return;
+      }
+      queue.push(...messages);
+      drain();
     });
   }
 
@@ -134,27 +234,26 @@ export class ViscaServer {
    * Pure enough to test without a socket.
    */
   async handlePacket(buf) {
-    if (!buf || buf.length === 0) return [];
+    // Exactly one complete, terminated message, or nothing (audit CS5: the
+    // advertised length and the 0xFF terminator used to go unchecked).
+    const m = parseDatagram(buf);
+    return m ? this.#executeMessage(m) : [];
+  }
 
-    // Header-framed, or raw VISCA? A VISCA message always begins 0x8n.
-    let sequence = 0;
-    let message = buf;
-    let framed = false;
-    if (buf.length >= 8 && (buf[0] & 0x80) === 0) {
-      const type = buf.readUInt16BE(0);
-      const length = buf.readUInt16BE(2);
-      sequence = buf.readUInt32BE(4);
-      if (type !== PAYLOAD_COMMAND && type !== PAYLOAD_REPLY) return [];
-      message = buf.subarray(8, 8 + length);
-      framed = true;
-    }
-    if (message.length < 3) return [];
-
+  async #executeMessage({ message, sequence, framed }) {
     // The address byte is 0x80 | address, so 0x81 is camera 1 and 0x83 camera 3.
     // Address 0 is not a real target; treat it as camera 1 so a controller that
     // sends 0x80 still reaches something rather than silently doing nothing.
     const address = (message[0] & 0x0f) || 1;
-    const replies = await this.execute(address, message);
+    let replies;
+    try {
+      replies = await this.execute(address, message);
+    } catch (err) {
+      // A camera write that throws is a failure the controller must see, not an
+      // unhandled rejection with no reply (audit CS6).
+      this.log('warn', `VISCA command failed: ${err.message}`);
+      replies = [[0x90, ...ERR_NOT_EXECUTABLE, 0xff]];
+    }
     return replies.map((payload) => this.#frame(payload, sequence, framed));
   }
 
@@ -227,15 +326,13 @@ export class ViscaServer {
       if (idx < 0) return 'refused';
       const next = sorted[idx + direction];
       if (next === undefined) return 'refused';
-      await this.applyFn(cam.id, prop, next);
-      return 'ok';
+      return this.#applied(await this.applyFn(cam.id, prop, next));
     }
     if (p.range) {
       const step = (p.range.step || 1) * IRIS_STEP;
       const next = Math.min(Math.max(current + direction * step, p.range.min), p.range.max);
       if (next === current) return 'refused';
-      await this.applyFn(cam.id, prop, next);
-      return 'ok';
+      return this.#applied(await this.applyFn(cam.id, prop, next));
     }
     return 'refused';
   }
@@ -243,8 +340,17 @@ export class ViscaServer {
   async #direct(cam, prop, value) {
     const p = cam.properties?.[prop];
     if (!p || !p.writable) return 'refused';
-    await this.applyFn(cam.id, prop, value);
-    return 'ok';
+    return this.#applied(await this.applyFn(cam.id, prop, value));
+  }
+
+  /**
+   * Completion is only sent for a write the camera accepted (audit CS6). The
+   * writable check above is a snapshot; the camera can still refuse (a mode
+   * change, a state transition, camd timing out), and that must reach the
+   * controller as "not executable" rather than a false completion.
+   */
+  #applied(result) {
+    return result && result.ok === false ? 'refused' : 'ok';
   }
 
   /**
@@ -296,12 +402,10 @@ export class ViscaServer {
     const highNibble = mode & 0xf0;
     const speed = (mode & 0x0f) || 3;
     if (mode === 0x02 || highNibble === 0x20) {
-      await this.actionFn(cam.id, 'focusNudge', { steps: speed * 3 });
-      return 'ok';
+      return this.#applied(await this.actionFn(cam.id, 'focusNudge', { steps: speed * 3 }));
     }
     if (mode === 0x03 || highNibble === 0x30) {
-      await this.actionFn(cam.id, 'focusNudge', { steps: -speed * 3 });
-      return 'ok';
+      return this.#applied(await this.actionFn(cam.id, 'focusNudge', { steps: -speed * 3 }));
     }
     if (args.length >= 5) {
       const raw = ((args[1] & 0x0f) << 12) | ((args[2] & 0x0f) << 8)
@@ -314,8 +418,7 @@ export class ViscaServer {
   async #focusMode(cam, args) {
     // 0x02 auto, 0x03 manual, 0x01 trigger a one-shot AF.
     if (args[0] === 0x01) {
-      await this.actionFn(cam.id, 'autofocus');
-      return 'ok';
+      return this.#applied(await this.actionFn(cam.id, 'autofocus'));
     }
     return 'refused';
   }
