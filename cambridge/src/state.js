@@ -115,6 +115,27 @@ export class StateModel extends EventEmitter {
     return this.cameras.get(id);
   }
 
+  /**
+   * A camera we can no longer see mid-take needs its take closed, but not
+   * called a drop: from here we genuinely cannot tell whether it kept rolling
+   * on its own card or stopped. `dropped: null` is that third answer, and the
+   * take log prints it as unknown rather than picking one.
+   */
+  #closeTakeUnknown(cam) {
+    if (cam.status?.recording) {
+      const take = this.#openTakeFor(cam.id);
+      if (take) {
+        take.endedAt = Date.now();
+        take.dropped = null;
+      }
+      // Clear the flag too, or the reconnect — which reports not-recording —
+      // looks like an unexplained stop and raises a second, wrong alarm for
+      // something already recorded above.
+      cam.status = { ...cam.status, recording: false, recordDropped: false };
+    }
+    cam.recordStartedAt = null;
+  }
+
   applyConnectionState(ev) {
     const cam = this.ensure(ev.cameraId);
     const previous = cam.state;
@@ -138,18 +159,7 @@ export class StateModel extends EventEmitter {
       // drop: from here we genuinely cannot tell whether it kept rolling on its
       // own card or stopped. `dropped: null` is that third answer, and the take
       // log prints it as unknown rather than picking one.
-      if (cam.status?.recording) {
-        const take = this.#openTakeFor(cam.id);
-        if (take) {
-          take.endedAt = Date.now();
-          take.dropped = null;
-        }
-        // Clear the flag too, or the reconnect — which reports not-recording —
-        // looks like an unexplained stop and raises a second, wrong alarm for
-        // something already recorded above.
-        cam.status = { ...cam.status, recording: false, recordDropped: false };
-      }
-      cam.recordStartedAt = null;
+      this.#closeTakeUnknown(cam);
     }
     this.emit('change', { type: 'connectionState', cameraId: ev.cameraId, from: previous, to: ev.state });
   }
@@ -279,10 +289,16 @@ export class StateModel extends EventEmitter {
     if (!connected) {
       // The daemon is gone: every camera's state is unknown, and saying so is the
       // point. Fail loud in the UI.
+      //
+      // Takes still open are closed with an unknown outcome, exactly as for a
+      // single camera vanishing (audit DC-10: they used to stay "rolling" in
+      // the take log for the whole outage). A camera still recording when the
+      // daemon returns starts a fresh take from its reported status.
       for (const cam of this.cameras.values()) {
         cam.state = 'offline';
         cam.detail = 'camd unreachable';
         cam.properties = {};
+        this.#closeTakeUnknown(cam);
       }
     }
     this.emit('change', { type: 'camdConnection', connected });
