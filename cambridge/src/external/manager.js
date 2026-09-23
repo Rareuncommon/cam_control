@@ -53,8 +53,20 @@ export class ExternalManager extends EventEmitter {
   }
   view() { return [...this.cameras.values()].map(c => ({ id: c.config.id, label: c.config.label, model: c.config.model, provider: c.config.provider, transport: c.config.provider === 'gphoto2' ? 'USB' : 'HTTP', ip: c.config.host ?? c.config.port,
     state: c.state, detail: c.error, properties: {}, status: { recording: c.snapshot?.recording ?? null, recordingState: c.snapshot?.recording === true ? 1 : c.snapshot?.recording === false ? 0 : -1, battery: -1, mediaSlot1Sec: -1, mediaSlot2Sec: -1 },
-    capabilities: { schemaVersion: 1, provider: c.config.provider, record: { available: c.state === 'connected' && c.snapshot?.canRecord === true }, capture: { available: c.state === 'connected' && c.snapshot?.canCapture === true }, liveView: { available: false } },
+    capabilities: this.capabilities(c),
     external: { controls: c.snapshot?.controls ?? [], busy: c.busy, verification: 'hardware-validation-pending' } })); }
+  capabilities(c) {
+    const connected = c.state === 'connected';
+    // USB settings/capture need the separate mutation helper (audit DC-6); say
+    // so instead of implying that working discovery means working control.
+    const helper = c.config.provider === 'gphoto2' ? (c.snapshot?.helper ?? { available: false, reason: 'USB helper status is not known yet; refresh the camera' }) : { available: true, reason: null };
+    const helperReason = helper.available ? null : helper.reason;
+    return { schemaVersion: 1, provider: c.config.provider,
+      record: { available: connected && c.snapshot?.canRecord === true },
+      set: { available: connected && helper.available, reason: helperReason },
+      capture: { available: connected && c.snapshot?.canCapture === true && helper.available, reason: helperReason },
+      liveView: { available: false } };
+  }
   async action(id, action, body = {}) {
     const c = this.cameras.get(id); if (!c) throw new Error('No such external camera');
     if (this.closing) throw new Error('Camera service is stopping');

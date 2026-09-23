@@ -4,6 +4,7 @@ import { GphotoCamera, parseDiscovery, parseWidgets } from '../src/external/gpho
 import { BlackmagicCamera } from '../src/external/blackmagic.js';
 import { ExternalManager, externalCatalog, validateExternal } from '../src/external/manager.js';
 import { blackmagicSimulator, usbConfig } from './external-simulator.js';
+const helperReady = async () => ({ available: true, reason: null });
 const usb = { id: 'ext-usb', provider: 'gphoto2', model: 'Canon EOS R5', port: 'usb:001,002', serial: 'SERIAL-A' };
 function rig(adapter) {
   let saved = { cameras: [], ptz: { cameras: [] }, external: { cameras: [] }, untouched: true };
@@ -19,18 +20,18 @@ test('USB metadata exposes only writable exposure controls, not format or read-o
 test('USB writes use serial-bound helper, validate fresh choices and confirm readback', async () => {
   let iso = '100'; const calls = [];
   const run = async args => args.includes('--get-config') ? 'Current: SERIAL-A\n' : usbConfig({ iso });
-  const camera = new GphotoCamera(usb, run, async (config, action, key, value) => { calls.push({ config, action, key, value }); iso = '400'; });
+  const camera = new GphotoCamera(usb, run, async (config, action, key, value) => { calls.push({ config, action, key, value }); iso = '400'; }, helperReady);
   await camera.set('/main/imgsettings/iso', 1); assert.equal(calls[0].config.serial, 'SERIAL-A'); assert.equal(calls[0].action, 'set');
   await assert.rejects(camera.set('/main/settings/format', 1), RangeError);
   await assert.rejects(camera.set('/main/imgsettings/iso', 99), RangeError); assert.equal(calls.length, 1);
 });
 test('USB serial mismatch stops before helper mutation', async () => {
-  const camera = new GphotoCamera(usb, async () => 'Current: SERIAL-B\n', () => assert.fail('must not write'));
+  const camera = new GphotoCamera(usb, async () => 'Current: SERIAL-B\n', () => assert.fail('must not write'), helperReady);
   await assert.rejects(camera.set('/main/imgsettings/iso', 1), /identity changed/);
 });
 test('USB capture rejects read-only Bulb and RAM targets', async () => {
   for (const config of [usbConfig({ bulb: true }), usbConfig().replace('Current: Memory card', 'Current: Internal RAM')]) {
-    const camera = new GphotoCamera(usb, async args => args.includes('--get-config') ? 'Current: SERIAL-A' : config, () => assert.fail('must not capture'));
+    const camera = new GphotoCamera(usb, async args => args.includes('--get-config') ? 'Current: SERIAL-A' : config, () => assert.fail('must not capture'), helperReady);
     assert.equal((await camera.snapshot()).canCapture, false); await assert.rejects(camera.capture(), RangeError);
   }
 });
@@ -113,4 +114,49 @@ test('Start queued behind polling is cancelled when a newer Stop arrives', async
   const poll = manager.action('ext-bmd', 'status'); const start = manager.action('ext-bmd', 'recordStart');
   const rejection = assert.rejects(start, /superseded/); await manager.action('ext-bmd', 'recordStop'); release({ recording: false, canRecord: true, controls: [] });
   await poll; await rejection; assert.deepEqual(writes, [false]);
+});
+
+// DC-6 (audit 2026-09-23): the packaged app had no USB helper, yet USB
+// settings/capture looked available because discovery worked, and a write then
+// failed with "Build the USB helper with node scripts/...".
+import { helperStatus } from '../src/external/gphoto.js';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+test('a missing USB helper is detected and reported in plain words', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'cambridge-helper-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const missing = await helperStatus(join(dir, 'gphoto-control'));
+  assert.equal(missing.available, false);
+  assert.match(missing.reason, /USB helper/);
+  assert.doesNotMatch(missing.reason, /node scripts|build-gphoto/);
+
+  // A helper that loads prints its usage and exits 1 when given no arguments.
+  const working = join(dir, 'working-helper');
+  writeFileSync(working, '#!/bin/sh\necho "Expected port, model, serial, action, key, value, expected choice" >&2\nexit 1\n');
+  chmodSync(working, 0o755);
+  assert.deepEqual(await helperStatus(working), { available: true, reason: null });
+
+  // One that fails to load its libraries is not available.
+  const broken = join(dir, 'broken-helper');
+  writeFileSync(broken, '#!/bin/sh\necho "dyld: Library not loaded: libgphoto2.6.dylib" >&2\nexit 134\n');
+  chmodSync(broken, 0o755);
+  assert.equal((await helperStatus(broken)).available, false);
+});
+
+test('without the helper USB settings and capture are unavailable, refused early, and the camera stays connected', async () => {
+  const reason = 'USB camera settings and photo capture need the USB helper, which is not included for this computer.';
+  const run = async args => args.includes('--get-config') ? 'Current: SERIAL-A\n' : usbConfig();
+  const camera = new GphotoCamera(usb, run, () => assert.fail('must not attempt a helper mutation'),
+    async () => ({ available: false, reason }));
+  const { manager } = rig(camera);
+  manager.install(usb, await camera.snapshot());
+  const view = manager.view()[0];
+  assert.equal(view.state, 'connected');
+  assert.deepEqual(view.capabilities.set, { available: false, reason });
+  assert.equal(view.capabilities.capture.available, false);
+  assert.equal(view.capabilities.capture.reason, reason);
+  await assert.rejects(manager.action('ext-usb', 'set', { key: '/main/imgsettings/iso', value: 1 }), err => err instanceof RangeError && err.message === reason);
+  await assert.rejects(manager.action('ext-usb', 'capture'), RangeError);
+  assert.equal(manager.view()[0].state, 'connected', 'a refusal is not a disconnect');
 });

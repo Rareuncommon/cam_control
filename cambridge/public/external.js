@@ -19,11 +19,15 @@ export function createExternalUi({ el, api, toast }) {
         input.append(el('option', { value: '', text: `Current: ${c.current}`, selected: true }));
         for (const choice of c.choices) input.append(el('option', { value: choice.index, text: choice.label }));
       } else input = el('input', { type: 'number', value: c.current, min: c.min, max: c.max, step: c.step, 'aria-label': c.label });
-      input.disabled = camera.external.busy || camera.state !== 'connected';
+      // Settings need the USB helper; without it they are shown read-only
+      // with the reason, rather than offering an Apply that cannot work.
+      input.disabled = camera.external.busy || camera.state !== 'connected' || camera.capabilities.set?.available === false;
       const apply = el('button', { text: 'Apply', disabled: input.disabled, onclick: () => { if (input.value !== '') post(camera.id, 'set', { key: c.key, value: Number(input.value) }); } });
       label.append(input, apply); body.append(label);
     }
     body.append(el('p', { class: 'note', text: camera.detail || (camera.external.busy ? 'Waiting for the camera…' : 'Controls reflect the connected camera. New models await hardware validation.') }));
+    const helperReason = camera.capabilities.set?.reason || camera.capabilities.capture?.reason;
+    if (camera.provider === 'gphoto2' && helperReason) body.append(el('p', { class: 'note warn', role: 'status', text: helperReason }));
     if (camera.provider === 'gphoto2') body.append(el('p', { class: 'note', text: 'For still capture, set the camera capture target to its memory card. USB movie recording and live view are not enabled.' }));
     result.append(body); return result;
   }
