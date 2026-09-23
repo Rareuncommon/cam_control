@@ -229,8 +229,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
     }
     if (ptz.has(cameraId)) {
-      try { return { ok: true, status: 202, body: ptz.action(cameraId, action, body ?? {}) }; }
-      catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
+      try {
+        const r = await ptz.action(cameraId, action, body ?? {});
+        return { ok: r.ok !== false, status: r.state === 'failed' ? 502 : 202, body: r };
+      } catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
     }
     if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
     if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
@@ -851,8 +853,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const body = await readBody(req);
         log.info('action', `${actor()}${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
         if (ptz.has(cameraId)) {
-          try { return sendJson(res, 202, ptz.action(cameraId, action, body ?? {}, who.id ?? who.label)); }
-          catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+          // 202 while queued/pending/unknown, 200 once the camera answered, 502
+          // when it refused or never acknowledged (audit DC-5). Pass
+          // {"wait": true} to get the camera's answer instead of "queued".
+          try {
+            const r = await ptz.action(cameraId, action, body ?? {}, who.id ?? who.label);
+            const status = r.state === 'failed' ? 502 : (r.state === 'confirmed' || r.state === 'accepted') ? 200 : 202;
+            return sendJson(res, status, r);
+          } catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
         }
         const result = await runAction(cameraId, action, body ?? undefined);
         if (result.ok && !external.has(cameraId)) await refreshProperties(cameraId);

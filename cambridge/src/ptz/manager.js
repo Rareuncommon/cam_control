@@ -98,7 +98,9 @@ export class PtzManager extends EventEmitter {
     if (this.closing || c.removing) throw new Error('PTZ service is stopping');
     if (action === 'ptzStop') {
       if (/^[a-zA-Z0-9_-]{1,96}$/.test(body.controlId ?? '') && (c.sequences.size < 10000 || c.sequences.has(`${actor}:${body.controlId}`))) c.sequences.set(`${actor}:${body.controlId}`, { sequence: body.sequence ?? 0, closed: true });
-      this.requestStop(c, true); return { ok: true, accepted: true, confirmed: false }; }
+      this.requestStop(c, true);
+      const reply = { ok: true, accepted: true, confirmed: false, state: 'queued' };
+      return body.wait === true ? this.settle(c, c.revision, 'stop') : reply; }
     if (action === 'ptzMove') {
       if (c.discrete || c.discreteBusy) throw new Error('PTZ camera is executing a one-shot command; press Stop first');
       const desired = { pan: velocity(body.pan ?? 0, 'pan'), tilt: velocity(body.tilt ?? 0, 'tilt'), zoom: velocity(body.zoom ?? 0, 'zoom') };
@@ -118,14 +120,48 @@ export class PtzManager extends EventEmitter {
       const changed = JSON.stringify(c.desired) !== JSON.stringify(desired);
       c.desired = desired;
       if (changed || (!c.applied && !c.busy && !c.pending)) { c.revision++; c.pending = true; this.pump(c); }
-      return { ok: true, accepted: true, confirmed: false, leaseMs: duration };
+      return { ok: true, accepted: true, confirmed: false, state: 'queued', leaseMs: duration };
     }
     const names = { ptzProbe: 'probe', ptzHome: 'home', ptzPresetRecall: 'presetRecall', ptzPresetSave: 'presetSave' };
     if (!names[action]) throw new Error('Unsupported PTZ action');
     if (c.busy || c.pending || moving(c.desired) || c.stopState === 'unconfirmed') throw new Error('Stop movement and wait before this command');
     if (action.includes('Preset') && (!Number.isInteger(body.slot) || body.slot < 0 || body.slot > c.config.presetMax)) throw new Error(`Preset slot must be 0–${c.config.presetMax}`);
     c.discrete = { action: names[action], body }; c.pending = true; c.revision++; this.pump(c);
-    return { ok: true, accepted: true, confirmed: false };
+    if (body.wait === true) return this.settle(c, c.revision, names[action]);
+    return { ok: true, accepted: true, confirmed: false, state: 'queued' };
+  }
+  /**
+   * Waits (bounded) for the outcome of the command issued at `rev` and reports
+   * it honestly (audit DC-5). States:
+   *   confirmed - the camera acknowledged AND reported completion
+   *   accepted  - the camera acknowledged, completion not reported (motion to
+   *               a preset/home may still be under way)
+   *   failed    - the camera refused, did not answer, or never acknowledged Stop
+   *   pending   - still in progress when the wait ended
+   *   unknown   - superseded by a newer command before an outcome was recorded
+   * None of these verifies physical position; the camera must still be watched.
+   */
+  async settle(c, rev, kind, timeoutMs = 4000) {
+    const deadline = Date.now() + timeoutMs;
+    const inProgress = () => c.busy || c.pending ||
+      (kind === 'stop' && c.stopState === 'unconfirmed' && c.stopDue && this.timer && c.stopAttempts < 3);
+    while (c.revision === rev && inProgress() && Date.now() < deadline) {
+      await Promise.race([c.task ?? Promise.resolve(), new Promise(r => setTimeout(r, 25))]);
+    }
+    const base = { ok: true, accepted: true, confirmed: false };
+    if (c.revision !== rev) return { ...base, state: 'unknown', detail: 'Superseded by a newer command before the camera answered' };
+    if (inProgress()) return { ...base, state: 'pending', detail: 'The camera has not answered yet' };
+    if (kind === 'stop') {
+      return c.stopState === 'acknowledged'
+        ? { ...base, confirmed: true, state: 'confirmed', detail: 'Camera acknowledged Stop; watch it to confirm motion ended' }
+        : { ...base, ok: false, state: 'failed', detail: `Stop was not acknowledged${c.detail ? `: ${c.detail}` : ''}. Check the camera physically.` };
+    }
+    const r = c.lastResult;
+    if (!r || r.revision !== rev) return { ...base, state: 'unknown', detail: 'No outcome was recorded for this command' };
+    if (!r.acknowledged) return { ...base, ok: false, state: 'failed', detail: c.detail ?? 'The camera did not acknowledge the command' };
+    return r.completed
+      ? { ...base, confirmed: true, state: 'confirmed', result: r }
+      : { ...base, state: 'accepted', detail: 'Camera acknowledged; completion was not reported', result: r };
   }
   pump(c) {
     if (c.busy || !c.pending) return;
@@ -138,7 +174,7 @@ export class PtzManager extends EventEmitter {
         if (discrete) {
           c.discreteBusy = true;
           const result = await c.adapter.send(discrete.action, discrete.body, { valid });
-          if (c.revision === rev) { c.lastResult = { action: discrete.action, ...result }; c.state = 'connected'; c.detail = result.power === 'standby' ? 'Camera reports standby' : null; }
+          if (c.revision === rev) { c.lastResult = { action: discrete.action, ...result, revision: rev }; c.state = 'connected'; c.detail = result.power === 'standby' ? 'Camera reports standby' : null; }
         } else {
           let allAcknowledged = true;
           const previous = c.applied; c.applied = null;
@@ -153,7 +189,7 @@ export class PtzManager extends EventEmitter {
           }
           if (c.revision === rev) {
             c.applied = allAcknowledged ? intent : null;
-            c.lastResult = { action: moving(intent) ? 'move' : 'stop', acknowledged: allAcknowledged, physicalPositionVerified: false };
+            c.lastResult = { action: moving(intent) ? 'move' : 'stop', acknowledged: allAcknowledged, physicalPositionVerified: false, revision: rev };
             c.state = allAcknowledged ? 'connected' : 'offline';
             if (allAcknowledged) c.detail = null;
             if (!moving(intent)) {
@@ -163,7 +199,7 @@ export class PtzManager extends EventEmitter {
           }
         }
       } catch (error) {
-        if (c.revision === rev) { c.state = 'offline'; c.detail = error.message; c.lastResult = { action: discrete?.action, acknowledged: false }; }
+        if (c.revision === rev) { c.state = 'offline'; c.detail = error.message; c.lastResult = { action: discrete?.action, acknowledged: false, revision: rev }; }
         if (discrete && ['home', 'presetRecall'].includes(discrete.action)) this.requestStop(c, true);
       } finally {
         c.busy = false; c.discreteBusy = false; this.emit('change');

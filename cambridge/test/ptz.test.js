@@ -154,3 +154,32 @@ test('fixed camera reply ports cannot collide with the inbound VISCA listener', 
   saved.ptz.cameras.push({ id: 'ptz-a', profile: 'aver-ptz310', host: '127.0.0.1' });
   assert.throws(() => new PtzManager({ adoption }), /conflicts/);
 });
+// DC-5 (audit 2026-09-23): acceptance is not acknowledgement. An immediate
+// reply says "queued"; a caller that asks to wait gets the camera's real
+// outcome, and a Stop the camera never acknowledged is reported as failed.
+test('PTZ replies distinguish queued, confirmed, accepted and failed outcomes', async t => {
+  const outcomes = { stop: 'fail', probe: 'complete', home: 'ack' };
+  const { manager } = rig(t, async (action, body, opts) => {
+    await new Promise(r => setTimeout(r, 5));
+    const kind = action === 'panTilt' || action === 'zoom' ? 'stop' : action;
+    if (outcomes[kind] === 'fail') throw new Error('camera did not acknowledge');
+    return { acknowledged: true, completed: outcomes[kind] === 'complete' || opts?.completion === true };
+  });
+  const queued = manager.action('ptz-a', 'ptzProbe', {});
+  assert.equal(queued.state, 'queued');
+  assert.equal(queued.confirmed, false);
+  await manager.drain(manager.get('ptz-a'));
+
+  const probe = await manager.action('ptz-a', 'ptzProbe', { wait: true });
+  assert.equal(probe.state, 'confirmed');
+  assert.equal(probe.confirmed, true);
+
+  const home = await manager.action('ptz-a', 'ptzHome', { wait: true });
+  assert.equal(home.state, 'accepted', 'ACK without completion is accepted, not confirmed');
+  assert.equal(home.confirmed, false);
+
+  const stop = await manager.action('ptz-a', 'ptzStop', { wait: true });
+  assert.equal(stop.state, 'failed');
+  assert.equal(stop.confirmed, false);
+  assert.match(stop.detail, /not acknowledged|did not acknowledge/);
+});
