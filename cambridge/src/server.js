@@ -282,6 +282,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       atemWrites = new WriteCoalescer(
         (cameraId, prop, value) => applyFn(cameraId, prop, value),
         cfg.atem.coalesceMs ?? 120,
+        (level, msg) => log.write(level, 'atem-link', msg),
       );
 
       atem.on('cameraControl', (body) => {

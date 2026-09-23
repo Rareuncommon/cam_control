@@ -34,7 +34,9 @@
 //            This is the one that maps cleanly onto ATEM input numbers.
 
 import { createSocket } from 'node:dgram';
+import { lookup } from 'node:dns/promises';
 import { EventEmitter } from 'node:events';
+import { isIP } from 'node:net';
 
 const ATEM_PORT = 9910;
 
@@ -63,6 +65,13 @@ export class AtemTally extends EventEmitter {
     this.lastSeen = 0;
     /** input number -> { program, preview } */
     this.tally = new Map();
+    // Trust boundary (audit CS3). Only the configured switcher's address and
+    // port are listened to, only a HELLO before the handshake, one pinned
+    // session after it, and each reliable packet id is acted on once.
+    this.peerAddress = isIP(host) === 4 ? host : null;
+    this.pinnedSession = null;
+    this.lastRemoteId = null;
+    this.dropped = 0;
   }
 
   start() {
@@ -84,7 +93,12 @@ export class AtemTally extends EventEmitter {
   #open() {
     if (this.stopped) return;
     this.socket = createSocket('udp4');
-    this.socket.on('message', (msg) => this.handlePacket(msg));
+    this.socket.on('message', (msg, rinfo) => this.receive(msg, rinfo));
+    if (!this.peerAddress) {
+      lookup(this.host, { family: 4 })
+        .then(({ address }) => { this.peerAddress = address; })
+        .catch((err) => this.log('warn', `ATEM host ${this.host} does not resolve: ${err.message}`));
+    }
     this.socket.on('error', (err) => {
       this.log('warn', `ATEM socket error: ${err.message}`);
       this.#reset();
@@ -112,6 +126,8 @@ export class AtemTally extends EventEmitter {
     const wasConnected = this.connected;
     this.connected = false;
     this.sessionId = 0;
+    this.pinnedSession = null;
+    this.lastRemoteId = null;
     this.tally.clear();
     clearInterval(this.helloTimer);
     clearInterval(this.watchdog);
@@ -154,15 +170,63 @@ export class AtemTally extends EventEmitter {
   }
 
   /**
+   * The socket's entry point: validates who sent a datagram and where it sits
+   * in the session before anything is parsed (audit CS3). With ATEM Link on,
+   * accepted camera-control blocks become camera writes, so an unauthenticated
+   * UDP sender must not be able to inject them.
+   */
+  receive(msg, rinfo) {
+    const drop = (why) => {
+      this.dropped++;
+      if (this.dropped <= 5 || this.dropped % 100 === 0) this.log('debug', `ATEM packet dropped: ${why}`);
+    };
+    if (!rinfo || !this.peerAddress || rinfo.address !== this.peerAddress || rinfo.port !== this.port) {
+      return drop(`not from ${this.host}:${this.port}`);
+    }
+    if (!msg || msg.length < 12) return drop('short');
+    const flags = msg.readUInt8(0) >> 3;
+    const length = ((msg.readUInt8(0) & 0x07) << 8) | msg.readUInt8(1);
+    if (length !== msg.length) return drop('header length does not match the datagram');
+    const session = msg.readUInt16BE(2);
+    if (flags & FLAG_HELLO) {
+      // A (re)handshake starts a new session; the switcher assigns the id it
+      // uses from here on in its first reliable packet.
+      this.pinnedSession = null;
+      this.lastRemoteId = null;
+      return this.handlePacket(msg);
+    }
+    if (!this.connected) return drop('before the handshake');
+    if (this.pinnedSession === null) this.pinnedSession = session;
+    else if (session !== this.pinnedSession) return drop('foreign session');
+    if (flags & FLAG_ACK_REQUEST) {
+      const id = msg.readUInt16BE(10);
+      // 15-bit ids that wrap. An id at or behind the last one is a retransmit:
+      // acknowledge it again, but do not act on its contents a second time.
+      const ahead = this.lastRemoteId === null ? 1 : ((id - this.lastRemoteId) & 0x7fff);
+      if (ahead === 0 || ahead >= 0x4000) {
+        this.sessionId = session;
+        this.#sendAck(id);
+        this.lastSeen = Date.now();
+        return undefined;
+      }
+      this.lastRemoteId = id;
+    }
+    return this.handlePacket(msg);
+  }
+
+  /**
    * Parses one packet from the switcher and emits tally if it changed.
    * Public so it can be fed real packet bytes in tests without a socket.
    */
   handlePacket(msg) {
     if (msg.length < 12) return;
-    this.lastSeen = Date.now();
-
     const flags = msg.readUInt8(0) >> 3;
     const length = ((msg.readUInt8(0) & 0x07) << 8) | msg.readUInt8(1);
+    // A packet is exactly as long as its header says; anything else is
+    // malformed and none of it is trusted.
+    if (length < 12 || length !== msg.length) return;
+    this.lastSeen = Date.now();
+
     this.sessionId = msg.readUInt16BE(2);
     const packetId = msg.readUInt16BE(10);
 
@@ -180,8 +244,7 @@ export class AtemTally extends EventEmitter {
     if (flags & FLAG_ACK_REQUEST) this.#sendAck(packetId);
 
     // A packet can be header-only (a pure ack); only parse when there is payload.
-    const end = Math.min(length, msg.length);
-    if (end > 12) this.#parseCommands(msg.subarray(12, end));
+    if (length > 12) this.#parseCommands(msg.subarray(12, length));
   }
 
   #parseCommands(payload) {
