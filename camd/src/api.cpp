@@ -174,6 +174,28 @@ void Api::install(http::Server& server, const std::string& wsPath) {
         res.json(200, v.dump());
     });
 
+    // Deliberate re-pair after the camera's SSH host key changed. The body must
+    // carry exactly the fingerprint the camera presented (shown to the operator
+    // to compare with the camera's Access Authen. Info screen); anything else,
+    // or a camera whose identity has not changed, is refused.
+    server.route("POST", "/cameras/:id/repin", [this](const http::Request& req, http::Response& res) {
+        auto w = registry_.find(req.param("id"));
+        if (!w) { res.error(404, "no such camera: " + req.param("id")); return; }
+        json::Value body;
+        std::string perr;
+        if (!json::parse(req.body, body, perr) || !body.isObject() || !body["fingerprint"].isString()) {
+            res.error(400, "body must be {\"fingerprint\": \"<as presented by the camera>\"}");
+            return;
+        }
+        std::string err;
+        if (!w->repin(body["fingerprint"].asString(), err)) { res.error(409, err); return; }
+        json::Value v = json::Value::makeObject();
+        v.set("id", json::Value(req.param("id")));
+        v.set("fingerprint", body["fingerprint"]);
+        v.set("repinned", json::Value(true));
+        res.json(200, v.dump());
+    });
+
     server.route("DELETE", "/cameras/:id", [this](const http::Request& req, http::Response& res) {
         std::string err;
         if (!registry_.removeCamera(req.param("id"), err)) { res.error(404, err); return; }

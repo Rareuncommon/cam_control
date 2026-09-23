@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "camd/camera.h"
+#include "camd/host_key.h"
 #include "camd/log.h"
 #include "camd/properties.h"
 
@@ -24,6 +25,10 @@ namespace {
 
 // A shared, process-wide switch so tests (and a curl against the daemon) can pull
 // a virtual Ethernet cable. Keyed by MAC.
+std::mutex g_hostKeyMu;
+std::map<std::string, std::string> g_hostKey;
+std::map<std::string, int> g_credentialOffers;
+
 std::mutex g_linkMu;
 std::map<std::string, bool> g_linkDown;
 
@@ -193,6 +198,9 @@ std::int64_t snapTo(const std::vector<std::int64_t>& allowed, std::int64_t want)
 
 class FakeSession : public CameraSession {
 public:
+    void setHostFingerprint(std::string fp) { hostFingerprint_ = std::move(fp); }
+    std::string hostFingerprint() const override { return hostFingerprint_; }
+
     FakeSession(DiscoveredCamera info, EventSink* sink)
         : info_(std::move(info)), sink_(sink) {
 
@@ -491,6 +499,7 @@ private:
     std::vector<std::int64_t> fullIso_;
     std::mutex mu_;
     std::mt19937 afRng_{1234};
+    std::string hostFingerprint_;
     PropertyMap props_;
     bool recording_ = false;
     std::string lastKey_;
@@ -533,14 +542,48 @@ public:
             err = "camera unreachable (simulated link down)";
             return nullptr;
         }
-        if (target.sshRequired && (cfg.username.empty() || cfg.password.empty())) {
-            err = "camera requires access authentication but no credentials configured";
+        std::string fingerprint;
+        if (!target.sshRequired && !cfg.fingerprint.empty()) {
+            // A pinned body that no longer asks for authentication is refused,
+            // as in the Sony backend: no silent downgrade.
+            err = identityChangedError(cfg.fingerprint, "");
             return nullptr;
         }
-        return std::make_unique<FakeSession>(target, sink);
+        if (target.sshRequired) {
+            fingerprint = liveHostKey(target);
+            if (cfg.username.empty() || cfg.password.empty()) {
+                err = "camera requires access authentication but no credentials configured";
+                return nullptr;
+            }
+            // Same policy and order as the Sony backend: the presented key is
+            // checked against the pin before credentials are offered.
+            const HostKeyDecision d = decideHostKey(cfg.fingerprint, fingerprint);
+            if (d == HostKeyDecision::Mismatch || d == HostKeyDecision::Unavailable) {
+                err = identityChangedError(cfg.fingerprint, fingerprint);
+                return nullptr;
+            }
+            noteCredentialOffer(target);
+        }
+        auto session = std::make_unique<FakeSession>(target, sink);
+        session->setHostFingerprint(fingerprint);
+        return session;
     }
 
     std::string versionString() override { return "fake backend (no hardware)"; }
+
+    // What a body with access authentication presents: an override set by a
+    // test, else its configured fake key, else one derived from its identity.
+    static std::string liveHostKey(const DiscoveredCamera& t) {
+        const std::string key = t.mac.empty() ? t.deviceId : t.mac;
+        std::lock_guard<std::mutex> lock(g_hostKeyMu);
+        auto it = g_hostKey.find(key);
+        if (it != g_hostKey.end()) return it->second;
+        return t.fakeHostKey.empty() ? "SHA256:fake-" + key : t.fakeHostKey;
+    }
+    static void noteCredentialOffer(const DiscoveredCamera& t) {
+        std::lock_guard<std::mutex> lock(g_hostKeyMu);
+        ++g_credentialOffers[t.mac.empty() ? t.deviceId : t.mac];
+    }
 
 private:
     std::vector<DiscoveredCamera> present_;
@@ -566,4 +609,16 @@ void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds) 
     g_mediaOverride[mac] = seconds;
 }
 
+}  // namespace camd
+
+namespace camd {
+void fakeBackendSetHostKey(const std::string& mac, const std::string& fingerprint) {
+    std::lock_guard<std::mutex> lock(g_hostKeyMu);
+    g_hostKey[mac] = fingerprint;
+}
+int fakeBackendCredentialOffers(const std::string& mac) {
+    std::lock_guard<std::mutex> lock(g_hostKeyMu);
+    auto it = g_credentialOffers.find(mac);
+    return it == g_credentialOffers.end() ? 0 : it->second;
+}
 }  // namespace camd

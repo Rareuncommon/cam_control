@@ -562,3 +562,16 @@ test('losing camd closes rolling takes with an unknown outcome and stops claimin
   assert.equal(state.takes.length, 2);
   assert.equal(state.takes[1].endedAt, null);
 });
+
+test('host-key state from camd is mirrored and shown, and identity change is not "connected"', () => {
+  const state = new StateModel();
+  state.setCamdConnected(true);
+  state.applyConnectionState({ cameraId: 'x', state: 'identityChanged', hostKey: 'mismatch',
+    fingerprint: 'SHA256:genuine', observedFingerprint: 'SHA256:impostor', detail: 'camera identity changed: …' });
+  const cam = state.view().cameras.find(c => c.id === 'x');
+  assert.equal(cam.state, 'identityChanged');
+  assert.equal(cam.hostKey, 'mismatch');
+  assert.equal(cam.fingerprint, 'SHA256:genuine');
+  assert.equal(cam.observedFingerprint, 'SHA256:impostor');
+  assert.equal(cam.capabilities.record.available, false);
+});

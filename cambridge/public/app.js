@@ -303,6 +303,7 @@ function stateBadge(cam) {
     connecting: ['warn', 'connecting…'],
     reconnecting: ['warn', `reconnecting ${cam.reconnectAttempts || ''}`.trim()],
     unauthorized: ['bad', 'wrong password'],
+    identityChanged: ['bad', 'identity changed'],
     offline: ['bad', 'offline'],
   };
   const [kind, text] = map[cam.state] ?? ['bad', cam.state];
@@ -472,6 +473,25 @@ function cameraCard(cam) {
     stateBadge(cam)));
 
   const body = el('div', { class: 'body' });
+  if (cam.state === 'identityChanged') {
+    // The camera presented a different SSH host key than the one pinned at
+    // pairing. Credentials were not sent. Reconnecting cannot help; only a
+    // deliberate re-pair after comparing fingerprints can.
+    body.append(el('div', { class: 'note bad', role: 'alert',
+      text: 'This camera\'s identity changed, so its password was not sent. If the camera was reset or replaced, '
+        + 'compare the fingerprint below with its Access Authen. Info screen before re-pairing. '
+        + 'If it was not, another device may be answering for it.' }));
+    body.append(el('div', { class: 'note', text: `Pinned: ${cam.fingerprint ?? '—'}` }));
+    body.append(el('div', { class: 'note', text: `Presented now: ${cam.observedFingerprint || '(no key; authentication turned off?)'}` }));
+    body.append(el('button', { onclick: async () => {
+      const shown = cam.observedFingerprint || '(none)';
+      if (!confirm(`Re-pair ${cam.label}?\n\nOnly continue if the camera's Access Authen. Info screen shows:\n${shown}`)) return;
+      const r = await api('POST', `/api/cameras/${encodeURIComponent(cam.id)}/adoption/repin`, { fingerprint: cam.observedFingerprint ?? '' });
+      if (r.ok) toast(`Re-paired ${cam.label}`);
+    } }, document.createTextNode('Re-pair after checking…')));
+    card.append(body);
+    return card;
+  }
   if (!connected) {
     body.append(el('div', { class: 'note', text: cam.detail || 'No live values while disconnected.' }));
     body.append(el('button', { onclick: () => doAction(cam.id, 'reconnect') },

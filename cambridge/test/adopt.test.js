@@ -91,3 +91,30 @@ test('renaming a camera updates the label live without reconnecting it', async t
   assert.equal((await adoption.update(adopted.camera.id, { password: 'rotated' })).ok, true);
   assert.deepEqual(calls.map(c => c.method), ['DELETE', 'POST']);
 });
+
+// SSH host-key pinning (2026-09-23 follow-up): camd pins on first use and
+// reports it; the service persists the pin with the camera, never overwrites an
+// existing pin from an event, and re-pairs only through camd's checked route.
+test('a first-use host key is persisted once and never overwritten by a later event', async t => {
+  const { adoption } = rig(t, [{ ...usb(1), accessAuthRequired: true }]);
+  const adopted = await adoption.adopt({ ...usb(1), username: 'user', password: 'test-only' });
+  const id = adopted.camera.id;
+  assert.equal((await adoption.pinFingerprint(id, 'SHA256:genuine')).ok, true);
+  assert.equal(adoption.readConfig().cameras[0].fingerprint, 'SHA256:genuine');
+  const again = await adoption.pinFingerprint(id, 'SHA256:impostor');
+  assert.equal(again.ok, false);
+  assert.equal(adoption.readConfig().cameras[0].fingerprint, 'SHA256:genuine');
+});
+
+test('re-pairing goes through camd and only then updates the stored pin', async t => {
+  const { adoption, calls } = rig(t, [{ ...usb(1), accessAuthRequired: true }]);
+  const adopted = await adoption.adopt({ ...usb(1), username: 'user', password: 'test-only' });
+  const id = adopted.camera.id;
+  await adoption.pinFingerprint(id, 'SHA256:old');
+  calls.length = 0;
+  const r = await adoption.repin(id, 'SHA256:new');
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls.map(c => [c.method, c.path, c.body]), [['POST', `/cameras/${encodeURIComponent(id)}/repin`, { fingerprint: 'SHA256:new' }]]);
+  assert.equal(adoption.readConfig().cameras[0].fingerprint, 'SHA256:new');
+  assert.equal(requiredRole('POST', `/api/cameras/${id}/adoption/repin`), 'admin');
+});

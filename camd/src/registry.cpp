@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "camd/host_key.h"
 #include "camd/json.h"
 #include "camd/log.h"
 
@@ -44,6 +45,7 @@ const char* connStateName(ConnState s) {
         case ConnState::Connected:    return "connected";
         case ConnState::Reconnecting: return "reconnecting";
         case ConnState::Unauthorized: return "unauthorized";
+        case ConnState::IdentityChanged: return "identityChanged";
     }
     return "unknown";
 }
@@ -104,6 +106,9 @@ CameraWorker::CameraWorker(CameraConfig cfg, Backend* backend,
     snap_.mac = cfg_.mac;
     snap_.deviceId = cfg_.deviceId;
     snap_.state = ConnState::Offline;
+    pinned_ = cfg_.fingerprint;
+    snap_.fingerprint = pinned_;
+    snap_.hostKey = pinned_.empty() ? "unknown" : "pinned";
 }
 
 CameraWorker::~CameraWorker() { stop(); }
@@ -238,6 +243,31 @@ void CameraWorker::setLabel(const std::string& label) {
     publishConnectionState();
 }
 
+bool CameraWorker::repin(const std::string& fingerprint, std::string& err) {
+    {
+        std::lock_guard<std::mutex> lock(pinMu_);
+        if (snapshot().state != ConnState::IdentityChanged) {
+            err = "nothing to re-pair: the camera's identity has not changed";
+            return false;
+        }
+        if (fingerprint != observed_) {
+            err = "fingerprint does not match the one the camera presented";
+            return false;
+        }
+        pinned_ = observed_;
+        observed_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMu_);
+        snap_.fingerprint = fingerprint;
+        snap_.observedFingerprint.clear();
+        snap_.hostKey = "pinned";
+    }
+    LOG_WARN(cfg_.id.c_str(), "re-paired: host key %s pinned by operator", fingerprint.c_str());
+    requestReconnect();
+    return true;
+}
+
 void CameraWorker::requestReconnect() {
     reconnectRequested_ = true;
     jobCv_.notify_all();
@@ -276,6 +306,9 @@ void CameraWorker::publishConnectionState() {
     ev.set("transport", json::Value(s.transport));
     ev.set("reconnectAttempts", json::Value(static_cast<std::int64_t>(s.reconnectAttempts)));
     if (!s.lastError.empty()) ev.set("detail", json::Value(s.lastError));
+    ev.set("hostKey", json::Value(s.hostKey));
+    if (!s.fingerprint.empty()) ev.set("fingerprint", json::Value(s.fingerprint));
+    if (!s.observedFingerprint.empty()) ev.set("observedFingerprint", json::Value(s.observedFingerprint));
     publisher_->publish(ev.dump());
 }
 
@@ -403,8 +436,31 @@ void CameraWorker::stepConnecting() {
     LOG_INFO(cfg_.id.c_str(), "connecting to %s (%s) at %s", target.model.c_str(),
              target.mac.c_str(), target.ip.c_str());
 
-    auto session = backend_->open(target, cfg_, sink_.get(), err);
+    CameraConfig connectCfg = cfg_;
+    {
+        std::lock_guard<std::mutex> lock(pinMu_);
+        connectCfg.fingerprint = pinned_;
+    }
+    auto session = backend_->open(target, connectCfg, sink_.get(), err);
     if (!session) {
+        std::string observed;
+        if (parseIdentityChanged(err, observed)) {
+            // Not retried: the same device would be asked again and again, and
+            // an impostor gains nothing but the operator must decide. Leaves
+            // only through repin().
+            {
+                std::lock_guard<std::mutex> lock(pinMu_);
+                observed_ = observed;
+            }
+            {
+                std::lock_guard<std::mutex> lock(stateMu_);
+                snap_.observedFingerprint = observed;
+                snap_.hostKey = "mismatch";
+            }
+            LOG_ERROR(cfg_.id.c_str(), "%s", err.c_str());
+            setState(ConnState::IdentityChanged, err);
+            return;
+        }
         ++reconnectAttempts_;
         // Distinguish credential rejection: retrying forever on a wrong password
         // just fills the log, and the UI should say something actionable.
@@ -419,6 +475,26 @@ void CameraWorker::stepConnecting() {
         return;
     }
 
+    // Pin on first use; report what was pinned so the Node layer persists it
+    // and tells the operator.
+    const std::string presented = session->hostFingerprint();
+    std::string hostKeyState;
+    {
+        std::lock_guard<std::mutex> lock(pinMu_);
+        if (presented.empty()) hostKeyState = pinned_.empty() ? "notRequired" : "pinned";
+        else if (pinned_.empty()) { pinned_ = presented; hostKeyState = "pinnedFirstUse"; }
+        else hostKeyState = "pinned";
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMu_);
+        if (!presented.empty()) snap_.fingerprint = presented;
+        snap_.hostKey = hostKeyState;
+        snap_.observedFingerprint.clear();
+    }
+    if (hostKeyState == "pinnedFirstUse") {
+        LOG_WARN(cfg_.id.c_str(), "first connection: pinned SSH host key %s. Check it against the "
+                 "camera's Access Authen. Info screen.", presented.c_str());
+    }
     session_ = std::move(session);
     sdkDisconnected_ = false;
     propertyDirty_ = false;
@@ -553,6 +629,15 @@ void CameraWorker::threadMain() {
             case ConnState::Connecting:   stepConnecting();   break;
             case ConnState::Connected:    stepConnected();    break;
             case ConnState::Reconnecting: stepReconnecting(); break;
+            case ConnState::IdentityChanged:
+                // Parked: never retried on a timer. A re-pair, or an operator's
+                // explicit Reconnect, checks the key again; an unchanged
+                // mismatch is refused again before any credentials are sent.
+                if (reconnectRequested_.exchange(false)) {
+                    reconnectAttempts_ = 0;
+                    setState(ConnState::Connecting, "checking camera identity");
+                }
+                break;
             case ConnState::Unauthorized:
                 // Keep retrying, but slowly: credentials may be corrected on the
                 // camera without restarting the daemon.
@@ -940,6 +1025,9 @@ json::Value cameraSnapshotJson(const CameraWorker::Snapshot& s) {
     v.set("discovered", json::Value(s.discovered));
     v.set("reconnectAttempts", json::Value(static_cast<std::int64_t>(s.reconnectAttempts)));
     if (!s.lastError.empty()) v.set("detail", json::Value(s.lastError));
+    v.set("hostKey", json::Value(s.hostKey));
+    if (!s.fingerprint.empty()) v.set("fingerprint", json::Value(s.fingerprint));
+    if (!s.observedFingerprint.empty()) v.set("observedFingerprint", json::Value(s.observedFingerprint));
 
     json::Value st = json::Value::makeObject();
     st.set("battery", json::Value(static_cast<std::int64_t>(s.status.batteryPercent)));

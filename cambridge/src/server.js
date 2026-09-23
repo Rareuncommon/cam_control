@@ -441,6 +441,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     switch (ev.event) {
       case 'hello':
         state.replaceAll(ev.cameras ?? [], ev.backend);
+        // A pin camd made while this service was not listening still has to
+        // reach the config.
+        for (const c of ev.cameras ?? []) {
+          if (c.hostKey === 'pinnedFirstUse' && c.fingerprint) await adoption.pinFingerprint(c.id, c.fingerprint);
+        }
         await refreshAllProperties();
         break;
       case 'connectionState': {
@@ -453,6 +458,21 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         // have been power-cycled since — and offering to undo to them would be
         // offering to write a stale number to a body that never had it.
         if (ev.state !== 'connected') undo.forget(ev.cameraId);
+        // Trust on first use: camd pinned the host key this body presented on
+        // its first connection. Persist it with the camera so a restart keeps
+        // enforcing it, and say so, so the operator can compare it with the
+        // camera's Access Authen. Info screen.
+        if (ev.hostKey === 'pinnedFirstUse' && ev.fingerprint) {
+          const pinned = await adoption.pinFingerprint(ev.cameraId, ev.fingerprint);
+          if (pinned.ok && !pinned.unchanged) {
+            log.warn('camera', `${ev.cameraId}: pinned SSH host key ${ev.fingerprint} on first connection; `
+              + 'check it matches the camera\'s Access Authen. Info screen');
+          } else if (!pinned.ok) log.error('camera', `${ev.cameraId}: could not store host key: ${pinned.error}`);
+        }
+        if (ev.state === 'identityChanged') {
+          log.error('camera', `${ev.cameraId}: camera identity changed; credentials were not sent. `
+            + `Pinned ${ev.fingerprint ?? '?'}, presented ${ev.observedFingerprint ?? '(none)'}`);
+        }
         // A camera that just came back needs its full property set refetched;
         // camd republishes changes, but we want the complete picture immediately.
         if (ev.state === 'connected') await refreshProperties(ev.cameraId);
@@ -810,6 +830,17 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const result = await adoption.adopt(body);
         if (result.ok) await refreshEverything();
         return sendJson(res, result.ok ? 201 : 409, result);
+      }
+
+      // Deliberate re-pair after a host-key change (admin). The body must carry
+      // the fingerprint the camera presented, which camd verifies.
+      const rp = path.match(/^\/api\/cameras\/([^/]+)\/adoption\/repin$/);
+      if (rp && req.method === 'POST') {
+        const id = decodeURIComponent(rp[1]);
+        const body = await readBody(req);
+        const result = await adoption.repin(id, body?.fingerprint);
+        log.warn('adopt', `${actor()}re-pair ${id}: ${result.ok ? 'accepted' : result.error}`);
+        return sendJson(res, result.ok ? 200 : 409, result);
       }
 
       let am = path.match(/^\/api\/cameras\/([^/]+)\/adoption$/);

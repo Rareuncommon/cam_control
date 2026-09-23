@@ -128,6 +128,26 @@ global setting, and why Sony's own `RemoteCli` sample cannot connect unpatched
 
 The screen shows: **MAC address, username, password, and fingerprint.**
 
+### Host-key pinning (camera identity)
+
+Since 2026-09-23 CamBridge pins each body's SSH host-key fingerprint. The SDK
+reports the fingerprint the camera presents (`GetFingerprint()`) before
+`Connect()`, the only call that carries the username and password:
+
+- **First connection:** the presented fingerprint is pinned and saved with the
+  camera, and the log says so. Compare it with the fingerprint on the camera's
+  `[Access Authen. Info]` screen.
+- **Every later connection:** a different fingerprint (or a pinned body that
+  suddenly asks for no authentication) is refused **before the credentials are
+  sent**. The camera shows *identity changed* and is not retried on a timer.
+- **Re-pair:** after a factory reset or a replaced body, compare the fingerprint
+  the panel shows with the camera's screen and use *Re-pair after checking…*
+  (admin). camd accepts only the exact fingerprint the camera presented.
+
+The first connection is trust-on-first-use: if another device is already
+answering for the camera then, it is pinned. The camera's screen is the
+out-of-band check. See the remediation ledger for the libssh2 limitation.
+
 ### ⚠️ Access authentication must stay ON
 
 ❌ **Confirmed on hardware — do not turn `[Access Authen. Settings]` off.**

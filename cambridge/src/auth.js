@@ -67,6 +67,7 @@ export const ADMIN_ROUTES = [
   /^POST \/api\/cameras\/[^/]+\/actions\/ptzPresetSave$/,
   /^POST \/api\/adopt$/,               // stores camera credentials
   /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+(?:\/adoption)?$/, // forgets or re-credentials a body
+  /^POST \/api\/cameras\/[^/]+\/adoption\/repin$/, // trusts a new camera host key
   /^POST \/api\/shutdown$/,            // stops the app for everyone
   /^POST \/api\/auth\/pin$/,           // changes who can get in
 ];

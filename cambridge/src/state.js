@@ -96,6 +96,9 @@ export class StateModel extends EventEmitter {
       discovered: !!snap.discovered,
       reconnectAttempts: snap.reconnectAttempts ?? 0,
       detail: snap.detail ?? null,
+      hostKey: snap.hostKey ?? 'unknown',
+      fingerprint: snap.fingerprint ?? null,
+      observedFingerprint: snap.observedFingerprint ?? null,
       status: statusFrom(snap.status),
     };
   }
@@ -141,6 +144,11 @@ export class StateModel extends EventEmitter {
     const previous = cam.state;
     cam.state = ev.state;
     if (typeof ev.label === 'string' && ev.label) cam.label = ev.label;
+    // SSH host-key pinning, as camd reports it. An identity change keeps the
+    // pin and the presented value side by side so the operator can compare.
+    if (typeof ev.hostKey === 'string') cam.hostKey = ev.hostKey;
+    if (typeof ev.fingerprint === 'string') cam.fingerprint = ev.fingerprint;
+    cam.observedFingerprint = typeof ev.observedFingerprint === 'string' ? ev.observedFingerprint : null;
     if (ev.model) cam.model = ev.model;
     if (ev.ip) cam.ip = ev.ip;
     if (ev.mac) cam.mac = ev.mac;
@@ -322,6 +330,9 @@ export class StateModel extends EventEmitter {
         state: cam.state,
         detail: cam.detail,
         reconnectAttempts: cam.reconnectAttempts,
+        hostKey: cam.hostKey ?? 'unknown',
+        fingerprint: cam.fingerprint ?? null,
+        observedFingerprint: cam.observedFingerprint ?? null,
         tally: cam.tally ?? null,
         // Sent as a start timestamp rather than an elapsed count, so the browser
         // can tick the timer itself instead of the server pushing once a second.

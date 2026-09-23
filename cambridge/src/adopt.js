@@ -54,6 +54,8 @@ export class Adoption {
   adopt(input) { return this.#mutate(() => this.#adopt(input)); }
   forget(id) { return this.#mutate(() => this.#forget(id)); }
   update(id, changes) { return this.#mutate(() => this.#update(id, changes)); }
+  pinFingerprint(id, fingerprint) { return this.#mutate(() => this.#pinFingerprint(id, fingerprint)); }
+  repin(id, fingerprint) { return this.#mutate(() => this.#repin(id, fingerprint)); }
 
   /**
    * @param {string} configPath
@@ -271,5 +273,50 @@ export class Adoption {
     this.log.info('adopt',
       `updated ${id}${credentialsChanged ? ' (new credentials)' : ''}: ${entry.label}`);
     return { ok: true, camera: { ...entry, auth: undefined } };
+  }
+
+  /**
+   * Persists the SSH host key camd pinned on this camera's first connection
+   * (trust on first use). Only fills an empty pin: an existing pin is never
+   * replaced from an event, because that is exactly what an impostor would
+   * produce. Changing a pin is repin(), a deliberate operator action.
+   */
+  async #pinFingerprint(id, fingerprint) {
+    if (typeof fingerprint !== 'string' || !fingerprint || fingerprint.length > 512) {
+      return { ok: false, error: 'invalid fingerprint' };
+    }
+    const cfg = this.readConfig();
+    const entry = (cfg.cameras ?? []).find((c) => c.id === id);
+    if (!entry) return { ok: false, error: `no camera "${id}" in config` };
+    if (entry.fingerprint) {
+      return entry.fingerprint === fingerprint
+        ? { ok: true, unchanged: true }
+        : { ok: false, error: 'a different host key is already pinned; re-pair deliberately to change it' };
+    }
+    entry.fingerprint = fingerprint;
+    try { this.writeConfig(cfg); } catch (err) { return { ok: false, error: `could not save config: ${err.message}` }; }
+    this.log.info('adopt', `pinned SSH host key for ${id}: ${fingerprint}`);
+    return { ok: true, pinned: fingerprint };
+  }
+
+  /**
+   * Deliberate re-pair after "camera identity changed". camd accepts only the
+   * exact fingerprint the camera presented, and only while the camera is in
+   * that state; the stored pin changes only after camd agreed.
+   */
+  async #repin(id, fingerprint) {
+    if (typeof fingerprint !== 'string' || fingerprint.length > 512) return { ok: false, error: 'invalid fingerprint' };
+    const cfg = this.readConfig();
+    const entry = (cfg.cameras ?? []).find((c) => c.id === id);
+    if (!entry) return { ok: false, error: `no camera "${id}" in config` };
+    const res = await this.camd.request('POST', `/cameras/${encodeURIComponent(id)}/repin`, { fingerprint });
+    if (!res.ok) return { ok: false, error: res.body?.error ?? 'camd refused the re-pair' };
+    const latest = this.readConfig();
+    const current = (latest.cameras ?? []).find((c) => c.id === id);
+    if (!current) return { ok: false, error: `no camera "${id}" in config` };
+    if (fingerprint) current.fingerprint = fingerprint; else delete current.fingerprint;
+    try { this.writeConfig(latest); } catch (err) { return { ok: false, error: `could not save config: ${err.message}` }; }
+    this.log.warn?.('adopt', `re-paired ${id}: host key ${fingerprint || '(none)'} pinned by operator`);
+    return { ok: true, id, fingerprint };
   }
 }

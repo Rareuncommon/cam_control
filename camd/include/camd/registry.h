@@ -76,6 +76,12 @@ public:
         int reconnectAttempts = 0;
         std::string lastError;
         bool discovered = false;
+        // SSH host-key pinning. `fingerprint` is the pin; `observedFingerprint`
+        // what the body presented when it was refused; `hostKey` is one of
+        // notRequired | unknown | pinnedFirstUse | pinned | mismatch.
+        std::string fingerprint;
+        std::string observedFingerprint;
+        std::string hostKey = "unknown";
     };
     Snapshot snapshot() const;
     const std::string& id() const { return cfg_.id; }
@@ -107,6 +113,12 @@ public:
 
     // Cosmetic: changes the display label only. Never touches the session.
     void setLabel(const std::string& label);
+
+    // Deliberate re-pair after IdentityChanged: pins `fingerprint` and
+    // reconnects. Refused unless the worker is in IdentityChanged and the value
+    // equals exactly what the camera presented, so it cannot pin a key nobody
+    // has seen, nor replace a pin that is working.
+    bool repin(const std::string& fingerprint, std::string& err);
 
     // Record control with read-before-write. The FX30 has no toggle command, so a
     // blind button press would flip a live recording; this reads RecordingState,
@@ -172,6 +184,12 @@ private:
     std::atomic<bool> reappeared_{false};
 
     ConnState state_ = ConnState::Offline;
+
+    // The pinned host key. Read by the worker thread for every connect, written
+    // by repin() from an HTTP thread and by first-use pinning.
+    mutable std::mutex pinMu_;
+    std::string pinned_;
+    std::string observed_;
     int reconnectAttempts_ = 0;
     std::chrono::steady_clock::time_point nextAttempt_{};
     std::chrono::steady_clock::time_point lastHeartbeatOk_{};
