@@ -36,6 +36,7 @@ export function buildVariableDefinitions(cameras) {
     { variableId: 'connected_count', name: 'Number of connected cameras' },
     { variableId: 'recording_count', name: 'Number of cameras recording' },
     { variableId: 'daemon', name: 'CamBridge daemon state' },
+    { variableId: 'link', name: 'Connection from Companion to CamBridge' },
     { variableId: 'cameras_down', name: 'Names of cameras not connected' },
     { variableId: 'tally_program', name: 'Camera currently on program' },
     { variableId: 'rolling', name: 'Rolling count, e.g. "2 of 3"' },
@@ -72,14 +73,17 @@ function clock(seconds) {
 }
 
 export function buildVariableValues(cameras, {
-  camdConnected = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(),
+  camdConnected = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(), linkUp = true,
 } = {}) {
   const connected = cameras.filter((c) => c.state === 'connected').length;
   const values = {
     camera_count: cameras.length,
     connected_count: connected,
     recording_count: cameras.filter((c) => c.status?.recording).length,
-    daemon: camdConnected ? 'connected' : 'UNREACHABLE',
+    // With the link to CamBridge down nothing is known about the daemon;
+    // saying "connected" from the last frame would be a stale claim (CS7).
+    daemon: !linkUp ? 'UNKNOWN' : camdConnected ? 'connected' : 'UNREACHABLE',
+    link: linkUp ? 'connected' : 'UNREACHABLE',
     cameras_down: cameras.filter((c) => c.state !== 'connected').map((c) => c.label || c.id).join(', '),
     tally_program: cameras.filter((c) => c.tally?.program).map((c) => c.label || c.id).join(', '),
     rolling: roll ? `${roll.rolling} of ${roll.total}` : `0 of ${connected}`,

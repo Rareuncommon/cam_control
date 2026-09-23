@@ -97,6 +97,14 @@ export function buildFeedbacks(self) {
       callback: () => self.cameras.some((c) => c.state !== 'connected'),
     },
 
+    linkDown: {
+      name: 'Companion cannot reach CamBridge (camera state unknown)',
+      type: 'boolean',
+      defaultStyle: { bgcolor: AMBER, color: BLACK },
+      options: [],
+      callback: () => !self.linkUp,
+    },
+
     camdDown: {
       name: 'CamBridge daemon is unreachable',
       type: 'boolean',

@@ -495,3 +495,66 @@ test('external camera actions use native routes and unknown recording stays unkn
   assert.deepEqual(sent[0], ['POST', '/api/external/cameras/ext-usb/set', { key: '/main/imgsettings/iso', value: 1 }]);
   await captured.actions.externalCapture.callback({ options: { camera: 'ext-usb' } }); assert.equal(sent[1][1], '/api/external/cameras/ext-usb/capture');
 });
+
+// --- CS7 / CS8 (audit 2026-09-23): stale state after link loss or reconfig ---
+
+/** A fetch stub whose responses the test releases by hand. */
+function controllableFetch() {
+  const calls = [];
+  const impl = (url, init = {}) => new Promise((resolve, reject) => {
+    const call = { url, init, resolve: (body) => resolve(new Response(JSON.stringify(body), { status: 200 })), reject };
+    init.signal?.addEventListener('abort', () => reject(init.signal.reason ?? new Error('aborted')));
+    calls.push(call);
+  });
+  return { calls, impl };
+}
+
+test('CS7: losing CamBridge clears live claims instead of freezing them', async (t) => {
+  const { calls, impl } = controllableFetch();
+  const realFetch = globalThis.fetch; globalThis.fetch = impl; t.after(() => { globalThis.fetch = realFetch; });
+  const { inst, captured } = makeInstance();
+  await inst.init({ host: '192.0.2.1', port: 8088 });
+  t.after(() => inst.destroy());
+  inst.applyState({ view: { ...sampleView({ recording: true }), cameras: sampleView({ recording: true }).cameras.map((c) => ({ ...c, tally: { program: true, preview: false } })) } });
+  assert.equal(captured.feedbacks.recording.callback({ options: { camera: 'fx3' } }), true);
+  const checksBefore = captured.feedbackChecks;
+
+  inst.api.onConnection(false, 'socket hang up');
+
+  assert.ok(captured.feedbackChecks > checksBefore, 'feedbacks must be re-evaluated on disconnect');
+  assert.equal(captured.feedbacks.recording.callback({ options: { camera: 'fx3' } }), false, 'no red button for a camera we cannot see');
+  assert.equal(captured.feedbacks.anyRecording.callback({ options: {} }), false);
+  assert.equal(captured.feedbacks.tally.callback({ options: { camera: 'fx3', bus: 'program' } }), false);
+  assert.equal(captured.feedbacks.camdDown.callback({ options: {} }), true, 'daemon state is unknown, so not "fine"');
+  assert.equal(captured.feedbacks.linkDown.callback({ options: {} }), true);
+  assert.notEqual(captured.variables.daemon, 'connected');
+  assert.equal(captured.variables.link, 'UNREACHABLE');
+  // The last known values are kept, labelled as such, for whoever wants them.
+  assert.equal(inst.lastKnown?.cameras?.find((c) => c.id === 'fx3')?.status?.recording, true);
+  calls.length = 0;
+});
+
+test('CS8: a reconfigured module ignores late answers from the old server and aborts its requests', async (t) => {
+  const { calls, impl } = controllableFetch();
+  const realFetch = globalThis.fetch; globalThis.fetch = impl; t.after(() => { globalThis.fetch = realFetch; });
+  const { inst } = makeInstance();
+  await inst.init({ host: '192.0.2.1', port: 8088 });
+  t.after(() => inst.destroy());
+  const oldPresets = calls.find((c) => c.url.startsWith('http://192.0.2.1') && c.url.endsWith('/api/presets'));
+  const oldApi = inst.api;
+
+  await inst.configUpdated({ host: '192.0.2.2', port: 8088 });
+  assert.equal(oldPresets.init.signal?.aborted, true, 'stop() must abort in-flight REST calls');
+
+  const newPresets = calls.find((c) => c.url.startsWith('http://192.0.2.2') && c.url.endsWith('/api/presets'));
+  newPresets.resolve({ presets: { new: { a: {} } }, scenes: ['new-scene'] });
+  calls.find((c) => c.url.startsWith('http://192.0.2.2') && c.url.endsWith('/api/gangs')).resolve({ gangs: {} });
+  await new Promise((r) => setTimeout(r, 10));
+  oldPresets.resolve({ presets: { old: { a: {} } }, scenes: ['old-scene'] });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(inst.scenes, ['new-scene']);
+
+  // Callbacks from the replaced client never reach the instance.
+  oldApi.onState(sampleView({ recording: true }));
+  assert.equal(inst.cameras.length, 0);
+});

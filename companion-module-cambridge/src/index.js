@@ -32,6 +32,11 @@ class CambridgeInstance extends InstanceBase {
     this.roll = null;
     /** Signature of the last definition rebuild, so we only rebuild when it matters. */
     this.definitionSignature = '';
+    // Whether the state above is live. False until the first frame and after
+    // the link to CamBridge drops (audit CS7).
+    this.linkUp = false;
+    /** The last frame received before the link dropped, clearly not live. */
+    this.lastKnown = null;
   }
 
   async init(config) {
@@ -77,24 +82,56 @@ class CambridgeInstance extends InstanceBase {
   }
 
   #connect() {
-    this.api = new CambridgeApi({
+    // Every callback is bound to the client it came from. A replaced client's
+    // late answers (an in-flight poll, a slow preset list) are discarded, so an
+    // old host can never overwrite the state of the new one (audit CS8).
+    const api = new CambridgeApi({
       host: this.config?.host || '127.0.0.1',
       port: Number(this.config?.port) || 8088,
       token: this.config?.token || '',
       log: (level, msg) => this.log(level, msg),
-      onState: (view) => this.applyState(view),
+      onState: (view) => { if (this.api === api) this.applyState(view); },
       onConnection: (up, detail) => {
+        if (this.api !== api) return;
         if (up) {
           this.updateStatus(InstanceStatus.Ok);
         } else {
           // The distinction matters to whoever is looking at Companion: this is
           // "cannot reach CamBridge", not "a camera is unhappy".
           this.updateStatus(InstanceStatus.ConnectionFailure, detail ?? 'cannot reach CamBridge');
+          this.markStale();
         }
       },
     });
-    this.api.start();
+    this.api = api;
+    this.linkUp = false;
+    api.start();
     this.refreshPresetLists();
+  }
+
+  /**
+   * The link to CamBridge is gone: stop asserting live camera state (audit
+   * CS7). Recording, tally and daemon claims are withdrawn and every feedback
+   * re-evaluated, so a red record button cannot stay red for a camera nobody
+   * can see. The last frame is kept in `lastKnown`, explicitly not live.
+   */
+  markStale() {
+    if (this.linkUp || this.cameras.length) {
+      this.lastKnown = { at: Date.now(), cameras: this.cameras, camdConnected: this.camdConnected };
+    }
+    this.linkUp = false;
+    this.camdConnected = false;
+    this.cameras = this.cameras.map((c) => ({
+      ...c,
+      state: 'unknown',
+      tally: null,
+      status: { ...(c.status ?? {}), recording: false, recordingFailed: false, recordingState: -1 },
+    }));
+    this.roll = null;
+    this.setVariableValues(buildVariableValues(this.cameras, {
+      camdConnected: false, alarmsByCamera: this.alarmsByCamera, alarms: this.alarms, roll: null, linkUp: false,
+    }));
+    this.checkFeedbacks();
   }
 
   // --- state ---------------------------------------------------------------
@@ -112,6 +149,7 @@ class CambridgeInstance extends InstanceBase {
     this.alarmsByCamera = frame?.alarmsByCamera ?? {};
     this.alarmSummary = frame?.alarmSummary ?? null;
     this.roll = frame?.roll ?? null;
+    this.linkUp = true;
 
     this.camdConnected = !!view.camdConnected;
     const incoming = view.cameras ?? [];
@@ -136,6 +174,7 @@ class CambridgeInstance extends InstanceBase {
       alarmsByCamera: this.alarmsByCamera,
       alarms: this.alarms,
       roll: this.roll,
+      linkUp: true,
     }));
     this.checkFeedbacks();
   }
@@ -149,10 +188,15 @@ class CambridgeInstance extends InstanceBase {
 
   /** Preset names, scene names and gang state come from a separate endpoint. */
   async refreshPresetLists() {
+    const api = this.api;
+    if (!api) return;
     const [presetsRes, gangsRes] = await Promise.all([
-      this.api.request('GET', '/api/presets'),
-      this.api.request('GET', '/api/gangs'),
+      api.request('GET', '/api/presets'),
+      api.request('GET', '/api/gangs'),
     ]);
+    // Reconfigured or destroyed while waiting: these answers belong to a
+    // client that no longer exists.
+    if (this.api !== api) return;
     if (presetsRes.ok && presetsRes.body) {
       this.presetsByCamera = presetsRes.body.presets ?? {};
       this.scenes = presetsRes.body.scenes ?? [];
