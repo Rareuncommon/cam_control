@@ -93,7 +93,8 @@ button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 .view { display: none; }
 .view.active { display: block; }
 
-#grid { display: grid; gap: 12px; padding: 12px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+/* min(…, 100%) so a single column fits a 320px phone instead of overflowing it. */
+#grid { display: grid; gap: 12px; padding: 12px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
 @media (min-width: 1180px) { #grid { grid-template-columns: repeat(3, 1fr); } }
 
 .cam {
@@ -197,7 +198,7 @@ details.more .inner { display: flex; flex-direction: column; gap: 9px; padding-b
 .dpad .blank { visibility: hidden; }
 
 /* --- multiview --- */
-#mvgrid { display: grid; gap: 10px; padding: 10px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+#mvgrid { display: grid; gap: 10px; padding: 10px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
 #mvgrid.solo { grid-template-columns: 1fr; }
 .feed {
   position: relative; background: #000; border: 1px solid var(--line);
@@ -254,6 +255,7 @@ table.list td > .pill { margin: 2px 4px 2px 0; display: inline-block; }
   display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; min-height: 40px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
   cursor: pointer; font-size: 13px; font-weight: 600; user-select: none;
+  color: inherit; font-family: inherit;
 }
 .chip.on { background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: var(--accent); }
 

@@ -70,7 +70,16 @@ export function createGamepadControl({ onStep, onButton, onStatus }) {
     rafHandle = requestAnimationFrame(poll);
     const p = pad();
     if (!p) {
-      if (lastPadName) { lastPadName = ''; onStatus({ connected: false, name: '' }); }
+      if (lastPadName) {
+        lastPadName = '';
+        // A controller that goes away is disarmed: replugging it (or a
+        // different pad) must not resume driving a camera by itself.
+        const wasEnabled = enabled;
+        enabled = false;
+        nextDue.clear();
+        wasPressed.clear();
+        onStatus({ connected: false, name: '', disarmed: wasEnabled });
+      }
       return;
     }
     if (p.id !== lastPadName) {

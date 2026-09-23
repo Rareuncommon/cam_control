@@ -58,9 +58,9 @@
                without disturbing exposure mid-take. -->
           <span class="note">Recall only:</span>
           <div class="chips" id="recall-groups">
-            <div class="chip" data-group="exposure">Exposure</div>
-            <div class="chip" data-group="colour">White balance</div>
-            <div class="chip" data-group="look">Look</div>
+            <button type="button" class="chip" data-group="exposure" aria-pressed="false">Exposure</button>
+            <button type="button" class="chip" data-group="colour" aria-pressed="false">White balance</button>
+            <button type="button" class="chip" data-group="look" aria-pressed="false">Look</button>
           </div>
           <span class="spacer"></span>
           <label class="note" for="ramp">Ramp over</label>
@@ -127,11 +127,11 @@
     <!-- Everything below can be on at once: they are drawn over the picture
          rather than replacing it. -->
     <div class="chips" id="guide-chips">
-      <div class="chip" data-guide="histogram">Histogram</div>
-      <div class="chip" data-guide="clipReadout">Clip %</div>
-      <div class="chip" data-guide="thirds">Thirds</div>
-      <div class="chip" data-guide="centre">Centre</div>
-      <div class="chip" data-guide="safe">Safe area</div>
+      <button type="button" class="chip" data-guide="histogram" aria-pressed="false">Histogram</button>
+      <button type="button" class="chip" data-guide="clipReadout" aria-pressed="false">Clip %</button>
+      <button type="button" class="chip" data-guide="thirds" aria-pressed="false">Thirds</button>
+      <button type="button" class="chip" data-guide="centre" aria-pressed="false">Centre</button>
+      <button type="button" class="chip" data-guide="safe" aria-pressed="false">Safe area</button>
     </div>
 
     <span class="field">

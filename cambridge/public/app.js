@@ -2,10 +2,13 @@ import { createExternalUi } from './external.js';
 import { createPtzUi } from './ptz.js';
 import { createGamepadControl } from './gamepad.js';
 import {
-  histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
+  buildFalseColourLut, measureThenOverlay,
   drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
   containRect, pointToImage,
 } from './scopes.js';
+import {
+  tileModel, recordActionFor, feedHealth, recordAllOutcome, stepOption, gamepadTarget, gamepadCandidates,
+} from './panel-logic.js';
 
 // CamBridge control panel.
 //
@@ -24,6 +27,19 @@ const el = (tag, attrs = {}, ...kids) => {
     else if (v !== null && v !== undefined && v !== false) n.setAttribute(k, v);
   }
   for (const kid of kids) if (kid) n.append(kid);
+  // A clickable div or span (the value readouts, recall-group chips) is
+  // otherwise unreachable from the keyboard. Give it a button's semantics:
+  // focusable, announced as a button, and activated by Enter or Space.
+  const native = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'CANVAS', 'LABEL', 'OPTION'];
+  if (typeof attrs.onclick === 'function' && !native.includes(n.tagName)) {
+    if (!n.hasAttribute('role')) n.setAttribute('role', 'button');
+    if (!n.hasAttribute('tabindex')) n.tabIndex = 0;
+    n.addEventListener('keydown', (e) => {
+      if (e.target !== n || (e.key !== 'Enter' && e.key !== ' ')) return;
+      e.preventDefault();
+      n.click();
+    });
+  }
   return n;
 };
 // Node.append() stringifies null into a literal "null" text node. Every control
@@ -312,9 +328,13 @@ function stepper(cam, propName, name, opts = {}) {
     if (!live) return;
     const step = invert ? -dir : dir;
     if (options?.length) {
-      const idx = options.findIndex((o) => o.raw === prop.raw);
-      const next = options[Math.min(Math.max((idx < 0 ? 0 : idx) + step, 0), options.length - 1)];
-      if (next && next.raw !== prop.raw) await setProp(cam.id, propName, next.raw);
+      // An off-list current value is refused, as the gamepad and Companion
+      // do; it used to step from the first entry, an unrelated setting.
+      const next = stepOption(options, prop.raw, step);
+      if (next) await setProp(cam.id, propName, next.raw);
+      else if (!options.some((o) => o.raw === prop.raw)) {
+        toast(`${name} is at a value this camera does not list; pick one from the list`, 'warn');
+      }
       return;
     }
     if (prop.range) {
@@ -630,10 +650,13 @@ function renderControl() {
 // building a queue of stale frames.
 const FEED_INTERVAL_MS = 100;
 let feedStops = [];
+/** cameraId -> patch(cam): updates a live tile in place (CS1). */
+const tilePatchers = new Map();
 
 function stopAllFeeds() {
   for (const stop of feedStops) stop();
   feedStops = [];
+  tilePatchers.clear();
 }
 
 /**
@@ -649,9 +672,9 @@ function stopAllFeeds() {
  * are readable, and exposure analysis costs no extra traffic because the camera
  * is only ever asked for what it was already sending.
  */
-function startFeed(cam, canvas, onFailure) {
+function startFeed(cam, canvas, onFailure, onRecover = () => {}) {
   let stopped = false;
-  let failures = 0;
+  const health = feedHealth(10);
   let frame = 0;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   let lastHist = null;
@@ -673,12 +696,14 @@ function startFeed(cam, canvas, onFailure) {
         });
         bitmap.close();
         frame += 1;
-        failures = 0;
+        // A feed that was hidden after repeated failures comes back by itself
+        // once frames flow again, rather than waiting for Restart feeds.
+        if (health.ok() === 'show') onRecover();
       }
     } catch (err) {
       // A camera reconnecting should not kill the tile; several in a row means
       // it is genuinely not producing.
-      if (++failures === 10) onFailure(err);
+      if (health.fail() === 'hide') onFailure(err);
     }
     if (!stopped) setTimeout(tick, FEED_INTERVAL_MS);
   };
@@ -713,16 +738,16 @@ function drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, reme
 
   if (wantPixels) {
     const image = ctx.getImageData(0, 0, w, h);
-    if (scopeMode === 'false') {
-      applyFalseColour(image.data, falseColourLut);
-      ctx.putImageData(image, 0, 0);
-    } else if (scopeMode === 'clip') {
-      markClipping(image.data);
-      ctx.putImageData(image, 0, 0);
-    }
-    if (frame % SCOPE_EVERY_N === 0) {
-      hist = guides.histogram ? histogram(image.data) : null;
-      clip = guides.clipReadout ? clipStats(image.data) : null;
+    // Measured from the camera's pixels BEFORE any overlay recolours them
+    // (audit CS2); the overlay only changes what is drawn.
+    const measure = frame % SCOPE_EVERY_N === 0;
+    const r = measureThenOverlay(image.data, {
+      mode: scopeMode, measure, histogram: guides.histogram, clipReadout: guides.clipReadout, lut: falseColourLut,
+    });
+    if (r.overlaid) ctx.putImageData(image, 0, 0);
+    if (measure) {
+      hist = guides.histogram ? r.hist : null;
+      clip = guides.clipReadout ? r.clip : null;
       remember(hist, clip);
     }
   }
@@ -735,10 +760,15 @@ function drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, reme
   if (guides.clipReadout && clip) drawClipReadout(ctx, clip, { x: 8, y: h - 25 });
 }
 
+/**
+ * One multiview tile. Built once per camera; its status, tally, label, iris
+ * readout and record button are then patched in place from each state event
+ * (audit CS1: the tile used to close over the camera as it was when built, so
+ * its record button kept offering Start after recording began elsewhere).
+ * Rebuilding would restart the frame loop, so only the controls change.
+ */
 function feedTile(cam) {
-  const rec = cam.status?.recording;
-  const tallyClass = cam.tally?.program ? ' pgm' : cam.tally?.preview ? ' pvw' : '';
-  const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
+  const tile = el('div', { class: tileModel(cam).className });
 
   if (cam.state === 'connected') {
     const img = el('canvas', { class: 'feedcanvas', title: 'Click to focus here',
@@ -761,6 +791,9 @@ function feedTile(cam) {
       } catch (e) {
         reason.textContent = `Could not reach the live view endpoint: ${e.message}`;
       }
+    }, () => {
+      img.style.display = '';
+      fallback.style.display = 'none';
     }));
 
     // Tap-to-focus. Coordinates go up normalised, so the browser never needs to
@@ -796,27 +829,51 @@ function feedTile(cam) {
       el('div', { text: cam.state }), el('div', { class: 'note', text: cam.detail ?? '' })));
   }
 
-  tile.append(el('div', { class: 'overlay' },
-    el('span', { class: `recdot${rec ? ' on' : ''}` }),
-    el('span', { text: cam.label || cam.id }),
-    tallyBadge(cam),
-    el('span', { class: 'spacer' }),
-    el('span', { class: 'note', text: cam.properties?.fNumber?.label ?? '' })));
+  const recDot = el('span', { class: 'recdot' });
+  const name = el('span', {});
+  const tallySlot = el('span', {});
+  const fNumber = el('span', { class: 'note' });
+  tile.append(el('div', { class: 'overlay' }, recDot, name, tallySlot, el('span', { class: 'spacer' }), fNumber));
 
+  // Resolves the camera at click time, so the command matches what the
+  // camera is doing now, not what it was doing when the tile was drawn.
+  const recButton = el('button', {
+    class: 'small',
+    onclick: () => {
+      const action = recordActionFor(cam.id, () => view.cameras);
+      if (action) doAction(cam.id, action);
+    },
+  });
   tile.append(el('div', { class: 'tools' },
     el('button', { class: 'small', onclick: () => doAction(cam.id, 'autofocus') },
       document.createTextNode('AF')),
-    el('button', {
-      class: rec ? 'small' : 'small danger',
-      disabled: cam.capabilities?.record?.available === false,
-      title: cam.capabilities?.record?.reason || '',
-      onclick: () => doAction(cam.id, rec ? 'recordStop' : 'recordStart'),
-    }, document.createTextNode(rec ? '■' : '●')),
+    recButton,
     el('button', {
       class: 'small',
       onclick: () => { soloFeed = soloFeed === cam.id ? null : cam.id; renderMultiview(); },
     }, document.createTextNode(soloFeed === cam.id ? 'Show all' : 'Enlarge'))));
+
+  const patch = (current) => {
+    const m = tileModel(current);
+    tile.className = m.className;
+    recDot.className = `recdot${m.recording ? ' on' : ''}`;
+    name.textContent = m.label;
+    tallySlot.replaceChildren(...[tallyBadge(current)].filter(Boolean));
+    fNumber.textContent = m.fNumber;
+    recButton.textContent = m.recordButton.text;
+    recButton.className = m.recordButton.danger ? 'small danger' : 'small';
+    recButton.disabled = m.recordButton.disabled;
+    recButton.title = m.recordButton.title;
+    recButton.setAttribute('aria-label', `${m.recordButton.title}: ${m.label}`);
+  };
+  patch(cam);
+  tilePatchers.set(cam.id, patch);
   return tile;
+}
+
+/** Brings every live tile up to date without touching its frame loop. */
+function patchMultiview() {
+  for (const cam of view.cameras) tilePatchers.get(cam.id)?.(cam);
 }
 
 function renderMultiview() {
@@ -1102,11 +1159,14 @@ function renderTools() {
   const holder = $('#gang-members');
   holder.textContent = '';
   for (const c of view.cameras.filter(c => c.provider !== 'network-ptz' && !c.external)) {
-    holder.append(el('div', {
+    holder.append(el('button', {
+      type: 'button',
       class: `chip${gangSelection.has(c.id) ? ' on' : ''}`,
+      'aria-pressed': String(gangSelection.has(c.id)),
       onclick: (e) => {
         gangSelection.has(c.id) ? gangSelection.delete(c.id) : gangSelection.add(c.id);
         e.currentTarget.classList.toggle('on');
+        e.currentTarget.setAttribute('aria-pressed', String(gangSelection.has(c.id)));
       },
     }, document.createTextNode(c.label)));
   }
@@ -1155,6 +1215,7 @@ for (const chip of document.querySelectorAll('#guide-chips .chip')) {
     const key = chip.dataset.guide;
     guides[key] = !guides[key];
     chip.classList.toggle('on', guides[key]);
+    chip.setAttribute('aria-pressed', String(!!guides[key]));
     saveScopePrefs();
   });
 }
@@ -1184,6 +1245,7 @@ function restoreScopeControls() {
   $('#matte').value = guides.matte ?? 'off';
   for (const chip of document.querySelectorAll('#guide-chips .chip')) {
     chip.classList.toggle('on', !!guides[chip.dataset.guide]);
+    chip.setAttribute('aria-pressed', String(!!guides[chip.dataset.guide]));
   }
 }
 restoreScopeControls();
@@ -1206,18 +1268,15 @@ ramp.addEventListener('change', () => {
   toast(rampMs ? `Presets will ramp over ${rampMs / 1000}s` : 'Presets will jump instantly');
 });
 
-$('#rec-all').addEventListener('click', async () => {
-  const r = await api('POST', '/api/record-all', { start: true });
-  const bad = (r.results ?? []).filter((x) => !x.ok);
-  if (bad.length) toast(`Record FAILED on: ${bad.map((b) => b.cameraId).join(', ')}`, 'bad', 12000);
-  else toast('All cameras recording');
-});
-$('#stop-all').addEventListener('click', async () => {
-  const r = await api('POST', '/api/record-all', { start: false });
-  const bad = (r.results ?? []).filter((x) => !x.ok);
-  if (bad.length) toast(`Stop FAILED on: ${bad.map((b) => b.cameraId).join(', ')}`, 'bad', 12000);
-  else toast('All cameras stopped');
-});
+// Success only when the server answered, at least one camera took part and
+// every one confirmed; an empty or failed result is never "all recording".
+for (const [id, start] of [['#rec-all', true], ['#stop-all', false]]) {
+  $(id).addEventListener('click', async () => {
+    const r = await api('POST', '/api/record-all', { start }, { quiet: true });
+    const outcome = recordAllOutcome(r, start);
+    toast(outcome.message, outcome.level, outcome.level === 'ok' ? undefined : 12000);
+  });
+}
 
 $('#scene-save').addEventListener('click', async () => {
   const name = $('#scene-name').value.trim();
@@ -1365,7 +1424,7 @@ $('#adopt-confirm').addEventListener('click', async () => {
 
 // Recall-group chips: which parts of a scene get restored.
 for (const chip of document.querySelectorAll('#recall-groups .chip')) {
-  chip.addEventListener('click', () => chip.classList.toggle('on'));
+  chip.addEventListener('click', () => chip.setAttribute('aria-pressed', String(chip.classList.toggle('on'))));
 }
 
 // CamBridge runs as a macOS agent with no Dock icon, so this is the way to stop
@@ -1385,10 +1444,13 @@ $('#quit').addEventListener('click', async () => {
 
 // --- gamepad ----------------------------------------------------------------
 
-/** The camera a gamepad drives: the chosen one, or the first connected one. */
+/**
+ * The camera a gamepad drives: only the one the operator chose, while it is
+ * connected. Losing it drives nothing until someone chooses again (it used to
+ * fall through silently to the first connected body).
+ */
 function padTarget() {
-  const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected' && c.provider !== 'network-ptz' && !c.external);
-  return chosen ?? view.cameras.find((c) => c.state === 'connected' && c.provider !== 'network-ptz' && !c.external) ?? null;
+  return gamepadTarget(padCamera, view.cameras);
 }
 
 // Properties where pushing "up" should walk *down* the raw scale. Iris is the
@@ -1426,13 +1488,25 @@ async function padAction(action) {
     await api('POST', '/api/record-all', { start: !anyRolling });
     return;
   }
-  if (!cam) return;
+  if (!cam && (action === 'nextCamera' || action === 'prevCamera')) {
+    // Choosing with the pad's own buttons is a deliberate reselection.
+    const live = gamepadCandidates(view.cameras);
+    if (!live.length) return;
+    const next = action === 'nextCamera' ? live[0] : live[live.length - 1];
+    setPadCamera(next.id);
+    toast(`Gamepad now drives ${next.label}`);
+    return;
+  }
+  if (!cam) {
+    toast('The gamepad has no camera: choose one in Gamepad control', 'warn');
+    return;
+  }
   if (action === 'recordToggle') {
     await doAction(cam.id, cam.status?.recording ? 'recordStop' : 'recordStart');
   } else if (action === 'autofocus') {
     await doAction(cam.id, 'autofocus');
   } else if (action === 'nextCamera' || action === 'prevCamera') {
-    const live = view.cameras.filter(c => c.state === 'connected' && c.provider !== 'network-ptz' && !c.external);
+    const live = gamepadCandidates(view.cameras);
     if (live.length < 2) return;
     const at = live.findIndex((c) => c.id === cam.id);
     const step = action === 'nextCamera' ? 1 : -1;
@@ -1453,8 +1527,16 @@ function setPadCamera(id) {
 const gamepad = createGamepadControl({
   onStep: (prop, direction, coarse) => padStep(prop, direction, coarse),
   onButton: (action) => padAction(action),
-  onStatus: ({ connected, name }) => {
+  onStatus: ({ connected, name, disarmed }) => {
     $('#pad-status').textContent = connected ? name : 'No gamepad detected';
+    if (disarmed) {
+      // Unplugging disarms control; say so and reflect it on the toggle.
+      $('#pad-toggle').textContent = 'Gamepad control is off';
+      $('#pad-toggle').classList.remove('primary');
+      $('#pad-open').classList.remove('primary');
+      toast('Gamepad disconnected; gamepad control switched off', 'warn');
+      renderControl();
+    }
     $('#pad-toggle').disabled = !connected;
     // The header button is the only hint most people will see, so it only
     // appears once a controller is actually plugged in.
@@ -1469,7 +1551,7 @@ $('#pad-toggle').addEventListener('click', () => {
   $('#pad-toggle').textContent = on ? 'Gamepad control is ON' : 'Gamepad control is off';
   $('#pad-toggle').classList.toggle('primary', on);
   $('#pad-open').classList.toggle('primary', on);
-  toast(on ? `Gamepad drives ${padTarget()?.label ?? 'nothing yet'}` : 'Gamepad control off');
+  toast(on ? (padTarget() ? `Gamepad drives ${padTarget().label}` : 'Choose the camera the gamepad drives') : 'Gamepad control off', on && !padTarget() ? 'warn' : undefined);
   renderControl();
 });
 
@@ -1479,6 +1561,9 @@ function renderPadCameras() {
   if (!sel) return;
   const target = padTarget()?.id ?? '';
   sel.textContent = '';
+  // An explicit "none" so a lost or never-chosen target is visible, rather
+  // than the select showing (and implying) the first camera.
+  sel.append(el('option', { value: '', selected: !target }, document.createTextNode('Choose a camera…')));
   for (const c of view.cameras.filter(c => c.provider !== 'network-ptz' && !c.external)) {
     sel.append(el('option', { value: c.id, selected: c.id === target },
       document.createTextNode(c.label)));
@@ -1521,7 +1606,10 @@ function connectEvents() {
       roll = msg.roll ?? null;
       undoState = msg.undo ?? {};
       render();
-      if (currentView === 'multiview' && changed) renderMultiview();
+      if (currentView === 'multiview') {
+        if (changed) renderMultiview();
+        else patchMultiview();
+      }
     } catch { /* ignore malformed frame */ }
   };
   es.onerror = () => {
