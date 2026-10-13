@@ -68,3 +68,7 @@ config/*.bak
 # it; useful to produce, never something to commit.
 session-export/
 *.session-export/
+
+# --- Claude Code agent worktrees ----------------------------------------------
+# Parallel work happens in git worktrees here; they are merged, never committed.
+.claude/worktrees/
