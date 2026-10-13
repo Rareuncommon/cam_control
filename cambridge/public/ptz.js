@@ -187,7 +187,12 @@ export function createPtz(ctx) {
   async function stopAll() {
     endAllHolds();
     const r = await api('POST', '/api/ptz/stop-all');
-    if (r.httpOk) toast('Every PTZ head told to stop');
+    if (!r.httpOk) return;
+    // Name any head whose stop was not confirmed: a link that dropped
+    // mid-move means that head may still be moving, and it is the one the
+    // operator has to deal with now.
+    if (r.unconfirmed?.length) toast(`Stop NOT confirmed on ${r.unconfirmed.join(', ')} — check those heads`, 'bad', 12000);
+    else toast('Every PTZ head stopped');
   }
 
   // --- speed ----------------------------------------------------------------

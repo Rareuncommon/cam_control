@@ -857,21 +857,42 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * Only after it answers. Writing the new address first would turn a typo
    * into a camera CamBridge can no longer find at either address.
    */
+  /** cameraId -> the follow in progress, so a second address change replaces the first. */
+  const follows = new Map();
   function followNewAddress(cameraId, newIp) {
     const entry = adoption.adopted().find((c) => c.id === cameraId);
     if (!entry) return;
+    // Who we are looking for: the serial and MAC the camera reported before
+    // the change. A camera of the same make that happens to answer at the new
+    // address — a typo onto a neighbour's IP — is not it, and adopting it
+    // would leave two entries driving one head.
+    const before = ptz.camera(cameraId)?.identity ?? {};
+    const token = {};
+    follows.set(cameraId, token);
     const deadline = Date.now() + 90_000;
     const attempt = async () => {
+      if (follows.get(cameraId) !== token) return;   // superseded by a newer change
       const r = await detectPtz({ host: newIp, vendor: entry.vendor, ...entry.auth },
         { timeoutMs: 2500, log: (level, msg) => log.write(level, 'ptz', msg) });
+      if (follows.get(cameraId) !== token) return;
       if (r.ok) {
+        const same = (k) => !before[k] || !r.identity?.[k] || String(before[k]).toLowerCase() === String(r.identity[k]).toLowerCase();
+        if (!same('serial') || !same('mac')) {
+          follows.delete(cameraId);
+          log.error('ptz', `${cameraId}: a different camera answered at ${newIp} (serial/MAC do not match); the stored address is unchanged`);
+          return;
+        }
+        follows.delete(cameraId);
         const u = await adoption.update(cameraId, { ip: newIp });
         log.info('ptz', u.ok ? `${cameraId} found at ${newIp}; stored address updated`
           : `${cameraId} found at ${newIp} but the config could not be updated: ${u.error}`);
         return;
       }
       if (Date.now() < deadline) setTimeout(attempt, 3000);
-      else log.error('ptz', `${cameraId} did not answer at ${newIp} within 90s; still stored at ${entry.ip}`);
+      else {
+        follows.delete(cameraId);
+        log.error('ptz', `${cameraId} did not answer at ${newIp} within 90s; still stored at ${entry.ip}`);
+      }
     };
     setTimeout(attempt, 3000);
   }
@@ -1184,7 +1205,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           const body = await readBody(req);
           const result = await adoption.update(id, body ?? {});
           if (result.ok) { syncMeta(); await refreshEverything(); }
-          return sendJson(res, result.ok ? 200 : 404, result);
+          return sendJson(res, result.ok ? 200 : (result.status ?? 404), result);
         }
       }
 
@@ -1281,8 +1302,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // The panic button: every PTZ head, every axis.
       if (path === '/api/ptz/stop-all' && req.method === 'POST') {
         log.info('ptz', `${actor()}STOP ALL`);
-        await ptz.stopAll('stop all pressed');
-        return sendJson(res, 200, { ok: true });
+        const results = await ptz.stopAll('stop all pressed');
+        const unconfirmed = results.filter((r) => !r.ok);
+        if (unconfirmed.length) {
+          log.error('ptz', `STOP ALL not confirmed on: ${unconfirmed.map((r) => `${r.cameraId} (${r.error})`).join(', ')}`);
+        }
+        return sendJson(res, 200, { ok: unconfirmed.length === 0, results, unconfirmed: unconfirmed.map((r) => r.label) });
       }
 
       m = path.match(/^\/api\/cameras\/([^/]+)\/schema$/);

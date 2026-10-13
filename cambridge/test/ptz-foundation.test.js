@@ -713,3 +713,26 @@ test('STOP on a camera that is not connected says it is not confirmed', async ()
     await cam.stop();
   }
 });
+
+test('STOP ALL names the heads whose stop was not confirmed; two cameras cannot share an address', async () => {
+  const { app, call } = await ptzOnlyApp();
+  try {
+    await until(async () => (await call('GET', '/api/state')).body.view.cameras.every((c) => c.state === 'connected'));
+    const ok = await call('POST', '/api/ptz/stop-all');
+    assert.equal(ok.body.ok, true);
+    assert.deepEqual(ok.body.unconfirmed, []);
+    fakeHead('fake-right').down = true;
+    await until(async () => (await call('GET', '/api/state')).body.view.cameras.find((c) => c.id === 'right').state !== 'connected',
+      { timeoutMs: 3000 });
+    const partial = await call('POST', '/api/ptz/stop-all');
+    assert.equal(partial.body.ok, false);
+    assert.deepEqual(partial.body.unconfirmed, ['Right']);
+    fakeHead('fake-right').down = false;
+
+    const clash = await call('PATCH', '/api/cameras/left/adoption', { ip: 'fake-right' });
+    assert.equal(clash.status, 409);
+    assert.match(clash.body.error, /already "Right"/);
+  } finally {
+    await app.stop();
+  }
+});

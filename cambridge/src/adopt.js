@@ -245,6 +245,9 @@ export class Adoption {
     }
     if (entry.kind === 'ptz' && typeof changes.ip === 'string' && changes.ip.trim()) {
       if (!isHostAddress(changes.ip)) return { ok: false, error: `"${changes.ip}" is not an IP address or host name` };
+      // Two entries at one address would be two sets of controls on one head.
+      const clash = cfg.cameras.find((c) => c.id !== id && c.kind === 'ptz' && c.ip === changes.ip.trim());
+      if (clash) return { ok: false, status: 409, error: `${changes.ip.trim()} is already "${clash.label}"` };
       entry.ip = changes.ip.trim();
     }
 

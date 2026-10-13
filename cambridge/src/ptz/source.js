@@ -139,8 +139,17 @@ export class PtzSource extends EventEmitter {
   }
 
   /** Stops every PTZ camera. The panic button. */
+  /**
+   * Stops every PTZ camera and says, per camera, whether the stop was
+   * confirmed. A panic button that answers "OK" while a head whose link has
+   * dropped is still moving is worse than one that names it.
+   * @returns {Promise<Array<{cameraId: string, label: string, ok: boolean, error?: string}>>}
+   */
   async stopAll(reason = 'stop all') {
-    return Promise.all([...this.cameras.values()].map(({ cam }) => cam?.stopMotion(reason)));
+    return Promise.all([...this.cameras.values()].map(async ({ entry, cam }) => {
+      const r = cam ? await cam.stopMotion(reason) : { ok: false, body: { error: 'no driver' } };
+      return { cameraId: entry.id, label: entry.label || entry.id, ok: !!r.ok, ...(r.ok ? {} : { error: r.body?.error }) };
+    }));
   }
 
   preset(id, op, n, o) {
