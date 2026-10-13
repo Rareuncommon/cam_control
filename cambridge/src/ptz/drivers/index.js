@@ -5,9 +5,11 @@
 // and cheap, but a camera that half-answers another vendor's probe should not
 // be misidentified, so the most specific probes go first.
 
+import { CanonXcPtz } from './canon-xc.js';
 import { FakePtz } from './fake.js';
 
 export const DRIVERS = new Map([
+  [CanonXcPtz.vendor, CanonXcPtz],
   [FakePtz.vendor, FakePtz],
 ]);
 
