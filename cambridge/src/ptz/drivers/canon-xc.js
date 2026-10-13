@@ -26,7 +26,7 @@
 
 import http from 'node:http';
 import { PtzDriver, DriverError } from '../driver.js';
-import { digestHeader, parseChallenge } from '../http.js';
+import { digestHeader, parseChallenge, knownScheme } from '../http.js';
 import { TABLE } from '../tables/canon-cr-n500.js';
 
 /** Every XC command lives under this path; after `wvhttp` it is case-insensitive. XC5 p.7 */
@@ -928,7 +928,8 @@ export class CanonXcPtz extends PtzDriver {
           rememberScheme(key, 'digest');
           header = digestHeader({ username: user, password: pass, method: 'GET', uri: path, challenge: c, nc: 1 });
         } else if (c?.scheme === 'basic') {
-          if (streamSchemes.get(key) === 'digest') {
+          // Digest seen on the stream, or on ordinary requests to this camera.
+          if (streamSchemes.get(key) === 'digest' || knownScheme(this.host, this.port) === 'digest') {
             this.log('warn', 'event stream: the camera asked for Basic after using Digest — the password was not sent');
             fail(STREAM_BUSY_RETRY_MS, 'Basic asked for after Digest; password not sent');
             return;

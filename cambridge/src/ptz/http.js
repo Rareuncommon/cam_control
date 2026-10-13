@@ -249,6 +249,15 @@ export async function request(o) {
   return r;
 }
 
+/**
+ * The scheme a host has authenticated ordinary requests with, if any. For
+ * drivers with a connection of their own (Canon's event stream), so they keep
+ * the same rule: a host that used Digest never gets the password in Basic.
+ */
+export function knownScheme(host, port = 80) {
+  return schemes.get(`${host}:${port}`) ?? null;
+}
+
 /** Forgets cached credentials for a host — after a password change, say. */
 export function forgetHost(host, port = 80) {
   digestCache.delete(`${host}:${port}`);
