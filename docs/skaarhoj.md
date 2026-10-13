@@ -79,13 +79,76 @@ it:
 | Encoders | Every other encoder, top to bottom and left to right. Each shows its setting on its own display, or on the nearest display-only control |
 | STOP | Only a button labelled "stop", or one pinned in the mapping. It stops every PTZ camera |
 | STORE, TRACKING | A button labelled "store"/"shift"/"save" or "track". Otherwise the next free display buttons after the presets |
-| Camera select | The first display buttons in reading order, one per PTZ camera, in config order |
+| Camera select | The first display buttons in reading order, one per PTZ camera, in the operator's order, up to a cap (8 by default). More cameras than that are paged in banks, see below |
+| Bank previous / next, Group | A button whose label says "prev", "next", "bank", "page", an arrow, or "group". Otherwise the last two camera buttons page (no group button) |
 | Presets | The display buttons that follow, starting on a new row (8 by default) |
 
 **Camera buttons** show the camera's name. The LED colour shows tally: red on
 program, green on preview. With no tally, the selected camera is amber and the
 others white. The selected camera is also lit brighter. Switching cameras
 stops whatever the stick was doing to the previous one.
+
+## Many cameras: banks and groups
+
+The panel has a fixed number of buttons, so the camera buttons are capped and
+the cameras are paged through them. `skaarhoj.mapping.cameraButtons` sets the
+cap; the default is a third of the panel's display buttons, up to 8. On a
+PTZ Extreme that is 8, which leaves the presets, STORE and TRACKING their
+buttons however many cameras there are. Up to the cap, nothing changes: one
+button per camera.
+
+With more cameras than camera buttons:
+
+- **Bank buttons.** A button labelled with "prev"/"previous", "next", "bank" or
+  "page" (or an arrow such as ◀ ▶) is a bank button. A button that says only
+  "bank" or "page", or has both arrows, goes to the next bank. Banks wrap
+  round at both ends. You can pin them instead with `bankNext` and `bankPrev`
+  in `skaarhoj.mapping`.
+- **No bank buttons.** If none is labelled or pinned, the last two camera
+  buttons become bank previous and next, so the cap includes them: 8 buttons
+  give 6 cameras per bank. The cap must be at least 3 for this.
+- **Display.** The bank buttons show "Bank 2/6". With the borrowed buttons, a
+  single-bank view leaves them blank.
+- **Tally across banks.** Each camera button keeps showing tally (red program,
+  green preview) whether or not it is the selected camera. When a camera on
+  program is on another bank, the bank button for that direction lights red and
+  its second line says "PGM: <camera>". If the selected camera is on another
+  bank, the bank buttons say "Sel: <camera>" instead.
+- **Bank changes never move anything.** They change what the camera buttons
+  show, not the selected camera, and whatever the stick is holding keeps going
+  to the selected camera. Pressing a camera button on another bank selects it
+  and stops the camera being left first, like any other selection.
+
+Cameras appear in the operator's order from the browser, not alphabetically.
+
+**Groups.** Cameras carry a group (the `group` field of each entry in `cameras` in the config).
+Two optional controls use it:
+
+- `skaarhoj.mapping.group` (a name, not case sensitive) restricts the panel to
+  that one group. The camera buttons, banks and the default selected camera
+  all come from that group. A name that matches nothing leaves the panel with
+  no cameras, and the log says so.
+- A button labelled "group" (or pinned as `groupButton`) cycles through *all
+  cameras*, then each group in turn. It restarts at the first bank. It shows
+  the group name, lights red if a camera on program is outside the groups
+  being shown, and says "Sel: <camera>" if the selected camera is outside it.
+  Selecting a camera in a group, or changing group, never moves a camera.
+  The group button does nothing with fewer than two groups, or when `group`
+  restricts the panel.
+
+The number of camera buttons is worked out from the whole panel's cameras (or
+the restricted group's), not the group being shown, so the layout does not
+shuffle when a group is chosen. A group that fits on one bank just shows one
+bank.
+
+Not found by label? Pin them:
+
+```json
+"mapping": { "cameraButtons": 10, "bankPrev": 35, "bankNext": 36, "groupButton": 34 }
+```
+
+`GET /api/skaarhoj` reports `bank` (`index`, `count`, `size`, `cameras`) and
+`group`, and `topologySummary` lists the bank and group buttons.
 
 **Presets** recall on the selected camera. Hold STORE and press a preset to
 store it. A preset stored this way gets a picture, like one stored from the
@@ -121,6 +184,7 @@ If a role is guessed wrong, pin it in the config file under
     "pan": 38, "tilt": 37, "rotate": 39, "zoom": 41, "focus": 42,
     "stop": 40, "store": 36, "tracking": 35,
     "cameras": [1, 2, 3, 4], "presets": [7, 8, 9, 10, 11, 12],
+    "cameraButtons": 8, "bankPrev": 5, "bankNext": 6, "groupButton": 34, "group": "Stage",
     "encoders": [43, 44, 45, 46], "encoderDisplays": { "43": 52 },
     "presetCount": 8, "deadband": 0.05,
     "invertPan": false, "invertTilt": true, "invertZoom": false, "invertFocus": false
@@ -146,6 +210,7 @@ Extreme's datasheet. The tests in `cambridge/test/skaarhoj.test.js` cover:
 - reconnecting, and detecting a hung panel
 - role detection and mapping overrides
 - camera select, tally and LED/text output
+- banks and groups with 20 and 48 simulated cameras: paging and wrap-around, bank labels, tally on every bank, the program-on-another-bank signal, selection across banks stopping motion, borrowed, labelled and pinned bank buttons, group cycling and `mapping.group`
 - joystick, rocker and roller motion
 - stopping a deflected joystick when the panel disconnects or hangs
 - encoders, presets, tracking and STOP
@@ -170,3 +235,8 @@ To try it without hardware, run `node cambridge/test/fakes/skaarhoj-panel.js
 - how long titles and labels can be on its 64x32 and 112x32 displays
   (SKAARHOJ's document says 10 characters in one place and 24 in another)
 - the multi-client and reboot questions above
+- banks and groups, which have only been seen on the invented 36-button
+  layout: whether the guessed camera/preset/bank rows look right on the real
+  panel, that labels such as "Bank 2/6" and "PGM: <camera>" fit the 64x32
+  displays, and that a button label the panel reports (an arrow, say) matches
+  the bank-button wording
