@@ -810,3 +810,52 @@ test('mapping.group restricts the panel to one group, case-insensitively, with n
     assert.equal(fakeHead('fake-c01').v.pan, 0);
   } finally { await app.stop(); await panel.close(); }
 });
+
+test('joystick input from a panel that has not identified yet is ignored, and every closed link releases', async () => {
+  const { createServer } = await import('node:net');
+  const { PanelController } = await import('../src/skaarhoj/mapping.js');
+  let conn = 0;
+  const srv = createServer((s) => {
+    conn += 1;
+    s.setEncoding('utf8');
+    if (conn === 1) {
+      s.on('data', (d) => {
+        for (const line of d.split('\n')) {
+          if (line === 'list') s.write('_model=SK_FAKEPTZ\n_serial=1\n_support=ASCII,Binary\n');
+          if (line === 'PanelTopology?') s.write(`_panelTopology_HWC=${JSON.stringify(defaultTopology())}\n`);
+          if (line === 'ping') s.write('ack\n');
+        }
+      });
+      setTimeout(() => s.destroy(), 300);          // the first link drops
+    } else if (conn === 2) {
+      s.write('HWC#37=Speed:400\n');               // stick pushed while the panel reboots…
+      setTimeout(() => s.destroy(), 100);          // …and the link dies before it identifies
+    } else {
+      s.destroy();
+    }
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const calls = [];
+  const ptz = {
+    move: (id, v) => { calls.push(['move', id, v]); return { ok: true }; },
+    releaseSource: (src) => calls.push(['release', src]),
+    stopAll: async () => {},
+  };
+  const panelClient = new RawPanelClient({ host: '127.0.0.1', port: srv.address().port, backoffMs: [100, 5000], log: () => {} });
+  const ctl = new PanelController({
+    client: panelClient, ptz, cameras: () => [{ id: 'cam1', label: 'Cam 1', state: 'connected' }],
+    schema: () => null, value: () => undefined, setProperty: async () => ({ ok: true }),
+    preset: async () => ({ ok: true }), log: () => {},
+  });
+  ctl.attach();
+  panelClient.start();
+  try {
+    await sleep(1200);
+    assert.ok(!calls.some((c) => c[0] === 'move'), 'no move from a panel that had not identified');
+    assert.ok(calls.some((c) => c[0] === 'release'), 'closed links released');
+  } finally {
+    ctl.detach();
+    await panelClient.stop();
+    srv.close();
+  }
+});

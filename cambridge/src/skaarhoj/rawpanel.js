@@ -287,6 +287,9 @@ export class RawPanelClient extends EventEmitter {
     // Forgotten before it is closed, so its own close and error events are
     // recognised as stale and do not start a second round of failure handling.
     this.socket = null;
+    // Every socket that goes away says so, identified or not: whatever it
+    // delivered must be let go of.
+    if (sock) this.emit('linkDown', why);
     if (sock) {
       try {
         if (graceful) {
@@ -467,6 +470,14 @@ export class RawPanelClient extends EventEmitter {
   }
 
   #event(m) {
+    // Input before the panel is identified is ignored. A reconnecting panel
+    // can send a deflected joystick ahead of its topology; acting on it would
+    // latch a move on roles from the previous connection, and if the socket
+    // then died before identifying, nothing would ever release it.
+    if (!this.connected) {
+      this.log('debug', 'panel input before identification ignored');
+      return;
+    }
     const id = this.toNative(Number(m[1]));
     const edge = m[2] === undefined ? 0 : Number(m[2]);
     const kind = m[3];

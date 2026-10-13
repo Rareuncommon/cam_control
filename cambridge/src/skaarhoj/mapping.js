@@ -430,7 +430,13 @@ export class PanelController extends EventEmitter {
     const on = (ev, fn) => { this.client.on(ev, fn); this.listeners.push([ev, fn]); };
     on('connected', () => { this.#layout(); });
     on('topology', () => { this.#layout(); });
-    on('disconnected', (why) => this.#release(`panel disconnected (${why})`, true));
+    on('disconnected', (why) => {
+      this.#release(`panel disconnected (${why})`, true);
+      // The next connection lays the panel out afresh before any input counts.
+      this.roles = null;
+      this.layoutKey = null;
+    });
+    on('linkDown', (why) => this.#release(`panel link closed (${why})`, true));
     on('sleep', (asleep) => {
       // notes §5: treat a sleeping panel's controls as released; notes §6.6:
       // the map is zeroed on sleep and restored on wake — repaint then.
