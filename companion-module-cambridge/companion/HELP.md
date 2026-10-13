@@ -69,3 +69,7 @@ Global: `$(cambridge:camera_count)`, `connected_count`, `recording_count`,
 
 Tally comes from CamBridge's ATEM listener, configured in `config/cambridge.json`,
 not from Companion. If it is off, tally feedbacks simply stay dark.
+
+## PTZ cameras
+
+PTZ heads (Panasonic, Sony, Canon, PTZOptics) appear in the PTZ actions only. Pan/tilt, zoom and focus are **press-and-hold**: put the move action on button down and **PTZ: release** on button up (the ready-made buttons already do). While held the module refreshes the move every 150 ms; CamBridge stops the head itself if refreshes stop. Also: preset recall/store, STOP ALL, tracking, home, one-push AF and **PTZ: set any setting**, whose choices come from each camera. Variables `$(cambridge:<id>_pan|_tilt|_zoom|_preset|_tracking|_moving)`; feedbacks tracking, preset is current, moving. At a PTZ-only venue `$(cambridge:daemon)` reads "not used".

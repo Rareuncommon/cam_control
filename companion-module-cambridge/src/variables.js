@@ -6,6 +6,8 @@
 // Raw values are still available with a _raw suffix for expressions that need
 // to do arithmetic.
 
+import { PTZ_VARIABLES, ptzVariableValues } from './ptz.js';
+
 const PER_CAMERA = [
   ['label', 'Name'],
   ['model', 'Model'],
@@ -24,6 +26,8 @@ const PER_CAMERA = [
   ['rectime', 'Elapsed record time'],
   ['tally', 'Tally (PGM / PVW / off)'],
 ];
+
+const PTZ_PER_CAMERA = new Set(['label', 'model', 'state', 'alarm', 'tally']);
 
 /** Companion variable ids must be simple; camera ids may contain hyphens. */
 export function varId(cameraId) {
@@ -44,8 +48,17 @@ export function buildVariableDefinitions(cameras) {
   ];
   for (const cam of cameras) {
     const v = varId(cam.id);
+    const ptz = cam.kind === 'ptz';
     for (const [suffix, name] of PER_CAMERA) {
+      // A PTZ head has no exposure, card or battery to report.
+      if (ptz && !PTZ_PER_CAMERA.has(suffix)) continue;
       defs.push({ variableId: `${v}_${suffix}`, name: `${cam.label || cam.id}: ${name}` });
+    }
+    if (ptz) {
+      for (const [suffix, name] of PTZ_VARIABLES) {
+        defs.push({ variableId: `${v}_${suffix}`, name: `${cam.label || cam.id}: ${name}` });
+      }
+      continue;
     }
     // Raw companions for the numeric ones, for expressions.
     for (const suffix of ['iris', 'iso', 'shutter', 'kelvin', 'nd']) {
@@ -72,14 +85,14 @@ function clock(seconds) {
 }
 
 export function buildVariableValues(cameras, {
-  camdConnected = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(),
+  camdConnected = true, camdUsed = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(),
 } = {}) {
   const connected = cameras.filter((c) => c.state === 'connected').length;
   const values = {
     camera_count: cameras.length,
     connected_count: connected,
     recording_count: cameras.filter((c) => c.status?.recording).length,
-    daemon: camdConnected ? 'connected' : 'UNREACHABLE',
+    daemon: !camdUsed ? 'not used' : camdConnected ? 'connected' : 'UNREACHABLE',
     cameras_down: cameras.filter((c) => c.state !== 'connected').map((c) => c.label || c.id).join(', '),
     tally_program: cameras.filter((c) => c.tally?.program).map((c) => c.label || c.id).join(', '),
     rolling: roll ? `${roll.rolling} of ${roll.total}` : `0 of ${connected}`,
@@ -111,6 +124,11 @@ export function buildVariableValues(cameras, {
     const worst = (alarmsByCamera?.[cam.id] ?? [])[0];
     values[`${v}_alarm`] = worst ? worst.message : '';
     values[`${v}_tally`] = t?.program ? 'PGM' : t?.preview ? 'PVW' : 'off';
+
+    if (cam.kind === 'ptz') {
+      Object.assign(values, ptzVariableValues(cam));
+      continue;
+    }
 
     values[`${v}_iris_raw`] = raw(cam, 'fNumber');
     values[`${v}_iso_raw`] = raw(cam, 'isoSensitivity');

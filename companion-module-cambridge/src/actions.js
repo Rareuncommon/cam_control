@@ -6,6 +6,7 @@
 // anything.
 
 import { STEPPABLE, nextValue, snap } from './step.js';
+import { buildPtzActions } from './ptz.js';
 
 const RAMP_CHOICES = [
   { id: 0, label: 'Instant' },
@@ -25,7 +26,10 @@ const MENU_KEYS = ['menu', 'up', 'down', 'left', 'right', 'set', 'back', 'displa
   .map((k) => ({ id: k, label: k.toUpperCase() }));
 
 export function buildActions(self) {
-  const cameraChoices = self.cameraChoices();
+  // Cinema-body controls list only cinema bodies: a PTZ head has no record
+  // button and no Sony exposure steppers, and offering it there is a trap.
+  const cameraChoices = self.cameraChoices('sony');
+  const anyCameraChoices = self.cameraChoices();
   const cameraWithAll = [{ id: '__all__', label: 'All cameras' }, ...cameraChoices];
   const presetChoices = self.presetChoices();
   const sceneChoices = self.sceneChoices();
@@ -39,7 +43,7 @@ export function buildActions(self) {
     ...extra,
   });
 
-  return {
+  const sony = {
     record: {
       name: 'Record: start / stop / toggle',
       options: [
@@ -309,14 +313,14 @@ export function buildActions(self) {
 
     reconnect: {
       name: 'Camera: reconnect',
-      options: [cameraField()],
+      options: [cameraField({ choices: anyCameraChoices, default: anyCameraChoices[0]?.id ?? '' })],
       callback: (ev) =>
         self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/actions/reconnect`),
     },
 
     undo: {
       name: 'Camera: undo the last change',
-      options: [cameraField()],
+      options: [cameraField({ choices: anyCameraChoices, default: anyCameraChoices[0]?.id ?? '' })],
       callback: (ev) =>
         self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/undo`),
     },
@@ -337,4 +341,6 @@ export function buildActions(self) {
         self.api.request('POST', `/api/cameras/${encodeURIComponent(ev.options.camera)}/acknowledge`),
     },
   };
+
+  return { ...sony, ...buildPtzActions(self) };
 }
