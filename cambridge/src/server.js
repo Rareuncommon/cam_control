@@ -24,6 +24,10 @@ import { ViscaServer } from './visca.js';
 import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEFAULT_THRESHOLDS } from './alarms.js';
 import { report as takeReport, rollState } from './takelog.js';
 import { Auth, hashPin } from './auth.js';
+import { PtzSource, isPtzEntry } from './ptz/source.js';
+import { detect as detectPtz } from './ptz/detect.js';
+import { supported as supportedPtz } from './ptz/drivers/index.js';
+import { needsAdmin } from './ptz/schema.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -50,6 +54,9 @@ function loadConfig(path) {
     // it as a side effect of an upgrade — on a shoot day, with no way in —
     // would be worse than the exposure it prevents.
     auth: { operatorPin: null, adminPin: null, tokens: {} },
+    // PTZ connection tuning. Empty means the lifecycle defaults, which are
+    // the same heartbeat and backoff numbers camd uses for the Sony bodies.
+    ptz: { tallyFromAtem: false },
   };
   if (!existsSync(path)) {
     process.stderr.write(`cambridge: no config at ${path}, using defaults\n`);
@@ -66,11 +73,27 @@ function loadConfig(path) {
       visca: { ...defaults.visca, ...(parsed.visca ?? {}) },
       alarms: { ...defaults.alarms, ...(parsed.alarms ?? {}) },
       auth: { ...defaults.auth, ...(parsed.auth ?? {}) },
+      ptz: { ...defaults.ptz, ...(parsed.ptz ?? {}) },
     };
   } catch (err) {
     process.stderr.write(`cambridge: config ${path} is not valid JSON: ${err.message}\n`);
     process.exit(1);
   }
+}
+
+/**
+ * Whether this installation needs camd at all.
+ *
+ * camd wraps Sony's SDK and exists for the FX3/FX30 bodies. A venue with only
+ * PTZ heads has no SDK and no daemon, and must not spend its life reporting
+ * one missing. An explicit `camd.enabled` wins; otherwise camd is used unless
+ * every configured camera is a PTZ head. An empty config still starts camd,
+ * because that is how a fresh studio install discovers its Sony bodies.
+ */
+export function camdNeeded(cfg) {
+  if (typeof cfg.camd?.enabled === 'boolean') return cfg.camd.enabled;
+  const cams = cfg.cameras ?? [];
+  return !(cams.length > 0 && cams.every(isPtzEntry));
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -151,7 +174,22 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     log: (level, msg) => log.write(level, 'camd', msg),
   });
 
+  const camdUsed = camdNeeded(cfg);
+  if (!camdUsed) log.info('cambridge', 'no Sony bodies configured — running without camd');
+
+  // PTZ heads are driven from here, not through camd: there is no SDK
+  // involved, and each head speaks its own network protocol.
+  const ptz = new PtzSource({
+    cameras: cfg.cameras.filter(isPtzEntry),
+    tuning: cfg.ptz,
+    log: (level, msg) => log.write(level, 'ptz', msg),
+  });
+  const isPtz = (cameraId) => ptz.has(cameraId);
+  /** A PTZ camera's table entry, from the schema the state model holds. */
+  const ptzEntry = (cameraId, id) => state.ptzSchemas.get(cameraId)?.byId.get(id) ?? null;
+
   const state = new StateModel();
+  state.camdUsed = camdUsed;
   // Presets live beside the config, not beside the logs. Deriving this from
   // logging.dir happened to work when both sat in the repo and broke the moment
   // logs moved to ~/Library/Logs.
@@ -162,7 +200,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   );
   const presets = new Presets(store, state, log);
   const gangs = new Gangs(store, state, log);
-  const adoption = new Adoption(configPath, camd, log);
+  const adoption = new Adoption(configPath, camd, log, ptz);
 
   const undo = new UndoHistory();
   const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
@@ -179,8 +217,17 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * recording anywhere else would catch some.
    */
   const applyFn = async (cameraId, prop, raw) => {
+    // Admin-level PTZ settings never travel this path. It is the path presets,
+    // gangs, undo, VISCA and ATEM Link share, and none of them should be able
+    // to change a camera's IP address or password — even by accident, through
+    // a preset that happened to capture one.
+    if (isPtz(cameraId) && needsAdmin(ptzEntry(cameraId, prop))) {
+      return { ok: false, status: 403, body: { error: `${ptzEntry(cameraId, prop).label} needs the admin settings` } };
+    }
     const before = state.get(cameraId)?.properties?.[prop]?.value;
-    const res = await camd.setProperty(cameraId, prop, raw);
+    const res = isPtz(cameraId)
+      ? await ptz.setProperty(cameraId, prop, raw)
+      : await camd.setProperty(cameraId, prop, raw);
     log.debug('set', `${cameraId} ${prop}=${raw} -> ${res.ok ? 'ok' : res.body?.error}`);
     // Only successful writes enter the history. A refused write did not change
     // the camera, so there is nothing to undo, and an entry for it would make
@@ -214,6 +261,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * the joystick would have been reported as a fault.
    */
   const runAction = async (cameraId, action, body) => {
+    if (isPtz(cameraId)) {
+      if (needsAdmin(ptzEntry(cameraId, action))) {
+        return { ok: false, status: 403, body: { error: `${ptzEntry(cameraId, action).label} needs the admin settings` } };
+      }
+      return ptz.action(cameraId, action, body);
+    }
     if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
     if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
     return camd.action(cameraId, action, body);
@@ -235,6 +288,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (state.applyTally(byCamera)) {
         const live = Object.entries(byCamera).filter(([, t]) => t.program).map(([id]) => id);
         log.info('tally', live.length ? `program: ${live.join(', ')}` : 'program: none');
+        // Off unless asked for: Reactor may already be driving these lamps, and
+        // two masters for one lamp make it flicker between them.
+        if (cfg.ptz.tallyFromAtem) {
+          for (const id of ptz.ids()) {
+            const t = byCamera[id] ?? { program: false, preview: false };
+            ptz.setTally(id, { program: !!t.program, preview: !!t.preview });
+          }
+        }
       }
     });
     // Losing the switcher must clear tally rather than freeze it. A red light on
@@ -403,27 +464,58 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     state.setCamdConnected(false);
   });
 
+  /** Shared by camd and the PTZ source: a camera changed connection state. */
+  async function onConnectionState(ev) {
+    const before = state.get(ev.cameraId)?.state;
+    state.applyConnectionState(ev);
+    log.info('camera', `${ev.cameraId} ${before ?? '?'} -> ${ev.state}` +
+      (ev.detail ? ` (${ev.detail})` : ''));
+    // Undo history does not survive an outage. The values a camera held
+    // before it dropped are not somewhere it can be put back to — it may
+    // have been power-cycled since — and offering to undo to them would be
+    // offering to write a stale number to a body that never had it.
+    if (ev.state !== 'connected') undo.forget(ev.cameraId);
+    // A camera that just came back needs its full property set refetched;
+    // camd republishes changes, but we want the complete picture immediately.
+    if (ev.state === 'connected') await refreshProperties(ev.cameraId);
+  }
+
+  // --- PTZ event wiring -----------------------------------------------------
+  // The same state model, fed from the PTZ source. Values arrive in batches
+  // because one poll answers several settings at once.
+  ptz.on('event', async (ev) => {
+    switch (ev.event) {
+      case 'ptzHello':
+        state.replaceAll(ptz.snapshots(), null, 'ptz');
+        break;
+      case 'connectionState':
+        await onConnectionState(ev);
+        break;
+      case 'ptzSchema': {
+        const r = ptz.schema(ev.cameraId);
+        if (r.ok) state.setPtzSchema(ev.cameraId, r.body);
+        break;
+      }
+      case 'ptzValues':
+        state.mergeProperties(ev.cameraId, ev.values);
+        break;
+      case 'ptzStatus':
+        state.applyPtz(ev.cameraId, ev.ptz);
+        break;
+      default:
+        log.debug('ptz', `unhandled event ${ev.event}`);
+    }
+  });
+
   camd.on('event', async (ev) => {
     switch (ev.event) {
       case 'hello':
-        state.replaceAll(ev.cameras ?? [], ev.backend);
+        state.replaceAll(ev.cameras ?? [], ev.backend, 'camd');
         await refreshAllProperties();
         break;
-      case 'connectionState': {
-        const before = state.get(ev.cameraId)?.state;
-        state.applyConnectionState(ev);
-        log.info('camera', `${ev.cameraId} ${before ?? '?'} -> ${ev.state}` +
-          (ev.detail ? ` (${ev.detail})` : ''));
-        // Undo history does not survive an outage. The values a camera held
-        // before it dropped are not somewhere it can be put back to — it may
-        // have been power-cycled since — and offering to undo to them would be
-        // offering to write a stale number to a body that never had it.
-        if (ev.state !== 'connected') undo.forget(ev.cameraId);
-        // A camera that just came back needs its full property set refetched;
-        // camd republishes changes, but we want the complete picture immediately.
-        if (ev.state === 'connected') await refreshProperties(ev.cameraId);
+      case 'connectionState':
+        await onConnectionState(ev);
         break;
-      }
       case 'statusUpdate': {
         const prev = state.get(ev.cameraId)?.status;
         state.applyStatus(ev);
@@ -444,7 +536,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
 
   async function refreshProperties(cameraId) {
-    const res = await camd.getProperties(cameraId);
+    const res = isPtz(cameraId)
+      ? await ptz.getProperties(cameraId)
+      : await camd.getProperties(cameraId);
     if (res.ok && res.body?.properties) {
       state.replaceProperties(cameraId, res.body.properties);
     }
@@ -457,11 +551,38 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   }
 
   async function refreshEverything() {
+    if (!camdUsed) return;
     const res = await camd.listCameras();
     if (res.ok && res.body?.cameras) {
-      state.replaceAll(res.body.cameras);
+      state.replaceAll(res.body.cameras, null, 'camd');
       await refreshAllProperties();
     }
+  }
+
+  /**
+   * After a camera's IP address is changed from here: find it at the new
+   * address, then update the stored address so the connection follows it.
+   *
+   * Only after it answers. Writing the new address first would turn a typo
+   * into a camera CamBridge can no longer find at either address.
+   */
+  function followNewAddress(cameraId, newIp) {
+    const entry = adoption.adopted().find((c) => c.id === cameraId);
+    if (!entry) return;
+    const deadline = Date.now() + 90_000;
+    const attempt = async () => {
+      const r = await detectPtz({ host: newIp, vendor: entry.vendor, ...entry.auth },
+        { timeoutMs: 2500, log: (level, msg) => log.write(level, 'ptz', msg) });
+      if (r.ok) {
+        const u = await adoption.update(cameraId, { ip: newIp });
+        log.info('ptz', u.ok ? `${cameraId} found at ${newIp}; stored address updated`
+          : `${cameraId} found at ${newIp} but the config could not be updated: ${u.error}`);
+        return;
+      }
+      if (Date.now() < deadline) setTimeout(attempt, 3000);
+      else log.error('ptz', `${cameraId} did not answer at ${newIp} within 90s; still stored at ${entry.ip}`);
+    };
+    setTimeout(attempt, 3000);
   }
 
   // --- HTTP -----------------------------------------------------------------
@@ -597,6 +718,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/raw$/);
       if (m && req.method === 'GET') {
         const cameraId = decodeURIComponent(m[1]);
+        if (isPtz(cameraId)) {
+          // For a PTZ head the "unfiltered list" is its table with what the
+          // camera turned out not to offer marked, next to the values it gave.
+          const sch = ptz.schema(cameraId);
+          const props = await ptz.getProperties(cameraId);
+          return sendJson(res, sch.ok ? 200 : sch.status, sch.ok
+            ? { ...sch.body, values: props.body?.properties ?? {} } : sch.body);
+        }
         const r = await camd.request(
           'GET', `/cameras/${encodeURIComponent(cameraId)}/properties/raw`);
         return sendJson(res, r.ok ? 200 : (r.status || 502), r.body ?? { error: 'no answer from camd' });
@@ -667,11 +796,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       if (path === '/api/health' && req.method === 'GET') {
-        const health = await camd.health();
+        const health = camdUsed ? await camd.health() : { ok: null, body: 'not used' };
         return sendJson(res, 200, {
           cambridge: 'ok',
+          camdUsed,
           camdReachable: health.ok,
           camd: health.body ?? null,
+          ptzCameras: ptz.ids().length,
           sseClients: sseClients.size,
           // Surfaced because two builds once used different config files, and an
           // invisible path made that look like lost data rather than a wrong path.
@@ -685,6 +816,15 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // with whether each body is already adopted, and by which entry, so the setup
       // page never offers to adopt a camera twice.
       if (path === '/api/discovered' && req.method === 'GET') {
+        if (!camdUsed) {
+          return sendJson(res, 200, {
+            discovered: [],
+            adoptedCount: adoption.adopted().length,
+            camdUsed: false,
+            credentialHint: 'This installation has no Sony bodies, so there is nothing to discover. '
+              + 'Add PTZ cameras by IP address below.',
+          });
+        }
         const d = await camd.discovered();
         if (!d.ok) return sendJson(res, 502, d.body ?? { error: 'camd unreachable' });
         const adopted = adoption.adopted();
@@ -754,14 +894,144 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         }
       }
 
+      // --- PTZ ---------------------------------------------------------------
+      if (path === '/api/ptz/supported' && req.method === 'GET') {
+        return sendJson(res, 200, { vendors: supportedPtz() });
+      }
+
+      // Add-by-IP, step one: what is at this address? Read-only on the camera.
+      // Admin, because it sends credentials to whatever address it is given.
+      if (path === '/api/ptz/detect' && req.method === 'POST') {
+        const body = await readBody(req);
+        const r = await detectPtz({
+          host: body?.ip, port: body?.port, vendor: body?.vendor,
+          username: body?.username, password: body?.password,
+        }, { log: (level, msg) => log.write(level, 'ptz', msg) });
+        log.info('ptz', `${actor()}detect ${body?.ip}: ${r.ok ? `${r.vendor} ${r.identity.model}` : 'nothing recognised'}`);
+        return sendJson(res, r.ok ? 200 : 404, r);
+      }
+
+      // Step two: keep it.
+      if (path === '/api/ptz/cameras' && req.method === 'POST') {
+        const body = await readBody(req);
+        const r = await adoption.addPtz(body ?? {});
+        return sendJson(res, r.ok ? 201 : 409, r);
+      }
+
+      // The panic button: every PTZ head, every axis.
+      if (path === '/api/ptz/stop-all' && req.method === 'POST') {
+        log.info('ptz', `${actor()}STOP ALL`);
+        await ptz.stopAll('stop all pressed');
+        return sendJson(res, 200, { ok: true });
+      }
+
+      m = path.match(/^\/api\/cameras\/([^/]+)\/schema$/);
+      if (m && req.method === 'GET') {
+        const cameraId = decodeURIComponent(m[1]);
+        if (!isPtz(cameraId)) return sendJson(res, 404, { error: `${cameraId} is not a PTZ camera` });
+        const r = ptz.schema(cameraId);
+        return sendJson(res, r.status, r.body);
+      }
+
+      m = path.match(/^\/api\/cameras\/([^/]+)\/ptz\/(move|stop|point|watch)$/);
+      if (m && req.method === 'POST') {
+        const [, cameraId, op] = m.map(decodeURIComponent);
+        if (!isPtz(cameraId)) return sendJson(res, 404, { error: `${cameraId} is not a PTZ camera` });
+        const body = (await readBody(req)) ?? {};
+        let r;
+        if (op === 'move') {
+          // Not logged per call: a held joystick sends several a second. The
+          // deadman's own log line says when a move ended and why.
+          const v = {};
+          for (const a of ['pan', 'tilt', 'zoom', 'focus']) if (a in body) v[a] = Number(body[a]);
+          r = ptz.move(cameraId, v, { source: `http:${who.label}`, holdMs: Number(body.holdMs) || undefined });
+        } else if (op === 'stop') {
+          r = await ptz.stopMotion(cameraId, `stop from ${who.label}`);
+        } else if (op === 'point') {
+          const x = Number(body.x); const y = Number(body.y);
+          if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return sendJson(res, 400, { error: 'x and y run 0–1' });
+          log.info('ptz', `${actor()}${cameraId} aim at ${x.toFixed(2)},${y.toFixed(2)}`);
+          r = await ptz.pointToCentre(cameraId, { x, y });
+        } else {
+          ptz.watch(cameraId, Number(body.ms) || 5000);
+          r = { ok: true, status: 200, body: {} };
+        }
+        return sendJson(res, r.ok ? 200 : (r.status || 502), { ok: r.ok, cameraId, ...(r.body ?? {}) });
+      }
+
+      // Camera-native presets: they live on the head, so Reactor, the vendor
+      // web page and CamBridge all recall the same ones.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/ptz\/presets\/(\d+)(?:\/(recall|store))?$/);
+      if (m && (req.method === 'POST' || req.method === 'DELETE')) {
+        const cameraId = decodeURIComponent(m[1]);
+        const n = Number(m[2]);
+        const op = req.method === 'DELETE' ? 'delete' : m[3];
+        if (!op) return sendJson(res, 404, { error: 'recall or store?' });
+        if (!isPtz(cameraId)) return sendJson(res, 404, { error: `${cameraId} is not a PTZ camera` });
+        const body = (await readBody(req)) ?? {};
+        log.info('ptz', `${actor()}${cameraId} preset ${n} ${op}`);
+        const r = await ptz.preset(cameraId, op, n, { speed: body.speed });
+        return sendJson(res, r.ok ? 200 : (r.status || 502), { ok: r.ok, cameraId, ...(r.body ?? {}) });
+      }
+
+      // Admin settings and actions: network, users, firmware, reboot, reset.
+      // Gated three ways, each for its own failure: the admin PIN (who), the
+      // camera's name typed back (which — the wrong camera is the classic
+      // mistake), and tally (when — never the camera that is on air).
+      m = path.match(/^\/api\/cameras\/([^/]+)\/(admin-settings|admin-actions)\/([^/]+)$/);
+      if (m && ((m[2] === 'admin-settings' && req.method === 'PUT') || (m[2] === 'admin-actions' && req.method === 'POST'))) {
+        const [, cameraId, kind, id] = m.map(decodeURIComponent);
+        if (!isPtz(cameraId)) return sendJson(res, 404, { error: `${cameraId} is not a PTZ camera` });
+        const cam = state.get(cameraId);
+        const entry = ptzEntry(cameraId, id);
+        if (!entry) return sendJson(res, 404, { error: `this camera has no "${id}"` });
+        if (!needsAdmin(entry)) return sendJson(res, 400, { error: `${entry.label} is an ordinary setting` });
+        const body = (await readBody(req)) ?? {};
+        const name = String(cam?.label ?? cameraId).trim().toLowerCase();
+        if (String(body.confirm ?? '').trim().toLowerCase() !== name) {
+          return sendJson(res, 400, { error: `Type the camera's name, "${cam?.label ?? cameraId}", to confirm.`, needsConfirm: true });
+        }
+        if (cam?.tally?.program) {
+          return sendJson(res, 409, { error: `${cam.label} is on air. Take it off program first.` });
+        }
+        // Never the value of a secret in the log; the label says what changed.
+        const shown = entry.secret ? '' : kind === 'admin-settings' ? ` = ${JSON.stringify(body.value)}` : '';
+        log.warn('ptz', `${actor()}${cameraId} ADMIN ${kind === 'admin-settings' ? 'set' : 'run'} ${entry.label}${shown}`);
+        const r = kind === 'admin-settings'
+          ? await ptz.setProperty(cameraId, id, body.value)
+          : await ptz.action(cameraId, id, body.payload);
+        if (r.ok && kind === 'admin-settings' && entry.role === 'ipAddress') followNewAddress(cameraId, String(r.body?.applied ?? body.value));
+        return sendJson(res, r.ok ? 200 : (r.status || 502), {
+          ok: r.ok, cameraId, ...(r.body ?? {}),
+          ...(r.ok && entry.role === 'ipAddress' ? { detail: 'CamBridge will reconnect at the new address once the camera answers there.' } : {}),
+        });
+      }
+
       // --- property set, with gang fanout ---
       m = path.match(/^\/api\/cameras\/([^/]+)\/properties\/([^/]+)$/);
       if (m && req.method === 'PUT') {
         const [, cameraId, prop] = m.map(decodeURIComponent);
         const body = await readBody(req);
-        const raw = Number(body?.value);
-        if (!Number.isFinite(raw)) {
-          return sendJson(res, 400, { error: 'body must be {"value": <number>}' });
+        let raw;
+        if (isPtz(cameraId)) {
+          // PTZ tables have text and enum settings with string values; the
+          // table, not this route, decides what is valid.
+          raw = body?.value;
+          if (raw === undefined || (raw !== null && typeof raw === 'object')) {
+            return sendJson(res, 400, { error: 'body must be {"value": <value>}' });
+          }
+          const entry = ptzEntry(cameraId, prop);
+          if (needsAdmin(entry)) {
+            return sendJson(res, 403, {
+              error: `${entry.label} changes something that outlasts this shoot — use the admin settings.`,
+              needsRole: 'admin',
+            });
+          }
+        } else {
+          raw = Number(body?.value);
+          if (!Number.isFinite(raw)) {
+            return sendJson(res, 400, { error: 'body must be {"value": <number>}' });
+          }
         }
         const primary = await applyFn(cameraId, prop, raw);
         // Gang members follow the value that was actually applied, not the one
@@ -799,7 +1069,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/record-all' && req.method === 'POST') {
         const body = await readBody(req);
         const want = body?.start !== false;
-        const targets = state.list().filter((c) => c.state === 'connected');
+        // PTZ heads are not recorders; "record all" means every camera that rolls.
+        const targets = state.list().filter((c) => c.state === 'connected' && c.kind !== 'ptz');
         log.info('action', `${actor()}record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
         const results = await Promise.all(targets.map(async (cam) => {
           const r = await runAction(cam.id, want ? 'recordStart' : 'recordStop');
@@ -829,6 +1100,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           // our own side cleanly; a camd started separately keeps running, which
           // is correct — we did not start it and must not assume we own it.
           camd.stop();
+          await ptz.stop();
           atem?.stop();
           atemWrites?.stop();
           await visca?.stop();
@@ -925,6 +1197,18 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Proxied rather than linked directly so the browser only ever talks to
       // cambridge, and camd can stay bound to loopback.
       m = path.match(/^\/api\/cameras\/([^/]+)\/liveview$/);
+      if (m && req.method === 'GET' && isPtz(decodeURIComponent(m[1]))) {
+        // A PTZ head gives single frames; the panel only ever asks for single
+        // frames (see startFeed), so there is no stream to emulate.
+        const frame = await ptz.snapshot(decodeURIComponent(m[1]));
+        if (!frame.ok) return sendJson(res, frame.status || 502, frame.body ?? { error: 'no picture' });
+        res.writeHead(200, {
+          'Content-Type': frame.contentType ?? 'image/jpeg',
+          'Content-Length': frame.body.length,
+          'Cache-Control': 'no-store',
+        });
+        return res.end(frame.body);
+      }
       if (m && req.method === 'GET') {
         const cameraId = decodeURIComponent(m[1]);
         const single = url.searchParams.get('single') === '1';
@@ -983,8 +1267,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     gangs,
     atem,
     visca,
+    ptz,
     start() {
-      camd.start();
+      if (camdUsed) camd.start();
+      // Cameras into the state model before their first event can arrive, so
+      // a connection state never lands on a camera the model does not know.
+      state.replaceAll(ptz.snapshots(), null, 'ptz');
+      ptz.start();
       if (atem) {
         log.info('atem', `watching switcher at ${cfg.atem.host}:${cfg.atem.port} for tally`);
         atem.start();
@@ -1023,6 +1312,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     },
     async stop() {
       camd.stop();
+      await ptz.stop();
       atem?.stop();
       atemWrites?.stop();
       await visca?.stop();

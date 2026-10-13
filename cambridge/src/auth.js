@@ -62,8 +62,17 @@ export function pinMatches(pin, stored) {
 export const ADMIN_ROUTES = [
   /^POST \/api\/adopt$/,               // stores camera credentials
   /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+$/, // forgets or re-credentials a body
+  // The routes the panel actually calls to forget or re-credential a camera.
+  // The line above guarded a path nothing used, which left these at operator.
+  /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+\/adoption$/,
   /^POST \/api\/shutdown$/,            // stops the app for everyone
   /^POST \/api\/auth\/pin$/,           // changes who can get in
+  /^POST \/api\/ptz\/(detect|cameras)$/, // probes with, and stores, PTZ credentials
+  // Settings that outlast a shoot on the camera itself: network, users,
+  // firmware, reboot, factory reset. The table marks which ones they are; the
+  // route is separate so the check is here, not remembered per setting.
+  /^PUT \/api\/cameras\/[^/]+\/admin-settings\/[^/]+$/,
+  /^POST \/api\/cameras\/[^/]+\/admin-actions\/[^/]+$/,
 ];
 
 /** Routes anyone may take, PIN or not — the login flow itself, and health. */

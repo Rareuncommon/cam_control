@@ -9,6 +9,7 @@
 
 import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { isIP } from 'node:net';
 
 /** Turns a model and MAC into a stable, readable, filesystem-safe id. */
 export function suggestId(model, mac, taken = new Set()) {
@@ -42,10 +43,12 @@ export class Adoption {
    * @param {import('./camd-client.js').CamdClient} camd
    * @param {import('./log.js').Logger} log
    */
-  constructor(configPath, camd, log) {
+  constructor(configPath, camd, log, ptz = null) {
     this.configPath = configPath;
     this.camd = camd;
     this.log = log;
+    /** @type {import('./ptz/source.js').PtzSource | null} */
+    this.ptz = ptz;
   }
 
   readConfig() {
@@ -156,10 +159,12 @@ export class Adoption {
   async forget(id) {
     const cfg = this.readConfig();
     const before = (cfg.cameras ?? []).length;
+    const gone = (cfg.cameras ?? []).find((c) => c.id === id);
     cfg.cameras = (cfg.cameras ?? []).filter((c) => c.id !== id);
     if (cfg.cameras.length === before) return { ok: false, error: `no camera "${id}" in config` };
 
-    await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+    if (gone?.kind === 'ptz') await this.ptz?.remove(id);
+    else await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
     try {
       this.writeConfig(cfg);
     } catch (err) {
@@ -187,11 +192,24 @@ export class Adoption {
       entry.auth = { ...(entry.auth ?? {}), password: changes.password };
       credentialsChanged = true;
     }
+    // A PTZ head is reached by address, not discovered by MAC, so its address
+    // is something an operator edits. A Sony body's is whatever camd finds.
+    if (entry.kind === 'ptz' && typeof changes.ip === 'string' && changes.ip.trim()) {
+      if (!isIP(changes.ip.trim())) return { ok: false, error: `"${changes.ip}" is not an IP address` };
+      entry.ip = changes.ip.trim();
+    }
 
     try {
       this.writeConfig(cfg);
     } catch (err) {
       return { ok: false, error: `could not save config: ${err.message}` };
+    }
+
+    if (entry.kind === 'ptz') {
+      await this.ptz?.update(id, entry);
+      this.log.info('adopt',
+        `updated ${id}${credentialsChanged ? ' (new credentials)' : ''}: ${entry.label}`);
+      return { ok: true, camera: { ...entry, auth: undefined } };
     }
 
     // A label change is cosmetic and can be applied live. New credentials only
@@ -205,6 +223,61 @@ export class Adoption {
 
     this.log.info('adopt',
       `updated ${id}${credentialsChanged ? ' (new credentials)' : ''}: ${entry.label}`);
+    return { ok: true, camera: { ...entry, auth: undefined } };
+  }
+
+  /**
+   * Adds a PTZ camera found by add-by-IP.
+   *
+   * Same shape of guarantee as adopt(): the camera starts being controlled and
+   * the config records it, or neither happens.
+   *
+   * @param {{ip: string, vendor: string, model?: string, label?: string, id?: string,
+   *          username?: string, password?: string, port?: number, options?: object}} input
+   */
+  async addPtz(input) {
+    const ip = String(input.ip ?? '').trim();
+    if (!isIP(ip)) return { ok: false, error: 'a valid IP address is required' };
+    if (!input.vendor) return { ok: false, error: 'which kind of camera is it?' };
+    if (!this.ptz) return { ok: false, error: 'PTZ control is not running' };
+
+    const cfg = this.readConfig();
+    cfg.cameras ??= [];
+    if (cfg.cameras.some((c) => c.kind === 'ptz' && c.ip === ip)) {
+      return { ok: false, error: `a camera at ${ip} is already added` };
+    }
+    const taken = new Set(cfg.cameras.map((c) => c.id));
+    const id = input.id?.trim() || suggestId(input.model || input.vendor, ip.replace(/\./g, ''), taken);
+    if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
+
+    const entry = {
+      id,
+      kind: 'ptz',
+      vendor: String(input.vendor).toLowerCase(),
+      label: input.label?.trim() || input.model || id,
+      model: input.model || '',
+      ip,
+      ...(Number.isInteger(input.port) ? { port: input.port } : {}),
+      auth: {
+        username: input.username?.trim() ?? '',
+        password: input.password ?? '',
+      },
+      ...(input.options && typeof input.options === 'object' ? { options: input.options } : {}),
+    };
+
+    try {
+      cfg.cameras.push(entry);
+      this.writeConfig(cfg);
+    } catch (err) {
+      this.log.error('adopt', `config write failed, ${id} not added: ${err.message}`);
+      return { ok: false, error: `could not save config: ${err.message}` };
+    }
+    try {
+      this.ptz.add(entry);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    this.log.info('adopt', `added ${entry.vendor} ${entry.model || 'PTZ'} at ${ip} as "${entry.label}" (${id})`);
     return { ok: true, camera: { ...entry, auth: undefined } };
   }
 }

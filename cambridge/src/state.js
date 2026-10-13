@@ -11,6 +11,7 @@
 
 import { EventEmitter } from 'node:events';
 import { decorate, RECORDING_STATE } from './normalise.js';
+import { labelFor } from './ptz/schema.js';
 
 /**
  * One camera's status, from either a snapshot or a statusUpdate event.
@@ -55,15 +56,30 @@ export class StateModel extends EventEmitter {
     /** @type {Map<string, object>} */
     this.cameras = new Map();
     this.camdConnected = false;
+    /**
+     * Whether this installation has Sony bodies at all. A PTZ-only venue runs
+     * without camd, and "the camera daemon is not reachable" would be a false
+     * alarm about a process that was never meant to be there.
+     */
+    this.camdUsed = true;
     this.backend = 'unknown';
+    /** cameraId -> { capabilities, byId: Map } for PTZ cameras. */
+    this.ptzSchemas = new Map();
     /** Completed and in-flight takes, oldest first. @type {object[]} */
     this.takes = [];
     /** cameraId -> { wanted: 'start'|'stop', at: number } */
     this.recordIntent = new Map();
   }
 
-  /** Rebuilds from camd's snapshot. Cameras absent from the snapshot are dropped. */
-  replaceAll(snapshotList, backend) {
+  /**
+   * Rebuilds one source's cameras from its snapshot. Cameras of that source
+   * absent from the snapshot are dropped; the other source's are untouched.
+   *
+   * Scoped by source because there are now two: a camd hello lists only the
+   * Sony bodies, and treating it as the whole world would delete every PTZ
+   * camera each time the daemon reconnected.
+   */
+  replaceAll(snapshotList, backend, source = 'camd') {
     if (backend) this.backend = backend;
     const seen = new Set();
     for (const snap of snapshotList) {
@@ -71,19 +87,25 @@ export class StateModel extends EventEmitter {
       const existing = this.cameras.get(snap.id);
       this.cameras.set(snap.id, {
         ...(existing ?? {}),
-        ...this.#fromSnapshot(snap),
+        ...this.#fromSnapshot(snap, source),
         // Properties are intentionally not carried over: they are refetched.
         properties: existing?.properties ?? {},
       });
     }
-    for (const id of [...this.cameras.keys()]) {
-      if (!seen.has(id)) this.cameras.delete(id);
+    for (const [id, cam] of [...this.cameras]) {
+      if ((cam.source ?? 'camd') === source && !seen.has(id)) {
+        this.cameras.delete(id);
+        this.ptzSchemas.delete(id);
+      }
     }
     this.emit('change', { type: 'all' });
   }
 
-  #fromSnapshot(snap) {
+  #fromSnapshot(snap, source) {
     return {
+      source,
+      kind: source === 'ptz' ? 'ptz' : 'cine',
+      vendor: snap.vendor ?? (source === 'ptz' ? '' : 'sony'),
       id: snap.id,
       label: snap.label,
       model: snap.model,
@@ -272,8 +294,10 @@ export class StateModel extends EventEmitter {
     this.camdConnected = connected;
     if (!connected) {
       // The daemon is gone: every camera's state is unknown, and saying so is the
-      // point. Fail loud in the UI.
+      // point. Fail loud in the UI. Only camd's cameras, though — a PTZ head
+      // does not go through the daemon and is exactly as reachable as before.
       for (const cam of this.cameras.values()) {
+        if ((cam.source ?? 'camd') !== 'camd') continue;
         cam.state = 'offline';
         cam.detail = 'camd unreachable';
         cam.properties = {};
@@ -282,13 +306,56 @@ export class StateModel extends EventEmitter {
     this.emit('change', { type: 'camdConnection', connected });
   }
 
+  // --- PTZ ------------------------------------------------------------------
+
+  /** The table for a PTZ camera, kept so values can be labelled. */
+  setPtzSchema(cameraId, schema) {
+    this.ptzSchemas.set(cameraId, {
+      capabilities: schema?.capabilities ?? null,
+      byId: new Map((schema?.entries ?? []).map((e) => [e.id, e])),
+    });
+    this.emit('change', { type: 'ptzSchema', cameraId });
+  }
+
+  /** Several PTZ values at once — one poll answers many — as one change event. */
+  mergeProperties(cameraId, values) {
+    const cam = this.ensure(cameraId);
+    cam.properties = { ...cam.properties, ...values };
+    this.emit('change', { type: 'properties', cameraId });
+  }
+
+  /** Position, motion, tracking: the fast-changing part of a PTZ head. */
+  applyPtz(cameraId, ptz) {
+    const cam = this.cameras.get(cameraId);
+    if (!cam) return;
+    cam.ptz = { ...(cam.ptz ?? {}), ...ptz };
+    this.emit('change', { type: 'ptz', cameraId });
+  }
+
+  #decoratePtz(cameraId, name, p) {
+    const entry = this.ptzSchemas.get(cameraId)?.byId.get(name);
+    const out = { raw: p.value, label: labelFor(entry, p.value), writable: !!p.writable };
+    // Options travel in the schema, fetched once. Only a list the camera
+    // narrows at run time (formats that depend on frequency, say) rides along
+    // with every push, because the full set for four cameras on every
+    // joystick-driven position update would be most of the payload.
+    if (Array.isArray(p.allowed)) {
+      out.options = p.allowed.map((raw) => ({ raw, label: labelFor(entry, raw) }));
+    }
+    if (p.range) out.range = p.range;
+    return out;
+  }
+
   /** The shape the browser consumes: raw values plus labels and options. */
   view() {
     return {
       camdConnected: this.camdConnected,
+      camdUsed: this.camdUsed,
       backend: this.backend,
       cameras: this.list().map((cam) => ({
         id: cam.id,
+        kind: cam.kind ?? 'cine',
+        vendor: cam.vendor ?? 'sony',
         label: cam.label,
         model: cam.model,
         ip: cam.ip,
@@ -306,8 +373,13 @@ export class StateModel extends EventEmitter {
             cam.status.recordingState === RECORDING_STATE.FAILED ? 'FAILED'
               : cam.status.recording ? 'REC' : 'idle',
         },
+        ...(cam.kind === 'ptz' ? {
+          ptz: cam.ptz ?? null,
+          capabilities: this.ptzSchemas.get(cam.id)?.capabilities ?? null,
+        } : {}),
         properties: Object.fromEntries(
-          Object.entries(cam.properties).map(([name, p]) => [name, decorate(name, p)]),
+          Object.entries(cam.properties).map(([name, p]) => [name,
+            cam.kind === 'ptz' ? this.#decoratePtz(cam.id, name, p) : decorate(name, p)]),
         ),
       })),
     };
