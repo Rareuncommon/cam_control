@@ -173,6 +173,16 @@ export class PtzDriver {
   // eslint-disable-next-line no-unused-vars
   async setTally(state) { throw new DriverError('no tally lamp', { kind: 'unsupported' }); }
 
+  /**
+   * Optional: change notifications, for protocols that push (an event stream,
+   * a long-poll, a notification socket). Called once after connect; deliver
+   * values in the same shape read() returns, and position/status through
+   * onPtz. Must not throw for a dropped stream — reconnect it quietly or let
+   * it go; polling continues either way. close() ends it.
+   *
+   * subscribe({ onValues, onPtz }) {}
+   */
+
   /** Release sockets. Called when a camera is removed or CamBridge stops. */
   close() {}
 }

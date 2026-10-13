@@ -207,6 +207,20 @@ export class PtzCamera extends EventEmitter {
     this.emit('schema', { cameraId: this.id });
     this.log('info', `connected: ${identity.vendor} ${identity.model}${identity.firmware ? ` fw ${identity.firmware}` : ''}`);
 
+    // Push, where the protocol has it. Polling carries on regardless: push
+    // makes a change from Reactor show up at once, polling makes sure a
+    // dropped event stream never leaves the panel quietly wrong.
+    if (typeof this.driver.subscribe === 'function') {
+      try {
+        this.driver.subscribe({
+          onValues: (got) => { this.lastOk = Date.now(); this.#absorb(got); },
+          onPtz: (p) => this.#ptzStatus(p),
+        });
+      } catch (err) {
+        this.log('warn', `change notifications unavailable: ${describe(err)}`);
+      }
+    }
+
     // Everything once, up front, so the panel is complete within a few seconds
     // rather than filling in over a full sweep.
     await this.#readEntries(this.entries.filter((e) => e.type !== 'action' && e.poll !== 'never'), PRIORITY.POLL);
