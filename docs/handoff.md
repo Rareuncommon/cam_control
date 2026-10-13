@@ -15,6 +15,11 @@ USB-C→LAN adapters on a dedicated production VLAN at static addresses. Control
 machine is an Apple Silicon Mac. Everything runs on the studio LAN; there are no
 cloud dependencies and that is deliberate.
 
+**A second venue** has PTZ heads and no cinema bodies: a Panasonic AW-UE160, a
+Sony BRC-AM7, a Canon CR-N500 and a PTZOptics Move SE, a SKAARHOJ PTZ Extreme
+running Reactor, and Companion — with more heads to come, so it is built for
+dozens. See [ptz.md](ptz.md).
+
 ## Architecture — the one rule that must not be broken
 
 Two processes:
@@ -28,6 +33,13 @@ Two processes:
 
 Anything that decides *what a value means* or *whether an action is wise* goes
 in cambridge. If a change would put that in camd, it is the wrong change.
+
+**PTZ heads do not go through camd.** No SDK is involved; each head speaks its
+own network protocol, and the drivers live in `cambridge/src/ptz/`. The same
+split applies inside: drivers are protocol only, and `ptz/lifecycle.js` owns
+policy — polling, heartbeat, reconnect, the motion deadman — identically for
+every make. A venue with only PTZ heads runs without camd at all (`venue.js`
+decides, and the launchers ask it).
 
 Corollaries that have already been tested by real bugs:
 - `cambridge` has **zero npm dependencies**. Nothing to install before a shoot.
@@ -81,7 +93,16 @@ thirds/centre/safe/mattes); panel access control (scrypt PINs, operator/admin,
 bearer tokens for machine clients, audit trail); ATEM tally; ATEM Link; VISCA
 server; gamepad; a Bitfocus Companion module.
 
-**Tests: 60 camd (C++), 175 cambridge (Node), 28 Companion module.**
+PTZ: drivers for all four makes, each built from the maker's protocol document
+(notes with page citations) and tested against a protocol simulator built from
+the same document; the panel's Operate card, settings sheet with admin section,
+presets with pictures, camera bus for big venues, groups, bulk add; Companion
+with a selected camera and banks; SKAARHOJ Raw Panel drive mode with banks;
+VISCA forwarding to PTZ heads; change-only event stream; `ptz-report.sh` and
+`ptz-rehearse.mjs`. An independent review of motion safety, credentials and
+admin guardrails was done and its findings fixed, each with a regression test.
+
+**Tests: 60 camd (C++), 338 cambridge (Node), 85 Companion module.**
 
 ## Verified on real hardware vs only against the fake backend
 
@@ -99,6 +120,13 @@ camera 2 refuses a focus point.
   the CRSDK headers first, because guessing a property name compiles into a
   silent no-op, which is the worst outcome for an alarm.
 
+**PTZ — nothing is verified on a real camera or panel yet.** Everything is
+proven against simulators built from the makers' documents, which shows CamBridge
+matches our reading of the spec, not that the camera does. `ptz-report.sh` lists
+what each camera really answers and which settings are marked *verify*. The
+camera-specific checks are in [ptz.md](ptz.md#camera-notes--what-to-check-on-site),
+the panel's in [skaarhoj.md](skaarhoj.md).
+
 ## Open questions, with the next step for each
 
 1. **Can the FX3/FX30 accept a focus point at all?** Camera 2 answers
@@ -112,6 +140,13 @@ camera 2 refuses a focus point.
    a camera-state problem). Not re-tested since the `onError` teardown fix.
 3. **Record-stop took ~10 s.** Not re-measured since the teardown fix.
 4. **ATEM tally and VISCA** need real hardware to confirm byte-level variants.
+5. **PTZ on site:** run `./scripts/ptz-report.sh --out ptz.txt` with every head
+   connected; then work through the *verify* list and the per-camera checks in
+   `ptz.md`. On the BRC-AM7, switch on VISCA first (rear SETUP switch 4, admin
+   password set).
+6. **SKAARHOJ:** whether Reactor and CamBridge can both hold the PTZ Extreme at
+   once (the maker's documents disagree), and whether the topology-driven layout
+   picks the right controls.
 
 ## Method that has actually worked here
 

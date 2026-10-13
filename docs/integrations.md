@@ -1,14 +1,17 @@
 # Integrations
 
-Four ways to drive CamBridge from something other than the web panel. All are
-off until switched on, and none of them is required.
+Ways to drive CamBridge from something other than the web panel. All are off
+until switched on, and none of them is required.
 
 | | Where it is configured | Needs hardware to confirm |
 |---|---|---|
 | Bitfocus Companion | in Companion | no |
 | ATEM tally | `config/cambridge.json` | **yes** |
 | VISCA | `config/cambridge.json` | **yes** |
+| SKAARHOJ panel (PTZ) | Setup, or `config/cambridge.json` — see [skaarhoj.md](skaarhoj.md) | **yes** |
 | Gamepad | in the browser | no |
+
+PTZ cameras themselves are covered in [ptz.md](ptz.md).
 
 ---
 
@@ -16,7 +19,7 @@ off until switched on, and none of them is required.
 
 A full Companion module lives in `companion-module-cambridge/`. It gives a
 Stream Deck record buttons that go red on their own, exposure on physical keys,
-scene recall, and tally.
+scene recall, tally, and press-and-hold control of every PTZ head.
 
 ### Installing
 
@@ -60,6 +63,34 @@ plus `_raw` variants for expressions. Global: `camera_count`,
 `connected_count`, `recording_count`, `cameras_down`, `daemon`, `tally_program`.
 
 Values are the labels the camera itself shows — `f/4.0`, not `400`.
+
+### PTZ cameras
+
+**A selected camera.** One Stream Deck page drives any number of heads, the way a
+hardware PTZ controller does. "PTZ: select camera" picks one: a camera, a bank
+slot, or next/previous, optionally within a group. Every PTZ action can target
+**(selected camera)**, which is the default for new buttons. The
+`ptz_selected_*` variables show the selected head's state.
+
+**Banks.** The **PTZ controller** preset page has eight camera keys (the bank
+size is configurable), bank next/previous, the 8-way pad, zoom, focus, home, AF,
+tracking, presets 1–8 and STOP ALL — all acting on the selected camera. A camera
+key shows tally ahead of "selected": on air matters more.
+
+**Press and hold.** Pan, tilt, zoom and focus keys move while held and stop on
+release. The module refreshes the move every 150 ms so CamBridge's deadman keeps
+it alive. If Companion stops or loses CamBridge, the head stops within half a
+second. A key whose release never arrives is stopped after the hold ceiling
+(15 s by default, configurable).
+
+**Set any setting** offers every ordinary setting on the camera, from its own
+table. Admin settings — network, users, firmware — are not offered.
+
+**Big venues:** the module option "Ready-made buttons for every PTZ camera" can
+be turned off; the controller page covers every camera through banks.
+
+The full list of actions, feedbacks and variables is in the module's own help
+(`companion-module-cambridge/companion/HELP.md`).
 
 ### Two things worth knowing
 
@@ -229,13 +260,50 @@ controllers differ, and it costs nothing to take either.
 | `CAM_Memory` set / recall | Saves and recalls a CamBridge preset named `visca-<n>` |
 | Iris / gain / shutter / focus / WB inquiries | Answered from live state |
 
-**Pan, tilt and zoom are refused**, with a VISCA "not executable" error rather
-than silence. These are cinema bodies with no motorised head; a controller that
-is told so shows the operator the axis does nothing, instead of leaving them
+**On the cinema bodies, pan, tilt and zoom are refused**, with a VISCA "not
+executable" error rather than silence. They have no motorised head; a controller
+that is told so shows the operator the axis does nothing, instead of leaving them
 pushing a stick and wondering.
 
 Every command goes through the same path as a change made in the browser, so it
 is logged and gang-aware.
+
+### PTZ heads
+
+For PTZ heads the common VISCA subset is forwarded to the head's own driver:
+pan/tilt drive, home, zoom and focus (variable or standard speed), focus
+auto/manual, one-push AF, and preset recall. Most heads speak VISCA themselves;
+this earns its place because the Canon does not, and because one controller then
+drives every head through the same deadman and logging as the panel.
+
+Motion from a controller is held safely:
+
+- **Over TCP**, a move is latched until the controller sends its stop, and is
+  released the moment its connection closes.
+- **Over UDP** there is no connection to watch, so a move is held for
+  `udpHoldMs` (default 10 s) unless the controller repeats it.
+
+Messages are taken whole and in order, however TCP splits or merges them. A stop
+goes to the camera its move went to, even if the camera order changed in
+between.
+
+```json
+"visca": {
+  "enabled": true,
+  "port": 52381,
+  "allow": ["192.0.2.40", "192.0.2.64/28"],
+  "cameraPorts": { "stage-left": 52401, "stage-right": 52402 },
+  "allowPresetStore": false,
+  "udpHoldMs": 10000
+}
+```
+
+| Option | Does |
+|---|---|
+| `allow` | controller addresses (or blocks) that may send commands. VISCA carries no credentials and the PIN does not apply to it, so set this; empty accepts any host, and says so in the log |
+| `cameraPorts` | a port per camera. A VISCA address is three bits, so the shared port can tell at most seven cameras apart — and VISCA-over-IP controllers choose a camera by IP and port anyway. Add CamBridge to the controller once per camera, at this machine's address and that camera's port |
+| `allowPresetStore` | lets a controller store over or delete a head's own presets. Off by default; recall always works |
+| `udpHoldMs` | how long a UDP controller's move lasts without a repeat |
 
 ### What still needs real hardware
 

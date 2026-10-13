@@ -37,6 +37,13 @@ The panel is served to the whole network. The URLs are printed at startup and
 also in `logs/cambridge.stdout.log`; use the one on the same subnet as the iPad.
 For this studio that is the `172.16.16.x` address, the production VLAN.
 
+## PTZ cameras
+
+PTZ heads — Panasonic, Sony, Canon and PTZOptics — are added in Setup by IP
+address, one at a time or a whole list at once, and need no daemon or SDK. A
+venue with only PTZ heads runs without camd entirely. Everything about them is in
+[ptz.md](ptz.md).
+
 ## Adding cameras — the Setup tab
 
 No config editing. Open **Setup** and you get every camera CamBridge can see on

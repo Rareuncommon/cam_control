@@ -70,7 +70,31 @@
       "cam1": 1,
       "cam2": 2,
       "cam3": 3
-    }
+    },
+    "$comment_allow": "Controller addresses (or blocks) allowed to send commands. VISCA has no credentials and the PIN does not apply to it; empty accepts any host and says so in the log.",
+    "allow": [],
+    "$comment_cameraPorts": "A port per camera, for more than seven cameras or controllers that pick a camera by IP and port: { \"stage-left\": 52401 }.",
+    "cameraPorts": {},
+    "$comment_allowPresetStore": "Let a controller store over or delete a PTZ head's own presets. Recall always works.",
+    "allowPresetStore": false,
+    "$comment_udpHoldMs": "How long a UDP controller's PTZ move lasts without a repeat. TCP controllers are released when they disconnect.",
+    "udpHoldMs": 10000
+  },
+
+  "ptz": {
+    "$comment": "PTZ heads (Panasonic, Sony, Canon, PTZOptics) — see docs/ptz.md. The defaults suit most venues; these are the ones worth knowing.",
+    "$comment_deadmanMs": "A move not refreshed for this long is stopped.",
+    "deadmanMs": 500,
+    "$comment_tallyFromAtem": "Light the cameras' own tally lamps from the switcher. Leave off if Reactor already drives them.",
+    "tallyFromAtem": false
+  },
+
+  "skaarhoj": {
+    "$comment": "SKAARHOJ panel. 'reactor' (default): Reactor drives the cameras and CamBridge follows. 'drive': CamBridge drives the panel over Raw Panel — switch the panel to Raw Panel Mode first. See docs/skaarhoj.md.",
+    "mode": "reactor",
+    "host": "",
+    "port": 9923,
+    "mapping": {}
   },
 
   "alarms": {
@@ -113,6 +137,20 @@
         "password": "REPLACE_ME"
       },
       "fingerprint": ""
+    },
+    {
+      "$comment": "A PTZ head. Normally added from Setup (add-by-IP or bulk add), which writes this for you. vendor: panasonic | sony | canon | ptzoptics.",
+      "id": "stage-left",
+      "kind": "ptz",
+      "vendor": "panasonic",
+      "label": "Stage left",
+      "ip": "192.0.2.21",
+      "group": "Stage",
+      "auth": {
+        "username": "REPLACE_ME",
+        "password": "REPLACE_ME"
+      },
+      "options": {}
     },
     {
       "id": "cam3",
