@@ -104,6 +104,27 @@ export class Adoption {
   }
 
   /**
+   * Merges `patch` into one top-level block of the config file, re-reading
+   * first for the same reason saveAuth does: a setting changed here must not
+   * roll back a camera adopted a moment earlier from another browser. Keys
+   * not in the patch — a hand-edited SKAARHOJ mapping, say — are kept.
+   *
+   * @returns {{ok: true, block: object} | {ok: false, error: string}}
+   */
+  saveSection(name, patch) {
+    try {
+      const cfg = this.readConfig();
+      const block = { ...(cfg[name] && typeof cfg[name] === 'object' ? cfg[name] : {}), ...patch };
+      cfg[name] = block;
+      this.writeConfig(cfg);
+      return { ok: true, block };
+    } catch (err) {
+      this.log?.error('config', `could not save ${name}: ${err.message}`);
+      return { ok: false, error: `could not save ${name}: ${err.message}` };
+    }
+  }
+
+  /**
    * Adopt a discovered camera.
    * @param {{mac:string,model?:string,ip?:string,label?:string,username?:string,password?:string,id?:string}} input
    */
