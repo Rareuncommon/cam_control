@@ -5,9 +5,11 @@
 // and cheap, but a camera that half-answers another vendor's probe should not
 // be misidentified, so the most specific probes go first.
 
+import { PanasonicAw } from './panasonic-aw.js';
 import { FakePtz } from './fake.js';
 
 export const DRIVERS = new Map([
+  [PanasonicAw.vendor, PanasonicAw],
   [FakePtz.vendor, FakePtz],
 ]);
 
