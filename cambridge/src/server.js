@@ -920,9 +920,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 
       if (path === '/api/auth/login' && req.method === 'POST') {
         const body = await readBody(req);
-        const result = auth.login(body?.pin ?? '');
+        const from = req.socket?.remoteAddress ?? '?';
+        const result = await auth.attemptLogin(body?.pin ?? '', from);
         if (!result.ok) {
-          log.warn('auth', `failed sign-in attempt from ${req.socket?.remoteAddress ?? '?'}`);
+          if (result.status === 429) {
+            res.setHeader('Retry-After', String(result.retryAfter ?? 1));
+            return sendJson(res, 429, { error: result.error });
+          }
+          log.warn('auth', `failed sign-in attempt from ${from}`);
           return sendJson(res, 401, { error: result.error });
         }
         if (result.cookie) {

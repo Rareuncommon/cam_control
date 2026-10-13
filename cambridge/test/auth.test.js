@@ -262,3 +262,29 @@ test('one PIN level still requires that PIN — the fallback is not a bypass', (
     'unauthenticated must still be refused');
   assert.equal(auth.authorise('POST', '/api/adopt', req()).status, 401);
 });
+
+test('sign-in checks run off the main thread and lock out an address that keeps guessing', async () => {
+  const { LOGIN_LIMITS } = await import('../src/auth.js');
+  const auth = new Auth({ operatorPin: hashPin('1111') });
+  // The event loop keeps turning while PINs are checked.
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+  await Promise.all([1, 2, 3].map(() => auth.attemptLogin('0000', 'a')));
+  clearInterval(timer);
+  assert.ok(ticks > 0, 'timers ran during the checks');
+  for (let i = 3; i < LOGIN_LIMITS.failures; i++) await auth.attemptLogin('0000', 'a');
+  const locked = await auth.attemptLogin('1111', 'a');
+  assert.equal(locked.status, 429, 'even the right PIN waits out the lockout');
+  assert.ok(locked.retryAfter > 0);
+  const other = await auth.attemptLogin('1111', 'b');
+  assert.equal(other.ok, true, 'another address is unaffected');
+  assert.equal(other.role, 'operator');
+});
+
+test('more PIN checks at once than the limit are told to wait', async () => {
+  const { LOGIN_LIMITS } = await import('../src/auth.js');
+  const auth = new Auth({ operatorPin: hashPin('1111') });
+  const results = await Promise.all(Array.from({ length: LOGIN_LIMITS.concurrent + 3 },
+    (_, i) => auth.attemptLogin('0000', `addr${i}`)));
+  assert.ok(results.some((r) => r.status === 429 && /Busy/.test(r.error)));
+});

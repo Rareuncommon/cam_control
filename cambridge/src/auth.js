@@ -24,7 +24,29 @@
 // removing cameras, reading credentials and quitting the app are admin, because
 // those are the actions whose consequences survive the person who took them.
 
-import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { randomBytes, scryptSync, scrypt, timingSafeEqual, createHash } from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(scrypt);
+
+/**
+ * Sign-in limits. scrypt is slow on purpose, which makes it a lever: a script
+ * firing PINs at the login route used to run it on the main thread, and a
+ * review measured a 500 ms motion deadman firing after six seconds under such
+ * a flood. Checks now run off the main thread, a few at a time, and an
+ * address that keeps getting the PIN wrong is made to wait — which also puts
+ * a four-digit PIN out of brute-force reach.
+ */
+export const LOGIN_LIMITS = Object.freeze({
+  /** Wrong PINs from one address before it is locked out. */
+  failures: 5,
+  /** …within this window. */
+  windowMs: 5 * 60_000,
+  /** How long the lockout lasts. */
+  lockMs: 5 * 60_000,
+  /** PIN checks running at once, across everyone. */
+  concurrent: 4,
+});
 
 /** Sessions last a working day; a booth iPad should not log in twice a shoot. */
 export const SESSION_TTL_MS = 16 * 60 * 60 * 1000;
@@ -46,6 +68,16 @@ export function hashPin(pin, salt = randomBytes(16).toString('hex')) {
 export function pinMatches(pin, stored) {
   if (!stored?.salt || !stored?.hash) return false;
   const candidate = Buffer.from(scryptSync(String(pin), stored.salt, 32).toString('hex'));
+  const known = Buffer.from(String(stored.hash));
+  if (candidate.length !== known.length) return false;
+  return timingSafeEqual(candidate, known);
+}
+
+/** pinMatches without blocking the event loop: the one the login route uses. */
+export async function pinMatchesAsync(pin, stored) {
+  if (!stored?.salt || !stored?.hash) return false;
+  const derived = await scryptAsync(String(pin), stored.salt, 32);
+  const candidate = Buffer.from(derived.toString('hex'));
   const known = Buffer.from(String(stored.hash));
   if (candidate.length !== known.length) return false;
   return timingSafeEqual(candidate, known);
@@ -116,6 +148,9 @@ export class Auth {
     this.tokens = cfg.tokens ?? {};               // { token: 'operator' | 'admin' }
     /** @type {Map<string, {role: string, expires: number, label: string}>} */
     this.sessions = new Map();
+    /** address -> { count, first, lockedUntil } */
+    this.failures = new Map();
+    this.checking = 0;
   }
 
   /**
@@ -165,6 +200,54 @@ export class Auth {
       return { ok: true, role: 'operator', cookie: this.#issue('operator', 'operator') };
     }
     return { ok: false, error: 'That PIN was not recognised.' };
+  }
+
+  /**
+   * The login route's sign-in: rate limited, and the PIN check off the main
+   * thread. `login` above stays for callers that need it synchronously.
+   *
+   * @returns {Promise<{ok: boolean, cookie?: string, role?: string, open?: boolean,
+   *   error?: string, status?: number, retryAfter?: number}>}
+   */
+  async attemptLogin(pin, address = 'unknown') {
+    if (!this.enabled) return { ok: true, role: 'admin', open: true };
+    const now = Date.now();
+    const f = this.failures.get(address);
+    if (f?.lockedUntil > now) {
+      const s = Math.ceil((f.lockedUntil - now) / 1000);
+      return { ok: false, status: 429, retryAfter: s,
+        error: `Too many wrong PINs from this device. Try again in ${Math.ceil(s / 60)} minute${s > 60 ? 's' : ''}.` };
+    }
+    if (this.checking >= LOGIN_LIMITS.concurrent) {
+      return { ok: false, status: 429, retryAfter: 1, error: 'Busy — try again in a moment.' };
+    }
+    this.checking += 1;
+    let role = null;
+    try {
+      // Admin first, so setting the same PIN for both does not demote whoever set it.
+      if (this.adminPin && await pinMatchesAsync(pin, this.adminPin)) role = 'admin';
+      else if (this.operatorPin && await pinMatchesAsync(pin, this.operatorPin)) role = 'operator';
+    } finally {
+      this.checking -= 1;
+    }
+    if (role) {
+      this.failures.delete(address);
+      return { ok: true, role, cookie: this.#issue(role, role) };
+    }
+    // Re-read after the check: guesses in parallel must each count, or a
+    // script sending them concurrently would never reach the lockout.
+    const cur = this.failures.get(address);
+    const at = Date.now();
+    const rec = cur && at - cur.first <= LOGIN_LIMITS.windowMs ? cur : { count: 0, first: at, lockedUntil: 0 };
+    rec.count += 1;
+    if (rec.count >= LOGIN_LIMITS.failures) {
+      rec.lockedUntil = at + LOGIN_LIMITS.lockMs;
+      this.log('warn', 'auth', `${address} locked out after ${rec.count} wrong PINs`);
+    }
+    this.failures.set(address, rec);
+    // Bounded: a scan from many addresses must not grow this without limit.
+    if (this.failures.size > 1000) this.failures.delete(this.failures.keys().next().value);
+    return { ok: false, status: 401, error: 'That PIN was not recognised.' };
   }
 
   logout(cookieId) { return this.sessions.delete(cookieId); }
