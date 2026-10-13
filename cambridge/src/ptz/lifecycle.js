@@ -33,9 +33,21 @@ export const DEFAULTS = Object.freeze({
   /** Position otherwise — still often enough to notice a panel move. */
   positionIdleMs: 2000,
   statusMs: 1000,
-  /** One batch of settings every this often; a full sweep takes (entries / batch) × this. */
-  settingsMs: 400,
-  /** Settings marked poll:'fast' (modes that flip under an operator's feet). */
+  /**
+   * One batch of settings every this often; a full sweep takes
+   * (entries / batch) × this. The sweep is the long tail — menu settings
+   * nobody touches mid-shot — so it is unhurried: at a venue with dozens of
+   * heads, every request here is one more a camera's small web server has to
+   * answer alongside Reactor's.
+   */
+  settingsMs: 1000,
+  /** The same, for a camera that pushes its own changes: polling is only the safety net. */
+  pushSettingsMs: 3000,
+  /**
+   * Settings marked poll:'fast', and every Operate control — iris, gain,
+   * shutter, white balance: the ones someone may change from Reactor in the
+   * middle of a shot, and that the panel must not show stale for long.
+   */
   fastSettingsMs: 2000,
   deadmanMs: 500,
   commandTimeoutMs: 3000,
@@ -44,6 +56,10 @@ export const DEFAULTS = Object.freeze({
 });
 
 const describe = (err) => (err instanceof Error ? err.message : String(err));
+
+/** Polled every fastSettingsMs: marked fast, or on the Operate card. */
+const isFast = (e) => e.type !== 'action' && !e.writeOnly && e.poll !== 'never' && e.poll !== 'once'
+  && (e.poll === 'fast' || e.operate === true);
 
 /** How a failed driver call maps onto the HTTP-ish shape the server already speaks. */
 function failure(err) {
@@ -263,7 +279,10 @@ export class PtzCamera extends EventEmitter {
     this.#poll('position');
     this.#poll('status');
     if (this.stopped || this.state !== 'connected') return;
-    this.due = { heartbeat: 0, position: 0, status: 0, settings: 0, fast: 0 };
+    // Staggered, so forty cameras connecting together do not then poll on
+    // the same tick for ever after.
+    const jitter = () => Date.now() + Math.floor(Math.random() * 1000);
+    this.due = { heartbeat: jitter(), position: 0, status: jitter(), settings: jitter(), fast: jitter() };
     this.timers.push(setInterval(() => this.#tick(), 50));
   }
 
@@ -303,7 +322,7 @@ export class PtzCamera extends EventEmitter {
       ['position', fast ? this.t.positionFastMs : this.t.positionIdleMs],
       ['status', this.t.statusMs],
       ['fast', this.t.fastSettingsMs],
-      ['settings', this.t.settingsMs],
+      ['settings', typeof this.driver.subscribe === 'function' ? this.t.pushSettingsMs : this.t.settingsMs],
       // Polls succeeding are proof of life; the heartbeat only has to run when
       // nothing else has.
       ['heartbeat', this.t.heartbeatIntervalMs],
@@ -351,13 +370,13 @@ export class PtzCamera extends EventEmitter {
           return;
         }
         case 'fast': {
-          const list = this.entries.filter((e) => e.poll === 'fast' && !this.unavailable.has(e.id));
+          const list = this.entries.filter((e) => isFast(e) && !this.unavailable.has(e.id));
           if (list.length) await this.#readEntries(list, PRIORITY.POLL);
           return;
         }
         case 'settings': {
           const list = this.entries.filter((e) => e.type !== 'action' && !this.unavailable.has(e.id)
-            && (e.poll ?? 'slow') === 'slow');
+            && (e.poll ?? 'slow') === 'slow' && !isFast(e));
           if (!list.length) return;
           const n = Math.max(1, this.Driver.readBatch ?? 4);
           if (this.cursor >= list.length) this.cursor = 0;

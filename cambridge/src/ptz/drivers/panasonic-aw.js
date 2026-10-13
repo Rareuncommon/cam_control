@@ -217,6 +217,20 @@ const PREFIXES = (() => {
 })();
 
 /**
+ * The same prefixes indexed by text, and the lengths they come in, longest
+ * first. matchLine runs for every line of camdata.html — some 450 lines, for
+ * every Panasonic camera, every poll — and trying all ~500 prefixes against
+ * each line was most of CamBridge's CPU at a venue with a dozen of them. A
+ * lookup per distinct prefix length is a handful of map reads instead.
+ */
+const BY_PREFIX = new Map();
+for (const [p, e] of PREFIXES) {
+  if (!BY_PREFIX.has(p)) BY_PREFIX.set(p, []);
+  BY_PREFIX.get(p).push(e);
+}
+const PREFIX_LENGTHS = [...new Set(PREFIXES.map(([p]) => p.length))].sort((a, b) => b - a);
+
+/**
  * Finds the entries a reply line carries a value for. A prefix without a ':'
  * separator (the ptz replies) only matches when the data is exactly as wide as
  * the entry's, so 'p' (power) does not swallow 'pE000000000313'.
@@ -224,17 +238,22 @@ const PREFIXES = (() => {
 export function matchLine(line) {
   const text = line.replace(/:0x/gi, ':');   // camdata.html writes hex as 0x.. (IF ch. 9)
   const hits = [];
-  let best = -1;
-  for (const [p, e] of PREFIXES) {
-    if (best > p.length) break;
-    if (!text.startsWith(p)) continue;
-    const data = text.slice(p.length);
-    const c = e.wire.codec;
-    if (!p.endsWith(':') && c.w && ['bool', 'enum', 'lin'].includes(c.k) && !c.field && data.length !== c.w) continue;
-    const value = decode(e, data);
-    if (value === undefined) continue;
-    best = p.length;
-    hits.push([e, value]);
+  // Longest prefix that yields a value wins; every entry sharing that prefix
+  // is reported, as before.
+  for (const len of PREFIX_LENGTHS) {
+    if (len > text.length) continue;
+    const p = text.slice(0, len);
+    const entries = BY_PREFIX.get(p);
+    if (!entries) continue;
+    const data = text.slice(len);
+    for (const e of entries) {
+      const c = e.wire.codec;
+      if (!p.endsWith(':') && c.w && ['bool', 'enum', 'lin'].includes(c.k) && !c.field && data.length !== c.w) continue;
+      const value = decode(e, data);
+      if (value === undefined) continue;
+      hits.push([e, value]);
+    }
+    if (hits.length) break;
   }
   return hits;
 }
@@ -277,6 +296,9 @@ export function tableFor(model) {
 }
 
 const STANDBY = 'the camera is in standby (or busy) — power it on, or wait, and try again';
+
+/** How long one camdata.html read answers for. See #camdataMap. */
+const CAMDATA_REUSE_MS = 1500;
 
 export class PanasonicAw extends PtzDriver {
   static vendor = 'panasonic';
@@ -468,13 +490,16 @@ export class PanasonicAw extends PtzDriver {
 
   /**
    * /live/camdata.html: most settings in one reply, one line each (IF p.18,
-   * ch. 9 "camdata.html" column). Reused for a quarter of a second so a sweep
-   * of small batches does not fetch it for every batch, and dropped after any
-   * write so a re-read sees the change.
+   * ch. 9 "camdata.html" column). One fetch answers every setting on it, so it
+   * is reused for a second and a half: the lifecycle's sweep asks in small
+   * batches every few hundred milliseconds, and fetching and parsing the whole
+   * page for each batch was the bulk of the cost at a big venue. Changes made
+   * elsewhere still arrive by push, and within 1.5 s by poll. Dropped after
+   * any write so a re-read sees the change.
    */
   async #camdataMap() {
     if (!this.camdata.ok) return null;
-    if (this.camdata.map && Date.now() - this.camdata.at < 250) return this.camdata.map;
+    if (this.camdata.map && Date.now() - this.camdata.at < CAMDATA_REUSE_MS) return this.camdata.map;
     const r = await this.#get('/live/camdata.html');
     if (!r.ok) {
       if (r.kind === 'timeout' || r.kind === 'network') throw PanasonicAw.#transportError(r);
