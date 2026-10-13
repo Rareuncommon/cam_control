@@ -8,6 +8,8 @@
 // A poll loop runs alongside as a backstop, slowly. SSE is the fast path; the
 // poll is what recovers state if a frame is ever missed.
 
+import { applyPatch } from './patch.js';
+
 const RECONNECT_MS = [1000, 2000, 4000, 8000, 15000];
 
 export class CambridgeApi {
@@ -76,14 +78,20 @@ export class CambridgeApi {
     const r = await this.request('GET', '/api/state');
     // /api/state returns the same envelope the stream pushes, so both paths
     // hand the instance an identical frame.
-    if (r.ok && r.body) this.onState(r.body);
+    if (r.ok && r.body) {
+      // The poll is a full state too, so later patches build on it.
+      this.frame = { type: 'state', ...r.body };
+      this.onState(r.body);
+    }
   }
 
   async #openStream() {
     if (this.stopped) return;
     this.controller = new AbortController();
     try {
-      const res = await this.fetch(`${this.base}/api/events`, {
+      // ?patch=1: the full state once, then only what changed. With dozens of
+      // cameras the full state is far too big to resend on every pan.
+      const res = await this.fetch(`${this.base}/api/events?patch=1`, {
         headers: { Accept: 'text/event-stream' },
         signal: this.controller.signal,
       });
@@ -125,7 +133,16 @@ export class CambridgeApi {
       if (!payload) continue;
       try {
         const msg = JSON.parse(payload);
-        if (msg.type === 'state' && msg.view) this.onState(msg);
+        if (msg.type === 'state' && msg.view) {
+          this.frame = msg;
+          this.onState(msg);
+        } else if (msg.type === 'patch' && this.frame) {
+          const r = applyPatch(this.frame, msg);
+          this.frame = r.frame;
+          this.onState(r.frame);
+          // A patch for a camera never seen: fetch the whole state rather than guess.
+          if (r.resync) this.#poll();
+        }
       } catch {
         this.log('debug', 'ignored malformed event frame');
       }

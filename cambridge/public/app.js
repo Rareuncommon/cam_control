@@ -1,5 +1,6 @@
 import { createGamepadControl } from './gamepad.js';
 import { createPtz } from './ptz.js';
+import { applyPatch } from './patch.js';
 import {
   histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
   drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
@@ -1599,24 +1600,45 @@ async function loadMeta() {
 
 // SSE. EventSource reconnects by itself, which is what a booth iPad waking from
 // sleep needs.
+//
+// The stream starts with the full state and then sends patches — only what
+// changed — because with dozens of cameras the full state is far too big to
+// resend each time one of them pans. A reconnect starts again from the full
+// state, so a patch is never applied to a frame from before an outage.
+let frame = null;
+
+function adopt(next) {
+  const before = view.cameras;
+  const changed =
+    next.view.cameras.length !== before.length ||
+    next.view.cameras.some((c, i) => c.id !== before[i]?.id || c.state !== before[i]?.state);
+  frame = next;
+  view = next.view;
+  alarms = next.alarms ?? [];
+  alarmsByCamera = next.alarmsByCamera ?? {};
+  alarmSummary = next.alarmSummary ?? null;
+  roll = next.roll ?? null;
+  undoState = next.undo ?? {};
+  ptzUi.onView(view);
+  render();
+  if (currentView === 'multiview' && changed) renderMultiview();
+}
+
+async function resync() {
+  const r = await fetch('/api/state').catch(() => null);
+  if (r?.ok) adopt({ type: 'state', ...(await r.json()) });
+}
+
 function connectEvents() {
-  const es = new EventSource('/api/events');
+  const es = new EventSource('/api/events?patch=1');
   es.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type !== 'state') return;
-      const changed =
-        msg.view.cameras.length !== view.cameras.length ||
-        msg.view.cameras.some((c, i) => c.id !== view.cameras[i]?.id || c.state !== view.cameras[i]?.state);
-      view = msg.view;
-      alarms = msg.alarms ?? [];
-      alarmsByCamera = msg.alarmsByCamera ?? {};
-      alarmSummary = msg.alarmSummary ?? null;
-      roll = msg.roll ?? null;
-      undoState = msg.undo ?? {};
-      ptzUi.onView(view);
-      render();
-      if (currentView === 'multiview' && changed) renderMultiview();
+      if (msg.type === 'state') { adopt(msg); return; }
+      if (msg.type !== 'patch' || !frame) return;
+      const r = applyPatch(frame, msg);
+      adopt(r.frame);
+      if (r.resync) resync();
     } catch { /* ignore malformed frame */ }
   };
   es.onerror = () => {
