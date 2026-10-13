@@ -126,7 +126,9 @@ export function report(takes, { now = Date.now(), windowMs = 10_000 } = {}) {
  * bodies we cannot see.
  */
 export function rollState(cameras) {
-  const connected = (cameras ?? []).filter((c) => c.state === 'connected');
+  // PTZ heads do not record, so they are neither rolling nor "not rolling" —
+  // counting them would make "all rolling" unreachable at a mixed venue.
+  const connected = (cameras ?? []).filter((c) => c.state === 'connected' && c.kind !== 'ptz');
   const rolling = connected.filter((c) => c.status?.recording);
   return {
     total: connected.length,
