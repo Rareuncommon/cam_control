@@ -5,10 +5,15 @@
 // drive the Sony bodies. Nothing here talks to a camera directly; every command
 // turns into the same property write the web panel would make.
 //
-// These are cinema bodies, not PTZ heads: there is no pan, tilt or zoom motor to
-// drive. Commands that would move a head are answered with a VISCA error rather
-// than silently ignored, so a controller shows the operator that the axis does
-// nothing instead of leaving them wondering why the shot will not move.
+// For the cinema bodies there is no pan, tilt or zoom motor to drive. Commands
+// that would move a head are answered with a VISCA error rather than silently
+// ignored, so a controller shows the operator that the axis does nothing
+// instead of leaving them wondering why the shot will not move.
+//
+// For PTZ heads the same commands are forwarded to the head's own driver. Most
+// of those heads speak VISCA themselves; forwarding still earns its place
+// because the Canon does not, and because one controller then drives every
+// head through the same deadman and logging as the panel.
 //
 // Framing. VISCA over IP (Sony's own scheme, also used by most PTZ vendors)
 // wraps each message in an 8-byte header:
@@ -50,8 +55,20 @@ export class ViscaServer {
    * @param {(level: string, msg: string) => void} opts.log
    */
   constructor({ state, applyFn, actionFn, recallPreset, savePreset, mapping = {},
-    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {} }) {
+    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 30_000 }) {
     this.state = state;
+    /**
+     * PTZ forwarding: { move(id, v, o), preset(id, op, n), action(id, entryId),
+     * write(id, entryId, value), entryByRole(id, role), presetBase(id), releaseSource(source) }.
+     */
+    this.ptz = ptz;
+    /**
+     * How long a move from a UDP controller is held without a repeat. UDP has
+     * no connection to watch, so a controller that crashes mid-move would
+     * otherwise leave the head moving for ever; TCP controllers latch instead
+     * and are released when their socket closes.
+     */
+    this.udpHoldMs = udpHoldMs;
     this.applyFn = applyFn;
     this.actionFn = actionFn;
     this.recallPreset = recallPreset;
@@ -93,19 +110,24 @@ export class ViscaServer {
         reject(err);
       });
       this.udp.on('message', async (msg, rinfo) => {
-        const reply = await this.handlePacket(msg);
+        const reply = await this.handlePacket(msg, { id: `visca-udp:${rinfo.address}:${rinfo.port}`, tcp: false });
         for (const frame of reply) this.udp.send(frame, rinfo.port, rinfo.address);
       });
       this.udp.bind(this.port, this.bind, () => {
         if (!this.useTcp) return resolve();
         this.tcpServer = createServer((socket) => {
           this.sockets.add(socket);
-          socket.on('close', () => this.sockets.delete(socket));
+          const peer = { id: `visca-tcp:${socket.remoteAddress}:${socket.remotePort}`, tcp: true };
+          socket.on('close', () => {
+            this.sockets.delete(socket);
+            // Whatever this controller was holding stops with it.
+            this.ptz?.releaseSource(peer.id);
+          });
           // A controller that goes away mid-command must not take the server
           // with it; a booth joystick unplugged during a shoot is routine.
           socket.on('error', (err) => this.log('debug', `VISCA TCP client: ${err.message}`));
           socket.on('data', async (data) => {
-            const reply = await this.handlePacket(data);
+            const reply = await this.handlePacket(data, peer);
             for (const frame of reply) socket.write(frame);
           });
         });
@@ -133,7 +155,7 @@ export class ViscaServer {
    * Parses a packet and returns the frames to send back.
    * Pure enough to test without a socket.
    */
-  async handlePacket(buf) {
+  async handlePacket(buf, peer = { id: 'visca', tcp: false }) {
     if (!buf || buf.length === 0) return [];
 
     // Header-framed, or raw VISCA? A VISCA message always begins 0x8n.
@@ -154,7 +176,7 @@ export class ViscaServer {
     // Address 0 is not a real target; treat it as camera 1 so a controller that
     // sends 0x80 still reaches something rather than silently doing nothing.
     const address = (message[0] & 0x0f) || 1;
-    const replies = await this.execute(address, message);
+    const replies = await this.execute(address, message, peer);
     return replies.map((payload) => this.#frame(payload, sequence, framed));
   }
 
@@ -169,7 +191,7 @@ export class ViscaServer {
   }
 
   /** @returns {Promise<number[][]>} raw VISCA payloads to return, in order */
-  async execute(address, msg) {
+  async execute(address, msg, peer = { id: 'visca', tcp: false }) {
     const cameraId = this.cameraFor(address);
     const reply = (bytes) => [0x90, ...bytes, 0xff];
     if (!cameraId) return [reply(ERR_NOT_EXECUTABLE)];
@@ -187,7 +209,9 @@ export class ViscaServer {
     }
     if (category !== 0x01) return [reply(ERR_SYNTAX)];
 
-    const handled = await this.command(cam, rest);
+    const handled = cam.kind === 'ptz' && this.ptz
+      ? await this.#ptzCommand(cam, rest, peer)
+      : await this.command(cam, rest);
     if (handled === 'syntax') return [reply(ERR_SYNTAX)];
     if (handled === 'refused') return [reply(ERR_NOT_EXECUTABLE)];
     // ACK then completion, which is what a controller waits for.
@@ -335,6 +359,80 @@ export class ViscaServer {
       return r?.ok === false ? 'refused' : 'ok';
     }
     return 'syntax';
+  }
+
+  /**
+   * Motion, presets and focus for a PTZ head.
+   *
+   * Byte layouts are Sony's VISCA command list (BRC-AM7, 5-066-065-12): Pan-
+   * tiltDrive p.17, Home p.18, Zoom/Focus p.16, Focus mode p.16, Memory p.18.
+   * Controllers send this common subset whichever head they were made for.
+   *
+   * @returns {Promise<'ok'|'syntax'|'refused'>}
+   */
+  async #ptzCommand(cam, bytes, peer) {
+    const [group, code, ...args] = bytes;
+    const hold = peer.tcp ? { source: peer.id, latch: true } : { source: peer.id, holdMs: this.udpHoldMs };
+    const move = (v) => (this.ptz.move(cam.id, v, hold)?.ok === false ? 'refused' : 'ok');
+    const byRole = async (role, fn) => {
+      const entry = this.ptz.entryByRole(cam.id, role);
+      if (!entry) return 'refused';
+      const r = await fn(entry);
+      return r?.ok === false ? 'refused' : 'ok';
+    };
+    // Variable speed in the low nibble, 0 (slow) to 7 (fast); the fixed-speed
+    // forms take the middle.
+    const variable = (a, up, down) => {
+      if (a === 0x00) return 0;
+      if (a === up) return 0.5;
+      if (a === down) return -0.5;
+      if ((a & 0xf0) === (up << 4)) return ((a & 0x0f) + 1) / 8;
+      if ((a & 0xf0) === (down << 4)) return -((a & 0x0f) + 1) / 8;
+      return null;
+    };
+
+    if (group === 0x06 && code === 0x01) {
+      // Pan-tiltDrive: VV WW DD EE. Speeds 01–18 in the normal step range;
+      // anything above (the extended range) is full speed.
+      if (args.length < 4) return 'syntax';
+      const [vv, ww, dd, ee] = args;
+      const sp = (x) => Math.min(1, Math.max(1, x) / 0x18);
+      const pan = { 0x01: -sp(vv), 0x02: sp(vv), 0x03: 0 }[dd];
+      const tilt = { 0x01: sp(ww), 0x02: -sp(ww), 0x03: 0 }[ee];
+      if (pan === undefined || tilt === undefined) return 'syntax';
+      return move({ pan, tilt });
+    }
+    if (group === 0x06 && code === 0x04) {
+      return byRole('home', (e) => this.ptz.action(cam.id, e.id));
+    }
+    if (group === 0x04 && code === 0x07) {
+      const v = variable(args[0], 0x02, 0x03);
+      return v === null ? 'syntax' : move({ zoom: v });
+    }
+    if (group === 0x04 && code === 0x08) {
+      const v = variable(args[0], 0x02, 0x03);
+      return v === null ? 'syntax' : move({ focus: v });
+    }
+    if (group === 0x04 && code === 0x38) {
+      return byRole('focusMode', (e) => {
+        const value = args[0] === 0x02 ? e.autoValue : args[0] === 0x03 ? e.manualValue : undefined;
+        return value === undefined ? { ok: false } : this.ptz.write(cam.id, e.id, value);
+      });
+    }
+    if (group === 0x04 && code === 0x18 && args[0] === 0x01) {
+      return byRole('onePushAf', (e) => this.ptz.action(cam.id, e.id));
+    }
+    if (group === 0x04 && code === 0x3f) {
+      // Memory: 00 reset, 01 set, 02 recall; the slot is zero-based on the
+      // wire and the camera's own numbering starts wherever it starts.
+      const [mode, slot] = args;
+      if (slot === undefined) return 'syntax';
+      const op = { 0x00: 'delete', 0x01: 'store', 0x02: 'recall' }[mode];
+      if (!op) return 'syntax';
+      const r = await this.ptz.preset(cam.id, op, this.ptz.presetBase(cam.id) + slot);
+      return r?.ok === false ? 'refused' : 'ok';
+    }
+    return 'refused';
   }
 
   /** Inquiries a controller uses to sync its display. @returns {number[]|null} */

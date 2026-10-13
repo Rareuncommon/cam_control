@@ -28,7 +28,7 @@ import { PtzSource } from './ptz/source.js';
 import { camdNeeded, isPtzEntry } from './venue.js';
 import { detect as detectPtz } from './ptz/detect.js';
 import { supported as supportedPtz } from './ptz/drivers/index.js';
-import { needsAdmin } from './ptz/schema.js';
+import { needsAdmin, roleEntry } from './ptz/schema.js';
 import { PtzPresetBook } from './ptz/presets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -366,6 +366,19 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       port: cfg.visca.port,
       tcp: cfg.visca.tcp !== false,
       log: (level, msg) => log.write(level, 'visca', msg),
+      udpHoldMs: cfg.visca.udpHoldMs ?? 30_000,
+      // PTZ heads get motion, presets and focus. Writes and actions still go
+      // through applyFn and runAction, so they are logged and refuse admin
+      // settings exactly as the panel's do.
+      ptz: {
+        move: (id, v, o) => ptz.move(id, v, o),
+        preset: (id, op, n) => ptz.preset(id, op, n),
+        action: (id, entryId) => runAction(id, entryId),
+        write: (id, entryId, value) => applyFn(id, entryId, value),
+        entryByRole: (id, role) => roleEntry([...(state.ptzSchemas.get(id)?.byId.values() ?? [])], role),
+        presetBase: (id) => state.ptzSchemas.get(id)?.capabilities?.presetBase ?? 1,
+        releaseSource: (source) => ptz.releaseSource(source),
+      },
     });
   }
 

@@ -289,3 +289,72 @@ test('VISCA addresses fall back to camera order when nothing is mapped', () => {
   assert.equal(visca.cameraFor(2), 'b');
   assert.equal(visca.cameraFor(3), null);
 });
+
+// --- VISCA forwarding to PTZ heads ---------------------------------------------
+
+function ptzViscaRig() {
+  const state = new StateModel();
+  state.replaceAll([{ id: 'canon', label: 'Canon', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  const entries = {
+    home: { id: 'homeAction', role: 'home', type: 'action' },
+    onePushAf: { id: 'afOnce', role: 'onePushAf', type: 'action' },
+    focusMode: { id: 'fm', role: 'focusMode', type: 'enum', autoValue: 'auto', manualValue: 'manual' },
+  };
+  const ptz = {
+    move: (id, v, o) => { calls.push(['move', id, v, o]); return { ok: true }; },
+    preset: async (id, op, n) => { calls.push(['preset', id, op, n]); return { ok: true }; },
+    action: async (id, e) => { calls.push(['action', id, e]); return { ok: true }; },
+    write: async (id, e, v) => { calls.push(['write', id, e, v]); return { ok: true }; },
+    entryByRole: (id, role) => entries[role] ?? null,
+    presetBase: () => 1,
+    releaseSource: (s) => calls.push(['release', s]),
+  };
+  const server = new ViscaServer({ state, ptz, applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  return { server, calls };
+}
+
+const COMPLETION_REPLY = [0x90, 0x51, 0xff];
+
+test('VISCA pan/tilt drives a PTZ head instead of being refused', async () => {
+  const { server, calls } = ptzViscaRig();
+  const tcp = { id: 'visca-tcp:x', tcp: true };
+  // Pan-tiltDrive: speed 0x0c both, right + up.
+  const r = await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x0c, 0x0c, 0x02, 0x01, 0xff]), tcp);
+  assert.deepEqual([...r.at(-1)], COMPLETION_REPLY);
+  const [, id, v, o] = calls[0];
+  assert.equal(id, 'canon');
+  assert.equal(v.pan, 0.5);
+  assert.equal(v.tilt, 0.5);
+  assert.deepEqual(o, { source: 'visca-tcp:x', latch: true });
+
+  // Stop, left/down, and a UDP controller's move is held, not latched.
+  await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x18, 0x01, 0x01, 0x02, 0xff]), { id: 'u', tcp: false });
+  assert.deepEqual(calls[1][2], { pan: -1, tilt: -1 / 0x18 });
+  assert.equal(calls[1][3].holdMs, 30_000);
+  await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff]), tcp);
+  assert.deepEqual(calls[2][2], { pan: 0, tilt: 0 });
+});
+
+test('VISCA zoom, focus, home, one-push and memory reach a PTZ head', async () => {
+  const { server, calls } = ptzViscaRig();
+  const send = (...b) => server.handlePacket(Buffer.from([0x81, 0x01, ...b, 0xff]), { id: 't', tcp: true });
+  await send(0x04, 0x07, 0x27);          // zoom tele, speed 7 = full
+  await send(0x04, 0x07, 0x30);          // zoom wide, speed 0 = slowest
+  await send(0x04, 0x07, 0x00);          // zoom stop
+  await send(0x04, 0x08, 0x02);          // focus far, standard
+  await send(0x06, 0x04);                // home
+  await send(0x04, 0x18, 0x01);          // one-push AF
+  await send(0x04, 0x38, 0x03);          // focus manual
+  await send(0x04, 0x3f, 0x02, 0x04);    // recall memory slot 4 -> preset 5
+  assert.deepEqual(calls.map((c) => c.slice(0, 4)), [
+    ['move', 'canon', { zoom: 1 }, { source: 't', latch: true }],
+    ['move', 'canon', { zoom: -0.125 }, { source: 't', latch: true }],
+    ['move', 'canon', { zoom: 0 }, { source: 't', latch: true }],
+    ['move', 'canon', { focus: 0.5 }, { source: 't', latch: true }],
+    ['action', 'canon', 'homeAction'],
+    ['action', 'canon', 'afOnce'],
+    ['write', 'canon', 'fm', 'manual'],
+    ['preset', 'canon', 'recall', 5],
+  ]);
+});
