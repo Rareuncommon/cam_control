@@ -6,6 +6,7 @@
 // pressed is worth more than any action here.
 
 import { combineRgb } from '@companion-module/base';
+import { buildPtzFeedbacks } from './ptz.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -15,7 +16,10 @@ const GREEN = combineRgb(40, 170, 80);
 const GREY = combineRgb(70, 70, 70);
 
 export function buildFeedbacks(self) {
-  const cameraChoices = self.cameraChoices();
+  // Exposure and record feedbacks mean nothing on a PTZ head; connection,
+  // tally and alarm feedbacks work on any camera.
+  const cameraChoices = self.cameraChoices('sony');
+  const anyChoices = self.cameraChoices();
   const cameraField = (extra = {}) => ({
     type: 'dropdown',
     id: 'camera',
@@ -24,8 +28,9 @@ export function buildFeedbacks(self) {
     choices: cameraChoices,
     ...extra,
   });
+  const anyCameraField = () => cameraField({ choices: anyChoices, default: anyChoices[0]?.id ?? '' });
 
-  return {
+  const sony = {
     recording: {
       name: 'Camera is recording',
       type: 'boolean',
@@ -68,7 +73,7 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: GREY, color: WHITE },
       options: [
-        cameraField(),
+        anyCameraField(),
         {
           type: 'dropdown', id: 'state', label: 'Is in state', default: 'connected',
           choices: [
@@ -102,7 +107,8 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: AMBER, color: BLACK },
       options: [],
-      callback: () => !self.camdConnected,
+      // At a venue with only PTZ heads there is no camd to be unreachable.
+      callback: () => self.camdUsed && !self.camdConnected,
     },
 
     // --- shoot alarms ---
@@ -114,7 +120,7 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: RED, color: WHITE },
       options: [
-        cameraField(),
+        anyCameraField(),
         {
           type: 'dropdown', id: 'level', label: 'At least', default: 'warn',
           choices: [
@@ -223,7 +229,7 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: RED, color: WHITE },
       options: [
-        cameraField(),
+        anyCameraField(),
         {
           type: 'dropdown', id: 'bus', label: 'Bus', default: 'program',
           choices: [
@@ -250,4 +256,6 @@ export function buildFeedbacks(self) {
       callback: (fb) => !!self.gangs?.[fb.options.gang || 'main']?.enabled,
     },
   };
+
+  return { ...sony, ...buildPtzFeedbacks(self) };
 }

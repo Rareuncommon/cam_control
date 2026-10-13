@@ -4,6 +4,7 @@
 
 import { combineRgb } from '@companion-module/base';
 import { varId } from './variables.js';
+import { buildPtzPresets } from './ptz.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -40,25 +41,27 @@ export function buildPresets(self) {
       { feedbackId: 'camdDown', options: {}, style: { bgcolor: RED, color: WHITE } },
     ],
   };
-
+  // Record, exposure and focus buttons are for cinema bodies; PTZ heads get tally here and their own set in ptz.js.
+  // Record, exposure and focus buttons are for cinema bodies; PTZ heads get their own set.
   for (const cam of self.cameras) {
     const v = varId(cam.id);
     const name = cam.label || cam.id;
     const opts = { camera: cam.id };
-
-    presets[`record_${v}`] = {
-      type: 'button',
-      category: 'Record',
-      name: `${name}: record toggle`,
-      style: base(`$(cambridge:${v}_label)\\n$(cambridge:${v}_recording)`),
-      steps: [{ down: [{ actionId: 'record', options: { ...opts, mode: 'toggle' } }], up: [] }],
-      feedbacks: [
-        { feedbackId: 'recording', options: opts, style: { bgcolor: RED, color: WHITE } },
-        { feedbackId: 'recordingFailed', options: opts, style: { bgcolor: AMBER, color: BLACK } },
-        { feedbackId: 'cameraState', options: { ...opts, state: '__notok__' },
-          style: { bgcolor: combineRgb(60, 60, 60), color: combineRgb(150, 150, 150) } },
-      ],
-    };
+    if (cam.kind !== 'ptz') {
+      presets[`record_${v}`] = {
+        type: 'button',
+        category: 'Record',
+        name: `${name}: record toggle`,
+        style: base(`$(cambridge:${v}_label)\\n$(cambridge:${v}_recording)`),
+        steps: [{ down: [{ actionId: 'record', options: { ...opts, mode: 'toggle' } }], up: [] }],
+        feedbacks: [
+          { feedbackId: 'recording', options: opts, style: { bgcolor: RED, color: WHITE } },
+          { feedbackId: 'recordingFailed', options: opts, style: { bgcolor: AMBER, color: BLACK } },
+          { feedbackId: 'cameraState', options: { ...opts, state: '__notok__' },
+            style: { bgcolor: combineRgb(60, 60, 60), color: combineRgb(150, 150, 150) } },
+        ],
+      };
+    }
 
     presets[`tally_${v}`] = {
       type: 'button',
@@ -72,6 +75,8 @@ export function buildPresets(self) {
           style: { bgcolor: combineRgb(40, 140, 60), color: WHITE } },
       ],
     };
+
+    if (cam.kind === 'ptz') continue;
 
     presets[`iris_open_${v}`] = {
       type: 'button',
@@ -166,5 +171,5 @@ export function buildPresets(self) {
     };
   }
 
-  return presets;
+  return { ...presets, ...buildPtzPresets(self) };
 }

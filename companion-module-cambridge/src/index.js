@@ -16,6 +16,7 @@ import { buildFeedbacks } from './feedbacks.js';
 import { buildPresets } from './presets.js';
 import { buildVariableDefinitions, buildVariableValues } from './variables.js';
 import { STEPPABLE } from './step.js';
+import { PtzHolds, isPtz } from './ptz.js';
 
 class CambridgeInstance extends InstanceBase {
   constructor(internal) {
@@ -30,6 +31,19 @@ class CambridgeInstance extends InstanceBase {
     this.alarmsByCamera = {};
     this.alarmSummary = null;
     this.roll = null;
+    /** False at a venue with only PTZ heads, where there is no camd to be "down". */
+    this.camdUsed = true;
+    /** PTZ table entries per camera id, from GET /api/cameras/:id/schema. */
+    this.ptzSchemas = {};
+    /** Saved preset names per PTZ camera id: [{ n, name }]. */
+    this.ptzPresetNames = {};
+    this.ptzSchemaWanted = '';
+    this.ptzSchemaInflight = new Set();
+    this.ptzHolds = new PtzHolds({
+      move: (id, axes) => this.api?.request('POST', `/api/cameras/${encodeURIComponent(id)}/ptz/move`, axes),
+      stop: (id) => this.api?.request('POST', `/api/cameras/${encodeURIComponent(id)}/ptz/stop`),
+      log: (level, msg) => this.log(level, msg),
+    });
     /** Signature of the last definition rebuild, so we only rebuild when it matters. */
     this.definitionSignature = '';
   }
@@ -43,11 +57,15 @@ class CambridgeInstance extends InstanceBase {
   async configUpdated(config) {
     this.config = config;
     this.api?.stop();
+    // A held key must not outlive the connection it was started on. The stop is
+    // best effort; the head's own deadman covers it if this does not arrive.
+    this.ptzHolds.clearAll({ stop: true });
     this.updateStatus(InstanceStatus.Connecting);
     this.#connect();
   }
 
   async destroy() {
+    this.ptzHolds.clearAll({ stop: true });
     this.api?.stop();
     this.api = null;
   }
@@ -84,6 +102,9 @@ class CambridgeInstance extends InstanceBase {
         if (up) {
           this.updateStatus(InstanceStatus.Ok);
         } else {
+          // Stop refreshing held motion: the server cannot be reached, so it is
+          // the head's deadman that stops it, within about half a second.
+          this.ptzHolds.clearAll();
           // The distinction matters to whoever is looking at Companion: this is
           // "cannot reach CamBridge", not "a camera is unhappy".
           this.updateStatus(InstanceStatus.ConnectionFailure, detail ?? 'cannot reach CamBridge');
@@ -111,6 +132,8 @@ class CambridgeInstance extends InstanceBase {
     this.roll = frame?.roll ?? null;
 
     this.camdConnected = !!view.camdConnected;
+    // A server that predates PTZ does not send this, and then camd is in use.
+    this.camdUsed = view.camdUsed !== false;
     const incoming = view.cameras ?? [];
 
     // Tally is not part of the camera record CamBridge sends when the ATEM
@@ -122,14 +145,19 @@ class CambridgeInstance extends InstanceBase {
     // Rebuild action/feedback dropdowns only when the camera set changes.
     // Doing it on every property tick would make Companion's UI unusable —
     // dropdowns would reset under the operator's cursor while editing a button.
-    const signature = this.cameras.map((c) => `${c.id}:${c.label}`).join('|');
+    // A PTZ head's capabilities decide which buttons exist, so they count too;
+    // its pan/tilt/zoom position, which changes constantly, does not.
+    const signature = this.cameras.map((c) =>
+      `${c.id}:${c.label}${isPtz(c) ? `:ptz:${JSON.stringify(c.capabilities ?? null)}` : ''}`).join('|');
     if (signature !== this.definitionSignature) {
       this.definitionSignature = signature;
       this.rebuildDefinitions();
     }
+    this.#refreshPtzDefinitions();
 
     this.setVariableValues(buildVariableValues(this.cameras, {
       camdConnected: this.camdConnected,
+      camdUsed: this.camdUsed,
       alarmsByCamera: this.alarmsByCamera,
       alarms: this.alarms,
       roll: this.roll,
@@ -142,6 +170,60 @@ class CambridgeInstance extends InstanceBase {
     this.setActionDefinitions(buildActions(this));
     this.setFeedbackDefinitions(buildFeedbacks(this));
     this.setPresetDefinitions(buildPresets(this));
+  }
+
+  /**
+   * Schemas and saved preset names decide what the PTZ dropdowns offer. They are
+   * fetched when the set of PTZ heads (or what they can do) changes, and again
+   * for a head whose schema could not be had yet — one that was still connecting.
+   */
+  #refreshPtzDefinitions() {
+    const ptz = this.cameras.filter(isPtz);
+    const wanted = ptz.map((c) => `${c.id}:${JSON.stringify(c.capabilities ?? null)}`).join('|');
+    const changed = wanted !== this.ptzSchemaWanted;
+    this.ptzSchemaWanted = wanted;
+    const missing = ptz.filter((c) => c.state === 'connected' && !this.ptzSchemas[c.id]
+      && !this.ptzSchemaInflight.has(c.id));
+    if (!this.api || (!changed && !missing.length)) return;
+    const targets = (changed ? ptz : missing).filter((c) => c.state === 'connected');
+    for (const c of targets) this.ptzSchemaInflight.add(c.id);
+    this.#loadPtzDetails(targets).finally(() => {
+      for (const c of targets) this.ptzSchemaInflight.delete(c.id);
+    });
+  }
+
+  async #loadPtzDetails(cams) {
+    await Promise.all(cams.map(async (c) => {
+      const r = await this.api.request('GET', `/api/cameras/${encodeURIComponent(c.id)}/schema`);
+      if (r.ok && Array.isArray(r.body?.entries)) this.ptzSchemas[c.id] = r.body.entries;
+    }));
+    await this.refreshPtzPresetNames({ rebuild: false });
+    // Drop what belongs to a head that has gone.
+    const ids = new Set(this.cameras.filter(isPtz).map((c) => c.id));
+    for (const id of Object.keys(this.ptzSchemas)) if (!ids.has(id)) delete this.ptzSchemas[id];
+    this.rebuildDefinitions();
+  }
+
+  /** Saved preset names for every PTZ head, for the "by name" dropdowns. */
+  async refreshPtzPresetNames({ rebuild = true } = {}) {
+    if (!this.api) return;
+    await Promise.all(this.cameras.filter(isPtz).map(async (c) => {
+      const r = await this.api.request('GET', `/api/cameras/${encodeURIComponent(c.id)}/ptz/presets`);
+      if (r.ok && Array.isArray(r.body?.presets)) {
+        this.ptzPresetNames[c.id] = r.body.presets.filter((p) => p.name).map((p) => ({ n: p.n, name: p.name }));
+      }
+    }));
+    if (rebuild) this.rebuildDefinitions();
+  }
+
+  /** Preset number -> "3 — Lectern", across PTZ heads (the number is what is sent). */
+  ptzPresetNameChoices() {
+    const seen = new Map();
+    for (const list of Object.values(this.ptzPresetNames)) {
+      for (const { n, name } of list ?? []) if (!seen.has(`${n}`)) seen.set(`${n}`, `${n} — ${name}`);
+    }
+    return [{ id: '', label: '(use the number)' },
+      ...[...seen].sort((a, b) => Number(a[0]) - Number(b[0])).map(([id, label]) => ({ id, label }))];
   }
 
   /** Preset names, scene names and gang state come from a separate endpoint. */
@@ -165,9 +247,18 @@ class CambridgeInstance extends InstanceBase {
     return this.cameras.find((c) => c.id === id) ?? null;
   }
 
-  cameraChoices() {
-    if (!this.cameras.length) return [{ id: '', label: '(no cameras yet)' }];
-    return this.cameras.map((c) => ({ id: c.id, label: c.label || c.id }));
+  /**
+   * `kind` narrows the list: 'sony' for controls that only mean something on a
+   * cinema body (record, exposure steppers), 'ptz' for PTZ controls, and the
+   * default for anything that works on either.
+   */
+  cameraChoices(kind = 'all') {
+    const list = this.cameras.filter((c) =>
+      kind === 'all' || (kind === 'ptz' ? isPtz(c) : !isPtz(c)));
+    if (!list.length) {
+      return [{ id: '', label: kind === 'ptz' ? '(no PTZ cameras yet)' : '(no cameras yet)' }];
+    }
+    return list.map((c) => ({ id: c.id, label: c.label || c.id }));
   }
 
   propChoices() {
