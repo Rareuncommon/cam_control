@@ -7,7 +7,7 @@
 // back the runtime change if the file write fails — a camera that works today and
 // vanishes on Monday is worse than one that never adopted.
 
-import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { isIP } from 'node:net';
 
@@ -83,9 +83,18 @@ export class Adoption {
   writeConfig(cfg) {
     mkdirSync(dirname(this.configPath), { recursive: true });
     const tmp = `${this.configPath}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
+    // `mode` only applies when the file is created, so a stale .tmp left by a
+    // crash (or made 0644 by hand) would keep its old mode. Remove it, create
+    // exclusively, and chmod after the write as well.
+    rmSync(tmp, { force: true });
+    writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    chmodSync(tmp, 0o600);
     if (existsSync(this.configPath)) {
-      try { copyFileSync(this.configPath, `${this.configPath}.bak`); } catch { /* best effort */ }
+      const bak = `${this.configPath}.bak`;
+      try {
+        copyFileSync(this.configPath, bak);
+        chmodSync(bak, 0o600);
+      } catch { /* best effort */ }
     }
     renameSync(tmp, this.configPath);
   }

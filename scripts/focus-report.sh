@@ -60,7 +60,14 @@ TOKEN="$(node -e '
 ' "${CONFIG}" 2>/dev/null || echo "")"
 
 AUTH=()
-[[ -n "${TOKEN}" ]] && AUTH=(-H "Authorization: Bearer ${TOKEN}")
+if [[ -n "${TOKEN:-}" ]]; then
+  # curl -H @file (7.55+) keeps the token out of argv, so it is not visible in
+  # `ps`. The file lives in a private (0700) temp dir and is removed on exit.
+  HDR_DIR="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/cambridge-hdr.XXXXXX")" || exit 1
+  trap 'rm -rf "${HDR_DIR}"' EXIT
+  ( umask 077; printf 'Authorization: Bearer %s\n' "${TOKEN}" > "${HDR_DIR}/auth" )
+  AUTH=(-H "@${HDR_DIR}/auth")
+fi
 
 report() {
   echo "CamBridge focus report — $(date)"
