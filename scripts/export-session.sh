@@ -113,7 +113,8 @@ were conversation.
 ## Redaction
 
 Unless it was exported with `--no-redact`, the operator's home path, login name,
-the studio's VLAN addresses and email addresses have been replaced. Camera
+the studio's VLAN addresses, email addresses and credentials (passwords, PINs, tokens,
+Authorization headers, URL userinfo) have been replaced. Camera
 credentials never appeared in the conversation at all, and the Sony SDK is not
 present in it either — only project code that references its symbols.
 INNER

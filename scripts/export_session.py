@@ -27,11 +27,60 @@ import pathlib
 import re
 import sys
 
+# --- credentials ------------------------------------------------------------
+# These run before the path/email/subnet rules: a password may itself contain
+# an "@", and `user:pass@host` would otherwise be half-eaten by the email rule.
+#
+# Quoted forms are matched both plain (`"k": "v"`) and with backslash-escaped
+# quotes (`\"k\": \"v\"`), because JSON that was pasted into a string field is
+# still escaped in some places after the outer record is parsed.
+_SECRET_KEY = (r'(?:[\w.-]*(?:password|passwd|secret|token|api[_-]?key)[\w.-]*'
+               r'|pass|pin)')
+_TOKEN_CHARS = r'[A-Za-z0-9._~+/=-]'
+
+
+def _tokens_block(match):
+    """Redact the keys of an `"tokens": { "<token>": "role" }` object.
+
+    The keys are the bearer tokens themselves; the roles are not secret."""
+    body = re.sub(r'(\\?")[^"\\{}]+\1(\s*:)',
+                  lambda m: f'{m.group(1)}REDACTED_TOKEN{m.group(1)}{m.group(2)}',
+                  match.group(2))
+    return match.group(1) + body + match.group(3)
+
+
+CREDENTIAL_REDACTIONS = [
+    # "password": "hunter2"  (plain quotes)
+    (re.compile(r'("' + _SECRET_KEY + r'"\s*:\s*)"(?:[^"\\]|\\.)*"', re.I),
+     r'\1"REDACTED"'),
+    # \"password\": \"hunter2\"  (escaped quotes)
+    (re.compile(r'(\\"' + _SECRET_KEY + r'\\"\s*:\s*)\\"(?:(?!\\").)*\\"', re.I),
+     r'\1\\"REDACTED\\"'),
+    # "auth": { "tokens": { "<token>": "operator" } }
+    (re.compile(r'(\\?"tokens\\?"\s*:\s*\{)([^{}]*)(\})', re.I), _tokens_block),
+    # Authorization: Basic/Bearer <credentials>
+    (re.compile(r'(Authorization\\?["\']?\s*[:=]\s*\\?["\']?)(Basic|Bearer)\s+' + _TOKEN_CHARS + r'+',
+                re.I), r'\1\2 REDACTED'),
+    # Authorization: Digest username="x", response="y", ...
+    (re.compile(r'(Authorization\\?["\']?\s*[:=]\s*\\?["\']?)Digest\s+'
+                r'(?:[\w-]+=(?:\\?"[^"]*?\\?"|[^\s,"\\]+))'
+                r'(?:\s*,\s*[\w-]+=(?:\\?"[^"]*?\\?"|[^\s,"\\]+))*', re.I),
+     r'\1Digest REDACTED'),
+    # Bearer <token> anywhere. Needs 8+ characters including a digit or
+    # symbol, so prose such as "Bearer authentication" is left alone.
+    (re.compile(r'\bBearer\s+(?=' + _TOKEN_CHARS + r'*[\d._~+/=-])' + _TOKEN_CHARS + r'{8,}',
+                re.I), 'Bearer REDACTED'),
+    # scheme://user:pass@host
+    (re.compile(r'\b([a-z][a-z0-9+.-]*://)[^/\s:@"\']+:[^/\s"\']*@', re.I),
+     r'\1REDACTED:REDACTED@'),
+]
+
 # Substitutions applied to every string. Ordered: the longest, most specific
 # patterns first, so a home path is not half-replaced by a username rule.
-REDACTIONS = [
+REDACTIONS = CREDENTIAL_REDACTIONS + [
     (re.compile(r'/Users/[A-Za-z0-9._-]+'), '/Users/OPERATOR'),
-    (re.compile(r'\b[\w.+-]+@(?!anthropic\.com)[\w-]+\.[\w.]+\b'), 'REDACTED@EXAMPLE.COM'),
+    # The lookbehinds leave the host of an already-redacted URL userinfo alone.
+    (re.compile(r'(?<!REDACTED:)(?<!//)\b[\w.+-]+@(?!anthropic\.com)[\w-]+\.[\w.]+\b'), 'REDACTED@EXAMPLE.COM'),
     # The studio's production VLAN. Matched on the /24 prefix rather than on
     # prefix-plus-octet: the docs also write it as "172.16.16.x", and a pattern
     # demanding a numeric final octet left the subnet itself in the output.
@@ -63,7 +112,20 @@ def redact_deep(obj, enabled=True):
     if isinstance(obj, list):
         return [redact_deep(v, True) for v in obj]
     if isinstance(obj, dict):
-        return {k: redact_deep(v, True) for k, v in obj.items()}
+        out = {}
+        for k, v in obj.items():
+            # Dict keys are not strings-in-values, so redact() never sees them.
+            # An auth block's tokens are the keys; a secret-named key's string
+            # value is the secret.
+            if k == 'tokens' and isinstance(v, dict):
+                out[k] = {f'REDACTED_TOKEN_{i}': redact_deep(x, True)
+                          for i, x in enumerate(v.values(), 1)}
+                continue
+            if (isinstance(k, str) and isinstance(v, str)
+                  and re.fullmatch(_SECRET_KEY, k, re.I)):
+                v = 'REDACTED'
+            out[k] = redact_deep(v, True)
+        return out
     return obj
 
 
