@@ -115,7 +115,7 @@ test('PTZ cameras appear in PTZ dropdowns and not in Sony-only ones', () => {
   inst.applyState(mixedFrame());
   const ids = (def) => def.options.find((o) => o.id === 'camera').choices.map((c) => c.id);
 
-  assert.deepEqual(ids(captured.actions.ptzPanTilt), ['right']);
+  assert.deepEqual(ids(captured.actions.ptzPanTilt), ['__selected__', 'right']);
   assert.deepEqual(ids(captured.actions.record).sort(), ['__all__', 'fx3']);
   assert.deepEqual(ids(captured.actions.propStep), ['fx3']);
   assert.deepEqual(ids(captured.actions.propSet), ['fx3']);
@@ -123,7 +123,7 @@ test('PTZ cameras appear in PTZ dropdowns and not in Sony-only ones', () => {
   // Things that mean something on either kind keep listing both.
   assert.deepEqual(ids(captured.actions.undo).sort(), ['fx3', 'right']);
   assert.deepEqual(ids(captured.feedbacks.recording), ['fx3']);
-  assert.deepEqual(ids(captured.feedbacks.ptzTracking), ['right']);
+  assert.deepEqual(ids(captured.feedbacks.ptzTracking), ['__selected__', 'right']);
   assert.deepEqual(ids(captured.feedbacks.tally).sort(), ['fx3', 'right']);
   assert.deepEqual(ids(captured.feedbacks.cameraState).sort(), ['fx3', 'right']);
 });
@@ -363,7 +363,7 @@ test('tracking toggles from the pushed state and can be forced on or off', async
   api.sent.length = 0;
 
   const act = captured.actions.ptzTracking;
-  assert.deepEqual(act.options[0].choices.map((c) => c.id), ['right']);
+  assert.deepEqual(act.options[0].choices.map((c) => c.id), ['__selected__', 'right']);
   await act.callback({ options: { camera: 'right', mode: 'toggle' } });
   const frame = ptzOnlyFrame();
   frame.view.cameras[1].ptz.tracking = true;
