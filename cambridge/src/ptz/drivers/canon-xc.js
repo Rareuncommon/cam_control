@@ -193,12 +193,30 @@ export class MultipartReader {
   }
 }
 
+// --- tables per model --------------------------------------------------------------
+
+/** Models with a table of their own. */
+const TABLES = new Map([['CR-N500', TABLE]]);
+
+/**
+ * Any other Canon head that speaks XC (CR-N300, CR-N700, CR-X300…) gets the
+ * CR-N500 table with every entry marked verify. XC answers an unknown item with
+ * an error, so whatever that model lacks is hidden by the lifecycle rather than
+ * shown and broken; what remains is worth checking with ptz-report.sh.
+ */
+const SIBLING = TABLE.map((e) => ({ ...e, verify: true }));
+
+export function tableFor(model) {
+  return TABLES.get(String(model ?? '').trim().toUpperCase()) ?? SIBLING;
+}
+
 // --- the driver ----------------------------------------------------------------
 
 export class CanonXcPtz extends PtzDriver {
   static vendor = 'canon';
   static label = 'Canon';
-  static models = ['CR-N500'];
+  // Models with a table of their own; any other XC head is accepted — see tableFor().
+  static models = [...TABLES.keys()];
   /** XC5 p.72: 30 ms or more between separate control requests. */
   static minIntervalMs = GAP_MS;
   /**
@@ -266,10 +284,15 @@ export class CanonXcPtz extends PtzDriver {
     const mode = this.options.panTiltSpeedMode ?? 'auto2';
     this.speedMode = mode === 'manual' || mode === 'auto2' ? mode : null;
 
-    this.entries = TABLE;
-    this.byId = new Map(TABLE.map((e) => [e.id, e]));
+    this.#useTable(TABLE);
+  }
+
+  /** Swaps in the table for the identified model. Called again from identify(). */
+  #useTable(table) {
+    this.entries = table;
+    this.byId = new Map(table.map((e) => [e.id, e]));
     this.byKey = new Map();
-    for (const e of TABLE) {
+    for (const e of table) {
       if (!e.wire?.key) continue;
       if (!this.byKey.has(e.wire.key)) this.byKey.set(e.wire.key, []);
       this.byKey.get(e.wire.key).push(e);
@@ -350,9 +373,11 @@ export class CanonXcPtz extends PtzDriver {
     if (!/^Canon\s/.test(hw)) throw new DriverError('this does not identify as a Canon XC camera', { kind: 'unsupported' });
     const mac = got.get('s.hardware.address');
     this.trackingAddon = this.options.tracking === false ? false : await this.#probeAddon();
+    const model = hw.replace(/^Canon\s+/, '');
+    this.#useTable(tableFor(model));
     return {
       vendor: 'canon',
-      model: hw.replace(/^Canon\s+/, ''),
+      model,
       firmware: got.get('s.firmware'),
       protocol: got.get('s.protocol'),
       mac: mac && /^[0-9a-f]{12}$/i.test(mac) ? mac.match(/../g).join(':').toLowerCase() : mac,

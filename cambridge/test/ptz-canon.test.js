@@ -505,3 +505,12 @@ test('PtzCamera end to end: connects, reads the table, survives the camera going
     await fake.close();
   }
 });
+
+test('another Canon XC model is accepted, with every setting marked to confirm', async () => {
+  const { tableFor } = await import('../src/ptz/drivers/canon-xc.js');
+  const own = tableFor('CR-N500');
+  const sibling = tableFor('CR-N300');
+  assert.equal(own.length, sibling.length);
+  assert.ok(sibling.every((e) => e.verify === true));
+  assert.ok(own.some((e) => !e.verify), 'the CR-N500 keeps its own confirmations');
+});
