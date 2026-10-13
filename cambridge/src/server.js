@@ -247,7 +247,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log, ptz);
   /** Groups and order come from the config; re-read whenever the config changes. */
-  const syncMeta = () => state.setCameraMeta(adoption.adopted());
+  const syncMeta = () => {
+    state.setCameraMeta(adoption.adopted());
+    // VISCA addresses follow camera order; moves routed by the old order stop.
+    visca?.onCameraOrderChanged();
+  };
   state.setCameraMeta(cfg.cameras);
   const bulk = new BulkAdd({
     adopted: () => adoption.adopted(),
@@ -428,8 +432,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       port: cfg.visca.port,
       tcp: cfg.visca.tcp !== false,
       log: (level, msg) => log.write(level, 'visca', msg),
-      udpHoldMs: cfg.visca.udpHoldMs ?? 30_000,
+      udpHoldMs: cfg.visca.udpHoldMs ?? 10_000,
       cameraPorts: cfg.visca.cameraPorts ?? {},
+      allow: cfg.visca.allow ?? [],
+      allowPresetStore: !!cfg.visca.allowPresetStore,
       // PTZ heads get motion, presets and focus. Writes and actions still go
       // through applyFn and runAction, so they are logged and refuse admin
       // settings exactly as the panel's do.

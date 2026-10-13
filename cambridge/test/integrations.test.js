@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AtemTally, tallyForCameras } from '../src/atem.js';
-import { ViscaServer } from '../src/visca.js';
+import { ViscaServer, matchesAllow } from '../src/visca.js';
 import { StateModel } from '../src/state.js';
 
 // --- ATEM -------------------------------------------------------------------
@@ -331,7 +331,7 @@ test('VISCA pan/tilt drives a PTZ head instead of being refused', async () => {
   // Stop, left/down, and a UDP controller's move is held, not latched.
   await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x18, 0x01, 0x01, 0x02, 0xff]), { id: 'u', tcp: false });
   assert.deepEqual(calls[1][2], { pan: -1, tilt: -1 / 0x18 });
-  assert.equal(calls[1][3].holdMs, 30_000);
+  assert.equal(calls[1][3].holdMs, 10_000);
   await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff]), tcp);
   assert.deepEqual(calls[2][2], { pan: 0, tilt: 0 });
 });
@@ -394,4 +394,65 @@ test('a camera with its own VISCA port is that camera whatever address the packe
     client.close();
     await server.stop();
   }
+});
+
+test('VISCA over TCP: a stop split across chunks, and a drive and stop in one chunk, both arrive', async () => {
+  const net = await import('node:net');
+  const state = new StateModel();
+  state.replaceAll([{ id: 'one', label: 'One', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  const ptz = {
+    move: (id, v, o) => { calls.push(v); return { ok: true }; },
+    preset: async () => ({ ok: true }), action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1, releaseSource: () => {},
+  };
+  const port = 43000 + Math.floor(Math.random() * 2000);
+  const server = new ViscaServer({ state, ptz, port, tcp: true,
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  await server.start();
+  const sock = net.connect(port, '127.0.0.1');
+  await new Promise((r) => sock.once('connect', r));
+  try {
+    const drive = [0x81, 0x01, 0x06, 0x01, 0x10, 0x10, 0x01, 0x03, 0xff];
+    const stop = [0x81, 0x01, 0x06, 0x01, 0x10, 0x10, 0x03, 0x03, 0xff];
+    sock.write(Buffer.from([...drive, ...stop]));          // coalesced
+    await new Promise((r) => setTimeout(r, 100));
+    sock.write(Buffer.from(drive));
+    await new Promise((r) => setTimeout(r, 50));
+    sock.write(Buffer.from(stop.slice(0, 5)));             // split
+    await new Promise((r) => setTimeout(r, 50));
+    sock.write(Buffer.from(stop.slice(5)));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(calls.map((v) => v.pan === 0 ? 'stop' : 'drive'), ['drive', 'stop', 'drive', 'stop']);
+  } finally {
+    sock.destroy();
+    await server.stop();
+  }
+});
+
+test('VISCA refuses controllers outside the allowlist, and preset store unless enabled', async () => {
+  const state = new StateModel();
+  state.replaceAll([{ id: 'one', label: 'One', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  const ptz = {
+    move: () => ({ ok: true }), preset: async (id, op, n) => { calls.push([op, n]); return { ok: true }; },
+    action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1, releaseSource: () => {},
+  };
+  const server = new ViscaServer({ state, ptz, allow: ['192.0.2.0/24'],
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  const p = { id: 't', tcp: true };
+  const store = await server.handlePacket(Buffer.from([0x81, 0x01, 0x04, 0x3f, 0x01, 0x02, 0xff]), p);
+  assert.deepEqual([...store.at(-1)], [0x90, 0x61, 0x41, 0xff], 'store refused');
+  await server.handlePacket(Buffer.from([0x81, 0x01, 0x04, 0x3f, 0x02, 0x02, 0xff]), p);
+  assert.deepEqual(calls, [['recall', 3]], 'recall still works');
+});
+
+test('the VISCA allowlist matches addresses and blocks, including IPv4-mapped forms', () => {
+  assert.equal(matchesAllow('192.0.2.7', ['192.0.2.0/24']), true);
+  assert.equal(matchesAllow('::ffff:192.0.2.7', ['192.0.2.0/24']), true);
+  assert.equal(matchesAllow('198.51.100.7', ['192.0.2.0/24']), false);
+  assert.equal(matchesAllow('192.0.2.7', ['192.0.2.7']), true);
+  assert.equal(matchesAllow('192.0.2.8', ['192.0.2.7']), false);
+  assert.equal(matchesAllow('192.0.2.8', ['nonsense', '192.0.2.8/32']), true);
 });

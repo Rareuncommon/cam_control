@@ -28,9 +28,76 @@
 // header, it is parsed as raw.
 
 import { createSocket } from 'node:dgram';
-import { createServer } from 'node:net';
+import { createServer, isIPv4 } from 'node:net';
+
+/** A partial message held for the next chunk is never allowed to grow past this. */
+const MAX_CARRY = 1024;
+
+/**
+ * Splits bytes into whole VISCA messages.
+ *
+ * TCP is a stream, not a sequence of packets: a drive and its stop written
+ * back to back can arrive as one chunk, and one stop can arrive as two. An
+ * earlier version treated each chunk as one message, so the first case ran
+ * the drive and dropped the stop — a latched head panning until the
+ * controller hung up. So every chunk is split into complete messages, in
+ * order, and an incomplete tail waits for the bytes that finish it.
+ *
+ * Both framings: the 8-byte VISCA-over-IP header (first byte 0x01/0x02) and
+ * raw VISCA (first byte 0x8n, ending 0xFF).
+ *
+ * @param {Buffer} data
+ * @returns {{messages: Array<{message: Buffer, sequence: number, framed: boolean}>, rest: Buffer}}
+ */
+export function splitMessages(data) {
+  const messages = [];
+  let at = 0;
+  while (at < data.length) {
+    const first = data[at];
+    if ((first & 0x80) !== 0) {
+      const end = data.indexOf(0xff, at);
+      if (end < 0) break;                       // a raw message still arriving
+      messages.push({ message: data.subarray(at, end + 1), sequence: 0, framed: false });
+      at = end + 1;
+      continue;
+    }
+    if (data.length - at < 8) break;            // a header still arriving
+    const type = data.readUInt16BE(at);
+    const length = data.readUInt16BE(at + 2);
+    if (type !== PAYLOAD_COMMAND && type !== PAYLOAD_REPLY && type !== PAYLOAD_INQUIRY) {
+      at += 1;                                  // not a header: skip a byte and resynchronise
+      continue;
+    }
+    if (data.length - at < 8 + length) break;   // a body still arriving
+    messages.push({
+      message: data.subarray(at + 8, at + 8 + length),
+      sequence: data.readUInt32BE(at + 4),
+      framed: true,
+    });
+    at += 8 + length;
+  }
+  const rest = data.subarray(at);
+  return { messages, rest: rest.length > MAX_CARRY ? Buffer.alloc(0) : rest };
+}
+
+/** "192.0.2.10" or "192.0.2.0/24"; IPv4 only, which is what VISCA controllers use. */
+export function matchesAllow(address, allow) {
+  const ip = String(address ?? '').replace(/^::ffff:/, '');
+  if (!isIPv4(ip)) return false;
+  const n = (a) => a.split('.').reduce((x, o) => x * 256 + Number(o), 0);
+  for (const rule of allow) {
+    const [base, bits] = String(rule).split('/');
+    if (!isIPv4(base)) continue;
+    const prefix = bits === undefined ? 32 : Number(bits);
+    if (!(prefix >= 0 && prefix <= 32)) continue;
+    const size = 2 ** (32 - prefix);
+    if (Math.floor(n(ip) / size) === Math.floor(n(base) / size)) return true;
+  }
+  return false;
+}
 
 const PAYLOAD_COMMAND = 0x0100;
+const PAYLOAD_INQUIRY = 0x0110;
 const PAYLOAD_REPLY = 0x0111;
 
 // VISCA replies. The socket number in the low nibble is echoed as 1; nothing
@@ -55,8 +122,26 @@ export class ViscaServer {
    * @param {(level: string, msg: string) => void} opts.log
    */
   constructor({ state, applyFn, actionFn, recallPreset, savePreset, mapping = {},
-    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 30_000,
-    cameraPorts = {} }) {
+    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 10_000,
+    cameraPorts = {}, allow = [], allowPresetStore = false }) {
+    /**
+     * Controller addresses allowed to send commands. Empty means any host —
+     * the old behaviour, logged as a warning at start, because VISCA carries
+     * no credentials and the PIN does not apply to it.
+     */
+    this.allow = Array.isArray(allow) ? allow : [];
+    /**
+     * Storing over or deleting a PTZ head's own presets from VISCA. Off by
+     * default: a controller with no PIN should not be able to wipe the
+     * presets an operator built, and recalling is what a joystick is for.
+     */
+    this.allowPresetStore = !!allowPresetStore;
+    /**
+     * `peer|address` -> camera a move went to. A stop is sent to that camera
+     * whatever the camera order is by the time it arrives — reordering
+     * mid-move used to send the stop to whichever camera now had the address.
+     */
+    this.routes = new Map();
     /**
      * cameraId -> port. A VISCA address is three bits, so the shared port can
      * tell at most seven cameras apart — and VISCA-over-IP controllers do not
@@ -130,15 +215,32 @@ export class ViscaServer {
         this.log('error', `VISCA UDP error on ${where}: ${err.message}`);
         reject(err);
       });
-      l.udp.on('message', async (msg, rinfo) => {
-        const reply = await this.handlePacket(msg, { id: `visca-udp:${rinfo.address}:${rinfo.port}`, tcp: false, cameraId });
-        for (const frame of reply) l.udp.send(frame, rinfo.port, rinfo.address);
+      // One chain per sender, so its commands run in the order sent even when
+      // one of them (a preset recall) takes a while.
+      const udpChains = new Map();
+      l.udp.on('message', (msg, rinfo) => {
+        if (!this.#allowed(rinfo.address)) return;
+        const id = `visca-udp:${rinfo.address}:${rinfo.port}`;
+        const prev = udpChains.get(id) ?? Promise.resolve();
+        const next = prev.then(async () => {
+          const reply = await this.handlePacket(msg, { id, tcp: false, cameraId });
+          for (const frame of reply) l.udp.send(frame, rinfo.port, rinfo.address);
+        }).catch((err) => this.log('debug', `VISCA UDP: ${err.message}`));
+        udpChains.set(id, next);
+        next.finally(() => { if (udpChains.get(id) === next) udpChains.delete(id); });
       });
       l.udp.bind(port, this.bind, () => {
         if (!this.useTcp) return resolve(l);
         l.tcp = createServer((socket) => {
+          if (!this.#allowed(socket.remoteAddress)) {
+            this.log('warn', `VISCA: refused a controller at ${socket.remoteAddress} (not in visca.allow)`);
+            socket.destroy();
+            return;
+          }
           l.sockets.add(socket);
           const peer = { id: `visca-tcp:${socket.remoteAddress}:${socket.remotePort}`, tcp: true, cameraId };
+          let carry = Buffer.alloc(0);
+          let chain = Promise.resolve();
           socket.on('close', () => {
             l.sockets.delete(socket);
             // Whatever this controller was holding stops with it.
@@ -147,9 +249,17 @@ export class ViscaServer {
           // A controller that goes away mid-command must not take the server
           // with it; a booth joystick unplugged during a shoot is routine.
           socket.on('error', (err) => this.log('debug', `VISCA TCP client: ${err.message}`));
-          socket.on('data', async (data) => {
-            const reply = await this.handlePacket(data, peer);
-            for (const frame of reply) socket.write(frame);
+          socket.on('data', (data) => {
+            const { messages, rest } = splitMessages(Buffer.concat([carry, data]));
+            carry = rest;
+            // In order, one at a time: a drive and its stop in one chunk must
+            // reach the camera as a drive and then a stop.
+            chain = chain.then(async () => {
+              for (const m of messages) {
+                const reply = await this.#handleMessage(m, peer);
+                if (!socket.destroyed) for (const frame of reply) socket.write(frame);
+              }
+            }).catch((err) => this.log('debug', `VISCA TCP: ${err.message}`));
           });
         });
         l.tcp.on('error', (err) => {
@@ -161,7 +271,25 @@ export class ViscaServer {
     });
   }
 
+  #allowed(address) {
+    return this.allow.length === 0 || matchesAllow(address, this.allow);
+  }
+
+  /**
+   * The camera order changed. Address-based routing now points elsewhere, so
+   * every move a controller holds is released (stopped) rather than left
+   * latched on a camera the controller can no longer address.
+   */
+  onCameraOrderChanged() {
+    const peers = new Set([...this.routes.keys()].map((k) => k.split('|')[0]));
+    this.routes.clear();
+    for (const id of peers) this.ptz?.releaseSource(id);
+  }
+
   async start() {
+    if (this.allow.length === 0) {
+      this.log('warn', 'VISCA accepts commands from any host on the network; set visca.allow to limit it to your controllers');
+    }
     const shared = await this.#listen(this.port, null);
     this.udp = shared.udp;
     this.tcpServer = shared.tcp;
@@ -196,21 +324,15 @@ export class ViscaServer {
    */
   async handlePacket(buf, peer = { id: 'visca', tcp: false }) {
     if (!buf || buf.length === 0) return [];
+    // A datagram can carry more than one message too; every one is run, in order.
+    const { messages } = splitMessages(buf);
+    const out = [];
+    for (const m of messages) out.push(...await this.#handleMessage(m, peer));
+    return out;
+  }
 
-    // Header-framed, or raw VISCA? A VISCA message always begins 0x8n.
-    let sequence = 0;
-    let message = buf;
-    let framed = false;
-    if (buf.length >= 8 && (buf[0] & 0x80) === 0) {
-      const type = buf.readUInt16BE(0);
-      const length = buf.readUInt16BE(2);
-      sequence = buf.readUInt32BE(4);
-      if (type !== PAYLOAD_COMMAND && type !== PAYLOAD_REPLY) return [];
-      message = buf.subarray(8, 8 + length);
-      framed = true;
-    }
+  async #handleMessage({ message, sequence, framed }, peer) {
     if (message.length < 3) return [];
-
     // The address byte is 0x80 | address, so 0x81 is camera 1 and 0x83 camera 3.
     // Address 0 is not a real target; treat it as camera 1 so a controller that
     // sends 0x80 still reaches something rather than silently doing nothing.
@@ -231,7 +353,8 @@ export class ViscaServer {
 
   /** @returns {Promise<number[][]>} raw VISCA payloads to return, in order */
   async execute(address, msg, peer = { id: 'visca', tcp: false }) {
-    const cameraId = peer.cameraId ?? this.cameraFor(address);
+    const routeKey = `${peer.id}|${address}`;
+    const cameraId = peer.cameraId ?? this.routes.get(routeKey) ?? this.cameraFor(address);
     const reply = (bytes) => [0x90, ...bytes, 0xff];
     if (!cameraId) return [reply(ERR_NOT_EXECUTABLE)];
 
@@ -249,7 +372,7 @@ export class ViscaServer {
     if (category !== 0x01) return [reply(ERR_SYNTAX)];
 
     const handled = cam.kind === 'ptz' && this.ptz
-      ? await this.#ptzCommand(cam, rest, peer)
+      ? await this.#ptzCommand(cam, rest, peer, routeKey)
       : await this.command(cam, rest);
     if (handled === 'syntax') return [reply(ERR_SYNTAX)];
     if (handled === 'refused') return [reply(ERR_NOT_EXECUTABLE)];
@@ -409,10 +532,23 @@ export class ViscaServer {
    *
    * @returns {Promise<'ok'|'syntax'|'refused'>}
    */
-  async #ptzCommand(cam, bytes, peer) {
+  async #ptzCommand(cam, bytes, peer, routeKey) {
     const [group, code, ...args] = bytes;
     const hold = peer.tcp ? { source: peer.id, latch: true } : { source: peer.id, holdMs: this.udpHoldMs };
-    const move = (v) => (this.ptz.move(cam.id, v, hold)?.ok === false ? 'refused' : 'ok');
+    const moving = this.motionByRoute ??= new Map();
+    const move = (v) => {
+      // Remember where this controller's motion went while any axis moves,
+      // so its stop goes to the same camera.
+      const axes = { ...(moving.get(routeKey) ?? {}), ...v };
+      if (Object.values(axes).some((x) => x !== 0)) {
+        moving.set(routeKey, axes);
+        if (!peer.cameraId) this.routes.set(routeKey, cam.id);
+      } else {
+        moving.delete(routeKey);
+        this.routes.delete(routeKey);
+      }
+      return this.ptz.move(cam.id, v, hold)?.ok === false ? 'refused' : 'ok';
+    };
     const byRole = async (role, fn) => {
       const entry = this.ptz.entryByRole(cam.id, role);
       if (!entry) return 'refused';
@@ -468,6 +604,10 @@ export class ViscaServer {
       if (slot === undefined) return 'syntax';
       const op = { 0x00: 'delete', 0x01: 'store', 0x02: 'recall' }[mode];
       if (!op) return 'syntax';
+      if (op !== 'recall' && !this.allowPresetStore) {
+        this.log('info', `VISCA: refused preset ${op} on ${cam.id} (visca.allowPresetStore is off)`);
+        return 'refused';
+      }
       const r = await this.ptz.preset(cam.id, op, this.ptz.presetBase(cam.id) + slot);
       return r?.ok === false ? 'refused' : 'ok';
     }
