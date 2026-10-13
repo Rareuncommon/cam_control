@@ -1766,6 +1766,14 @@ $('#quit').addEventListener('click', async () => {
 
 /** The camera a gamepad drives: the chosen one, or the first connected one. */
 function padTarget() {
+  // In the camera-bus layout the gamepad drives the selected head, like the
+  // on-screen joystick, a Stream Deck page and the SKAARHOJ panel do: one
+  // selection, every surface. The small-venue card layout keeps its own pick.
+  const ptzCount = view.cameras.filter((c) => c.kind === 'ptz').length;
+  if (ptzCount && bus.layoutFor(ptzCount) === 'select') {
+    const sel = view.cameras.find((c) => c.id === bus.selectedId && c.state === 'connected');
+    if (sel) return sel;
+  }
   const chosen = view.cameras.find((c) => c.id === padCamera && c.state === 'connected');
   return chosen ?? view.cameras.find((c) => c.state === 'connected') ?? null;
 }

@@ -377,6 +377,8 @@ export function createBus(ctx) {
     layoutFor, filter, renderBar, renderChips, resolve, renderBus, select, setActive,
     presetsChanged, setAttr,
     get active() { return active; },
+    /** The head in the active panel — what a single-target surface (the gamepad) should drive. */
+    get selectedId() { return slots[active] ?? null; },
     get up() { return up; },
     get layoutPref() { return layoutPref; },
   };

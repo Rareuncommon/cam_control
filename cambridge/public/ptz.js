@@ -1618,7 +1618,13 @@ export function createPtz(ctx) {
 
   /** Sticks to motion for a PTZ target. Returns nothing; release with padRelease(). */
   function padSticks(cam, axes) {
-    if (padHolds && padHolds.camId !== cam.id) padRelease();
+    if (padHolds && padHolds.camId !== cam.id) {
+      padRelease();
+      // The target changed under a stick that may still be deflected (a bus
+      // tap, a number key). The new camera must not start on that stale
+      // deflection: both sticks come back to centre first.
+      padHolds = { camId: cam.id, pt: null, zf: null, ptBlocked: true, zfBlocked: true };
+    }
     const dz = 0.15;
     const read = (i, invert = false) => {
       const raw = Number(axes[i] ?? 0) * (invert ? -1 : 1);
