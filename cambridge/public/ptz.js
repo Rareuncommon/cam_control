@@ -237,26 +237,49 @@ export function createPtz(ctx) {
       schemas.set(cam.id, { ...(s ?? {}), key, loading: null });
     }
     refreshCam(cam.id);
+    if (sheet?.open && sheet.camId === cam.id) renderSheet();
   }
 
-  /** Called with every pushed view, before the panel renders. */
+  /** The camera object each id was last seen as; a patch replaces only what changed. */
+  const seen = new Map();
+
+  /** Whether this panel needs a camera's table: its card is built, or its sheet is open. */
+  const wantsSchema = (id) => cards.has(id) || (sheet?.open && sheet.camId === id);
+
+  /**
+   * Called with every pushed view, before the panel renders.
+   *
+   * A patch for one camera leaves every other camera the same object, so
+   * those are skipped by identity: with forty-eight heads this runs several
+   * times a second while one of them pans, and the other forty-seven have
+   * nothing to say. Tables are read only for cameras something on screen
+   * shows — a head nobody has opened is not asked for its schema.
+   */
   function onView(next) {
     view = next;
     const ids = new Set();
+    let sheetCamChanged = false;
     for (const cam of view.cameras) {
       if (cam.kind !== 'ptz') continue;
       ids.add(cam.id);
+      if (seen.get(cam.id) === cam) continue;
+      seen.set(cam.id, cam);
+      if (sheet?.camId === cam.id) sheetCamChanged = true;
       const prev = lastState.get(cam.id);
       if (cam.state === 'connected' && prev !== 'connected') {
         epochs.set(cam.id, (epochs.get(cam.id) ?? 0) + 1);
       }
       lastState.set(cam.id, cam.state);
-      ensureSchema(cam);
+      if (wantsSchema(cam.id)) ensureSchema(cam);
     }
+    for (const id of [...seen.keys()]) if (!ids.has(id)) seen.delete(id);
     for (const id of [...schemas.keys()]) if (!ids.has(id)) schemas.delete(id);
     for (const [id, c] of cards) if (!ids.has(id)) { c.destroy(); cards.delete(id); }
     if (sheet?.open) {
-      if (ids.has(sheet.camId)) renderSheet(); else sheet.dlg.close();
+      // Only when its own camera changed: another head panning is nothing to
+      // the sheet, and re-checking every row of it several times a second is.
+      if (!ids.has(sheet.camId)) sheet.dlg.close();
+      else if (sheetCamChanged) renderSheet();
     }
   }
 
@@ -640,15 +663,46 @@ export function createPtz(ctx) {
     })
     : null;
 
-  /** The card for a camera, built once and updated in place thereafter. */
+  /**
+   * The card for a camera, built once and updated in place thereafter.
+   *
+   * Skipped outright when nothing it shows can have changed: the same camera
+   * object (a patch replaces only the cameras it names), the same undo entry
+   * and the same gamepad target. Tables and presets arriving later update the
+   * card through refreshCam, which does not come through here.
+   */
   function card(cam) {
     let c = cards.get(cam.id);
     if (!c) {
       c = makeCard(cam.id);
       cards.set(cam.id, c);
+      ensureSchema(cam);
     }
+    const undo = ctx.undo(cam.id);
+    const pad = ctx.padDrives(cam.id);
+    if (c.cam === cam && c.seenUndo === undo && c.seenPad === pad) return c.node;
+    c.seenUndo = undo;
+    c.seenPad = pad;
     c.update(cam);
     return c.node;
+  }
+
+  /**
+   * Takes down every card not in `ids`: its holds end (sending stop), its
+   * picture stops polling and its watch lease lapses. The selected-camera
+   * layout calls this as the selection moves, so only the heads on screen
+   * cost anything.
+   */
+  function keepOnly(ids) {
+    for (const [id, c] of cards) if (!ids.has(id)) { c.destroy(); cards.delete(id); }
+  }
+
+  /** Whether any press on this panel is driving the head. */
+  const holding = (camId) => [...holds].some((h) => h.camId === camId);
+
+  /** "Lectern" for preset 3, when this panel has read that camera's presets. */
+  function presetName(camId, n) {
+    return presetData.get(camId)?.presets?.find((p) => p.n === n)?.name ?? null;
   }
 
   function refreshCam(id) {
@@ -1168,6 +1222,7 @@ export function createPtz(ctx) {
     const r = await api('GET', camPath(camId, 'ptz/presets'), undefined, { quiet: true });
     if (r.httpOk) presetData.set(camId, { base: r.base ?? 1, count: r.count ?? 0, presets: r.presets ?? [] });
     refreshCam(camId);
+    ctx.presetsChanged?.(camId);
   }
 
   function renderPresets(c, cam) {
@@ -1598,7 +1653,10 @@ export function createPtz(ctx) {
   }
 
   /** B button on a PTZ target: the table's one-push AF, if it has one. */
-  function padAutofocus(cam) {
+  async function padAutofocus(cam) {
+    // The table is read only for cameras on screen; a gamepad can drive one
+    // that is not, so read it now rather than claim there is no AF.
+    if (!schemas.get(cam.id)?.data) await ensureSchema(cam);
     const af = roleOf(cam.id, 'onePushAf');
     if (af) api('POST', camPath(cam.id, `actions/${encodeURIComponent(af.id)}`));
     else toast(`${cam.label} has no one-push autofocus`, 'warn');
@@ -1641,25 +1699,29 @@ export function createPtz(ctx) {
         ip: found.ip, vendor: found.vendor, model: found.model,
         label: $('#ptz-name').value.trim() || found.model,
         username: $('#ptz-user').value.trim(), password: $('#ptz-pass').value,
+        group: $('#ptz-group')?.value.trim() || undefined,
       }, { quiet: true });
       if (!r.ok) { $('#ptz-detect-msg').textContent = r.error ?? `Not added (${r.httpStatus}).`; return; }
       toast(`Added ${r.camera?.label ?? found.model}`);
       found = null;
       foundBox.hidden = true;
-      for (const s of ['#ptz-ip', '#ptz-user', '#ptz-pass', '#ptz-name']) $(s).value = '';
+      for (const s of ['#ptz-ip', '#ptz-user', '#ptz-pass', '#ptz-name', '#ptz-group']) if ($(s)) $(s).value = '';
       ctx.refreshSetup();
     });
     loadVendors($);
     wireSkaarhoj($);
   }
 
+  /** The make pickers: single add-by-IP and bulk add offer the same list. */
   async function loadVendors($) {
-    const sel = $('#ptz-vendor');
-    if (!sel) return;
+    const sels = ['#ptz-vendor', '#bulk-vendor'].map((s) => $(s)).filter(Boolean);
+    if (!sels.length) return;
     const r = await api('GET', '/api/ptz/supported', undefined, { quiet: true });
-    for (const v of r.vendors ?? []) {
-      sel.append(el('option', { value: v.vendor, title: (v.models ?? []).join(', ') },
-        document.createTextNode(`${v.label}${v.models?.length ? ` (${v.models.join(', ')})` : ''}`)));
+    for (const sel of sels) {
+      for (const v of r.vendors ?? []) {
+        sel.append(el('option', { value: v.vendor, title: (v.models ?? []).join(', ') },
+          document.createTextNode(`${v.label}${v.models?.length ? ` (${v.models.join(', ')})` : ''}`)));
+      }
     }
   }
 
@@ -1722,6 +1784,10 @@ export function createPtz(ctx) {
     aim,
     stopAll,
     endAllHolds,
+    endHoldsFor,
+    keepOnly,
+    holding,
+    presetName,
     padSticks,
     padRelease,
     padAutofocus,

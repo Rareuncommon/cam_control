@@ -41,7 +41,16 @@
 
 <!-- ================= CONTROL ================= -->
 <section class="view active" id="view-control">
-  <main id="grid"></main>
+  <!-- Layout (every card, or the camera bus with one card for the selected
+       head), how many heads to ride at once, and the group filter. Shown
+       whenever there is a PTZ head. Filled by bus.js. -->
+  <div id="ctl-bar" class="ctlbar" hidden></div>
+  <div id="ctl-main">
+    <!-- The camera bus: one small tile per head. Only in the selected-camera
+         layout; tap a tile, or press 1–9 / 0 / ← →, to select. -->
+    <nav id="bus" class="bus" aria-label="Cameras" hidden></nav>
+    <main id="grid"></main>
+  </div>
 
   <details class="tools">
     <summary>Scenes, match &amp; linked cameras</summary>
@@ -148,6 +157,8 @@
     </span>
 
     <button class="small ghost" id="scope-key" title="What the false-colour bands mean">Key</button>
+    <!-- The same group filter as the camera bus on Control. -->
+    <div class="chips groupchips" id="mv-groups" role="group" aria-label="Camera group" hidden></div>
     <span class="note">Tap a picture to focus there — or, on a PTZ head, to aim it there. Live view must be enabled on the camera.</span>
   </div>
 
@@ -191,6 +202,8 @@
       <input type="password" id="ptz-pass" autocomplete="new-password">
       <label for="ptz-vendor">Make</label>
       <select id="ptz-vendor"><option value="">Work it out</option></select>
+      <label for="ptz-group">Group</label>
+      <input type="text" id="ptz-group" list="group-list" autocomplete="off" placeholder="optional, e.g. Stage">
     </div>
     <div class="line" style="margin-top:12px">
       <button class="small primary" id="ptz-detect">Find camera</button>
@@ -208,10 +221,64 @@
     </div>
   </div>
 
+  <!-- Many heads at once. The server probes each address (read-only) as a
+       job this page polls; nothing is added until "Add all found". -->
+  <div class="card" id="ptz-bulk-card">
+    <h3>Add many PTZ cameras</h3>
+    <div class="sub">
+      For a rack of heads that share one login. List their addresses, find out what answers, then
+      add everything found. The username and password are sent only to the addresses you list.
+    </div>
+    <div class="formgrid">
+      <label for="bulk-addr">Addresses</label>
+      <div>
+        <textarea id="bulk-addr" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false"
+                  placeholder="e.g. 192.168.0.21-40"></textarea>
+        <div class="note bulkhint">
+          Separate with commas, spaces or new lines. Any of:
+          <span class="mono">192.168.0.21</span> ·
+          <span class="mono">192.168.0.21-40</span> ·
+          <span class="mono">192.168.0.21-192.168.0.40</span> ·
+          <span class="mono">192.168.0.0/27</span> (a /24 or smaller) ·
+          a host name such as <span class="mono">cam-wide.local</span>. Up to 256 addresses.
+        </div>
+      </div>
+      <label for="bulk-user">Username</label>
+      <input type="text" id="bulk-user" autocomplete="off" autocapitalize="off" placeholder="shared by these cameras">
+      <label for="bulk-pass">Password</label>
+      <input type="password" id="bulk-pass" autocomplete="new-password">
+      <label for="bulk-vendor">Make</label>
+      <select id="bulk-vendor"><option value="">Work it out</option></select>
+      <label for="bulk-group">Group</label>
+      <input type="text" id="bulk-group" list="group-list" autocomplete="off" placeholder="optional, e.g. Balcony">
+    </div>
+    <div class="line" style="margin-top:12px">
+      <button class="small" id="bulk-find">Find cameras</button>
+      <button class="small primary" id="bulk-add">Add all found</button>
+      <span class="note" id="bulk-msg" role="status"></span>
+    </div>
+    <div id="bulk-progress" hidden style="margin-top:12px">
+      <div class="line">
+        <span class="note" id="bulk-summary" role="status"></span>
+        <span class="spacer"></span>
+        <button class="small ghost" id="bulk-empty" hidden></button>
+      </div>
+      <progress id="bulk-bar" value="0" max="1"></progress>
+      <div class="bulkscroll"><table class="list" id="bulk-table"></table></div>
+    </div>
+  </div>
+  <datalist id="group-list"></datalist>
+
   <div class="card">
     <h3>Added cameras</h3>
-    <div class="sub">These are saved and reconnect on their own. Removing one does not change the camera itself.</div>
-    <table class="list" id="adopted-table"></table>
+    <div class="sub">These are saved and reconnect on their own, in this order everywhere in the panel.
+      Removing one does not change the camera itself.</div>
+    <!-- Shown once the list is long enough to need finding things in. -->
+    <div class="line" id="cam-filter-row" hidden style="margin-bottom:9px">
+      <input type="search" id="cam-filter" placeholder="Find a camera by name, address or model" aria-label="Find a camera">
+      <div class="chips groupchips" id="setup-groups" role="group" aria-label="Camera group" hidden></div>
+    </div>
+    <div class="tablescroll"><table class="list" id="adopted-table"></table></div>
     <div class="note mono" id="paths" style="margin-top:12px"></div>
   </div>
 
@@ -289,6 +356,10 @@
     <!-- PTZ only: a head is reached by its address, so the address is editable. -->
     <label for="adopt-ip" class="ptz-only" hidden>IP address</label>
     <input type="text" id="adopt-ip" class="ptz-only" hidden inputmode="decimal" autocomplete="off">
+    <!-- Edit only: groups filter the camera bus, the cards and Multiview. -->
+    <label for="adopt-group" class="edit-only">Group</label>
+    <input type="text" id="adopt-group" class="edit-only" list="group-list" autocomplete="off"
+           placeholder="none — e.g. Stage, Balcony">
   </div>
 
   <!-- Only shown when the camera itself says it wants credentials. Asking for a
