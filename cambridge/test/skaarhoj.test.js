@@ -222,7 +222,7 @@ const FAST = {
   deadmanMs: 300,
 };
 
-async function panelApp({ panel, mode = 'drive', mapping = {}, logLevel = 'error' } = {}) {
+async function panelApp({ panel, mode = 'drive', mapping = {}, logLevel = 'error', cameras = null } = {}) {
   resetFakeHeads();
   const dir = mkdtempSync(join(tmpdir(), 'cambridge-skaarhoj-'));
   const configPath = join(dir, 'cambridge.json');
@@ -234,7 +234,7 @@ async function panelApp({ panel, mode = 'drive', mapping = {}, logLevel = 'error
       mode, host: mode === 'drive' ? '127.0.0.1' : '', port: panel.port, mapping,
       heartbeatMs: 250, lostAfterMs: 900, backoffMs: [100, 200],
     },
-    cameras: [
+    cameras: cameras ?? [
       { id: 'left', kind: 'ptz', vendor: 'fake', label: 'Left', ip: 'fake-left' },
       { id: 'right', kind: 'ptz', vendor: 'fake', label: 'Right', ip: 'fake-right', options: { tracking: true } },
     ],
@@ -512,5 +512,301 @@ test('mode is switched by an admin through the API, persisted, and applied live'
     const logs = readFileSync(join(dir, 'logs', 'cambridge.log'), 'utf8');
     assert.match(logs, /panel mode reactor -> drive/);
     assert.match(logs, /panel mode drive -> reactor/);
+  } finally { await app.stop(); await panel.close(); }
+});
+
+// --- many cameras: banks and groups ---------------------------------------------
+//
+// The default invented topology has 36 display buttons (ids 1-36, six to a
+// row), so the default cap is 8 camera buttons: with more cameras than that
+// and no bank buttons, buttons 7 and 8 page and buttons 1-6 select, and the
+// presets start on the next row (13-20).
+
+const pad = (n) => String(n).padStart(2, '0');
+/** `n` simulated PTZ heads: c01 "Cam 01" ..., optionally grouped by `groupOf(i)`. */
+function fakeCameras(n, groupOf = null) {
+  return Array.from({ length: n }, (_, k) => {
+    const i = k + 1;
+    return { id: `c${pad(i)}`, kind: 'ptz', vendor: 'fake', label: `Cam ${pad(i)}`, ip: `fake-c${pad(i)}`,
+      ...(groupOf ? { group: groupOf(i) } : {}) };
+  });
+}
+const colourOf = (panel, id) => panel.colours.get(id);
+const shows = (panel, id, re) => re.test(panel.texts.get(id) ?? '');
+const tap = (panel, id) => { panel.press(id, 4); panel.release(id, 4); };
+const status = async (call) => (await call('GET', '/api/skaarhoj')).body;
+
+async function readyMany(app, panel, n) {
+  await until(() => app.state.list().filter((c) => c.kind === 'ptz' && c.state === 'connected').length === n, { timeoutMs: 8000 });
+  await until(() => app.skaarhoj?.client.connected);
+  await until(() => /Iris/.test(panel.texts.get(43) ?? ''), { timeoutMs: 5000 });
+}
+
+test('camera buttons are capped, presets keep their buttons, and the last two camera buttons page when nothing else does', () => {
+  // Few cameras: unchanged, one button each.
+  const few = detectRoles(defaultTopology(), { cameraCount: 4 });
+  assert.deepEqual(few.cameras, [1, 2, 3, 4]);
+  assert.equal(few.bankNext, null);
+  assert.equal(few.bankFallback, false);
+  // Exactly the cap: still no paging.
+  assert.deepEqual(detectRoles(defaultTopology(), { cameraCount: 8 }).cameras, [1, 2, 3, 4, 5, 6, 7, 8]);
+
+  for (const n of [20, 48, 200]) {
+    const r = detectRoles(defaultTopology(), { cameraCount: n });
+    assert.deepEqual(r.cameras, [1, 2, 3, 4, 5, 6], `${n} cameras`);
+    assert.deepEqual([r.bankPrev, r.bankNext, r.bankFallback], [7, 8, true]);
+    assert.deepEqual(r.presets, [13, 14, 15, 16, 17, 18, 19, 20], 'presets keep a full set, on the next row');
+    assert.equal(r.store, 21);
+    assert.equal(r.tracking, 22);
+  }
+
+  // The cap is configurable; paging needs at least three buttons to be useful.
+  const ten = detectRoles(defaultTopology(), { cameraCount: 48, override: { cameraButtons: 10 } });
+  assert.equal(ten.cameras.length, 8);
+  assert.deepEqual([ten.bankPrev, ten.bankNext], [9, 10]);
+  const small = detectRoles(defaultTopology(), { cameraCount: 3, override: { cameraButtons: 2 } });
+  assert.deepEqual([small.cameras.length, small.bankFallback], [1, true]);
+});
+
+test('bank and group buttons are found by label, and pinned ones win', () => {
+  const t = (labels) => defaultTopology({ labels });
+  const lab = detectRoles(t({ 35: 'Bank -', 36: 'Bank +', 34: 'Group' }), { cameraCount: 48 });
+  assert.deepEqual([lab.bankPrev, lab.bankNext, lab.group, lab.bankFallback], [35, 36, 34, false]);
+  assert.deepEqual(lab.cameras, [1, 2, 3, 4, 5, 6, 7, 8], 'every camera button selects when real bank buttons exist');
+  assert.deepEqual(lab.presets, [13, 14, 15, 16, 17, 18, 19, 20]);
+
+  const arrows = detectRoles(t({ 30: '◀', 31: '▶' }), { cameraCount: 20 });
+  assert.deepEqual([arrows.bankPrev, arrows.bankNext], [30, 31]);
+  const words = detectRoles(t({ 30: 'Prev', 31: 'Next page' }), { cameraCount: 20 });
+  assert.deepEqual([words.bankPrev, words.bankNext], [30, 31]);
+  const lone = detectRoles(t({ 30: 'Page' }), { cameraCount: 20 });
+  assert.deepEqual([lone.bankPrev, lone.bankNext], [null, 30], 'a lone "page" button pages forward');
+  const both = detectRoles(t({ 30: '◀▶' }), { cameraCount: 20 });
+  assert.deepEqual([both.bankPrev, both.bankNext], [null, 30]);
+  assert.equal(detectRoles(t({ 30: 'Next group' }), { cameraCount: 20 }).group, 30, '"next group" is the group button');
+
+  const pinned = detectRoles(t({ 35: 'Bank -', 36: 'Bank +' }), {
+    cameraCount: 20, override: { bankNext: 20, bankPrev: 19, groupButton: 18, cameras: [1, 2, 3, 4] },
+  });
+  assert.deepEqual([pinned.bankPrev, pinned.bankNext, pinned.group], [19, 20, 18]);
+  assert.deepEqual(pinned.cameras, [1, 2, 3, 4]);
+  assert.ok(pinned.pinned.includes('bankNext'));
+  assert.ok(![...pinned.presets, pinned.store, pinned.tracking].some((id) => [18, 19, 20, 35, 36].includes(id)),
+    'pinned and labelled bank buttons are not handed out again');
+
+  // Pinned cameras with more cameras than buttons: the last two of them page.
+  const pc = detectRoles(defaultTopology(), { cameraCount: 20, override: { cameras: [1, 2, 3, 4, 5] } });
+  assert.deepEqual([pc.cameras, pc.bankPrev, pc.bankNext], [[1, 2, 3], 4, 5]);
+});
+
+test('20 cameras: banks page, say which bank, keep tally on every bank, and signal a program camera elsewhere', async () => {
+  const panel = await startFakePanel();
+  const { app, call } = await panelApp({ panel, cameras: fakeCameras(20) });
+  try {
+    await readyMany(app, panel, 20);
+    // Bank 1 of 4 (6 + 6 + 6 + 2): c01-c06 on buttons 1-6.
+    await until(() => shows(panel, 6, /Cam 06/) && shows(panel, 8, /Bank 1\/4/));
+    assert.match(panel.texts.get(7), /Bank 1\/4/);
+    assert.match(panel.texts.get(7), /PREV/);
+    assert.match(panel.texts.get(8), /NEXT/);
+    let st = await status(call);
+    assert.deepEqual(st.bank, { index: 0, count: 4, size: 6, cameras: 20 });
+    assert.equal(st.topologySummary.bankButtonsAreCameras, true);
+
+    // A camera on program on bank 2: nothing on bank 1 is red, but the next-bank button is.
+    app.state.applyTally({ c10: { program: true, preview: false }, c15: { program: false, preview: true } });
+    await until(() => panel.leds.get(8) === LED.ON && colourOf(panel, 8) === colourValue(COLOUR.RED));
+    assert.match(panel.texts.get(8), /PGM: Cam 10/);
+    assert.notEqual(colourOf(panel, 7), colourValue(COLOUR.RED));
+    assert.equal(colourOf(panel, 1), colourValue(COLOUR.AMBER), 'the selected camera is amber');
+    assert.equal(colourOf(panel, 2), colourValue(COLOUR.WHITE));
+
+    // Next bank: c07-c12. c10 (button 4) shows its tally though it is not selected.
+    tap(panel, 8);
+    await until(() => shows(panel, 1, /Cam 07/) && shows(panel, 8, /Bank 2\/4/));
+    await until(() => colourOf(panel, 4) === colourValue(COLOUR.RED));
+    assert.match(panel.texts.get(4), /PGM/);
+    assert.notEqual(colourOf(panel, 8), colourValue(COLOUR.RED), 'the program camera is on this bank now');
+    assert.notEqual(colourOf(panel, 7), colourValue(COLOUR.RED));
+    // The selected camera is still c01, off this bank: say so on the bank buttons.
+    assert.match(panel.texts.get(7), /Sel: Cam 01/);
+    assert.equal((await status(call)).selectedCameraId, 'c01', 'a bank change selects nothing');
+
+    // Bank 3: c13-c18. The preview camera c15 is green on button 3; program is behind us.
+    tap(panel, 8);
+    await until(() => shows(panel, 1, /Cam 13/) && shows(panel, 8, /Bank 3\/4/));
+    await until(() => colourOf(panel, 3) === colourValue(COLOUR.GREEN));
+    await until(() => panel.leds.get(7) === LED.ON && colourOf(panel, 7) === colourValue(COLOUR.RED));
+    assert.match(panel.texts.get(7), /PGM: Cam 10/);
+
+    // Last bank has two cameras; the other buttons go blank. Then it wraps.
+    tap(panel, 8);
+    await until(() => shows(panel, 2, /Cam 20/) && shows(panel, 8, /Bank 4\/4/));
+    await until(() => !/Cam/.test(panel.texts.get(3) ?? 'Cam') && panel.leds.get(3) === LED.OFF);
+    tap(panel, 8);
+    await until(() => shows(panel, 1, /Cam 01/) && shows(panel, 8, /Bank 1\/4/));
+    tap(panel, 7);   // previous from the first wraps to the last
+    await until(() => shows(panel, 1, /Cam 19/) && shows(panel, 7, /Bank 4\/4/));
+    st = await status(call);
+    assert.equal(st.bank.index, 3);
+  } finally { await app.stop(); await panel.close(); }
+});
+
+test('selecting a camera on another bank stops the previous one; a bank change moves nothing', async () => {
+  const panel = await startFakePanel();
+  const { app, call } = await panelApp({ panel, cameras: fakeCameras(20) });
+  try {
+    await readyMany(app, panel, 20);
+    const first = fakeHead('fake-c01');
+    const far = fakeHead('fake-c14');
+    panel.speed(37, 400);
+    await until(() => first.v.pan > 0);
+
+    // Paging while the stick is held: c01 keeps moving, and nothing else starts.
+    tap(panel, 8);
+    tap(panel, 8);
+    await until(() => shows(panel, 1, /Cam 13/));
+    await sleep(150);
+    assert.ok(first.v.pan > 0, 'a bank change does not stop the camera being driven');
+    assert.equal(far.v.pan, 0);
+    assert.equal((await status(call)).selectedCameraId, 'c01');
+
+    // Pick c14 (button 2 on bank 3): c01 stops first, and the stick has to move again.
+    tap(panel, 2);
+    await until(() => first.v.pan === 0);
+    await sleep(100);
+    assert.equal(far.v.pan, 0);
+    assert.equal((await status(call)).selectedCameraId, 'c14');
+    await until(() => panel.leds.get(2) === LED.ON);
+    panel.speed(37, 300);
+    await until(() => far.v.pan > 0);
+    assert.equal(first.v.pan, 0);
+
+    // Presets act on the camera that is selected, not the one on the bank.
+    panel.speed(37, 0);
+    await until(() => far.v.pan === 0);
+    assert.equal((await call('POST', '/api/cameras/c14/ptz/presets/1/store', {})).status, 200);
+    const stored = far.pan;
+    far.pan = 0.9;
+    tap(panel, 7);
+    await until(() => shows(panel, 1, /Cam 07/));
+    panel.press(13);
+    await until(() => near(far.pan, stored, 1e-3));
+  } finally { await app.stop(); await panel.close(); }
+});
+
+test('48 cameras with labelled bank buttons and a pinned cap', async () => {
+  const panel = await startFakePanel({ topology: defaultTopology({ labels: { 35: 'Bank -', 36: 'Bank +' } }) });
+  const { app, call } = await panelApp({ panel, cameras: fakeCameras(48), mapping: { cameraButtons: 10 } });
+  try {
+    await readyMany(app, panel, 48);
+    await until(() => shows(panel, 10, /Cam 10/) && shows(panel, 36, /Bank 1\/5/));
+    assert.match(panel.texts.get(35), /Bank 1\/5/);
+    const st = await status(call);
+    assert.deepEqual(st.topologySummary.cameraButtons, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert.equal(st.topologySummary.bankButtonsAreCameras, false);
+    assert.equal(st.bank.count, 5);
+    for (let i = 0; i < 4; i += 1) tap(panel, 36);
+    await until(() => shows(panel, 1, /Cam 41/) && shows(panel, 36, /Bank 5\/5/));
+    await until(() => shows(panel, 8, /Cam 48/) && !shows(panel, 9, /Cam/));
+    tap(panel, 35);
+    await until(() => shows(panel, 1, /Cam 31/) && shows(panel, 35, /Bank 4\/5/));
+    // A program camera on bank 5 lights the next button, not the previous.
+    app.state.applyTally({ c45: { program: true, preview: false } });
+    await until(() => colourOf(panel, 36) === colourValue(COLOUR.RED));
+    assert.notEqual(colourOf(panel, 35), colourValue(COLOUR.RED));
+  } finally { await app.stop(); await panel.close(); }
+});
+
+test('48 cameras with no bank buttons: the last two camera buttons page, all eight banks reachable', async () => {
+  const panel = await startFakePanel();
+  const { app, call } = await panelApp({ panel, cameras: fakeCameras(48) });
+  try {
+    await readyMany(app, panel, 48);
+    await until(() => shows(panel, 8, /Bank 1\/8/));
+    for (let i = 0; i < 7; i += 1) tap(panel, 8);
+    await until(() => shows(panel, 1, /Cam 43/) && shows(panel, 6, /Cam 48/) && shows(panel, 8, /Bank 8\/8/));
+    tap(panel, 3);
+    await until(() => panel.leds.get(3) === LED.ON);
+    assert.equal((await status(call)).selectedCameraId, 'c45');
+  } finally { await app.stop(); await panel.close(); }
+});
+
+test('pinned bank buttons in the mapping are obeyed', async () => {
+  const panel = await startFakePanel();
+  const { app, call } = await panelApp({
+    panel, cameras: fakeCameras(20), mapping: { cameras: [1, 2, 3, 4], bankNext: 6, bankPrev: 5 },
+  });
+  try {
+    await readyMany(app, panel, 20);
+    await until(() => shows(panel, 6, /Bank 1\/5/));
+    tap(panel, 6);
+    await until(() => shows(panel, 1, /Cam 05/) && shows(panel, 5, /Bank 2\/5/));
+    tap(panel, 5);
+    tap(panel, 5);
+    await until(() => shows(panel, 1, /Cam 17/));
+    const st = await status(call);
+    assert.deepEqual([st.topologySummary.bankPrev, st.topologySummary.bankNext], [5, 6]);
+    assert.ok(st.topologySummary.pinned.includes('bankNext'));
+  } finally { await app.stop(); await panel.close(); }
+});
+
+test('groups: the group button cycles them, banks restart, and the selected camera is not moved', async () => {
+  const panel = await startFakePanel({ topology: defaultTopology({ labels: { 34: 'Group' } }) });
+  const cameras = fakeCameras(14, (i) => (i <= 10 ? 'Studio' : 'Stage'));
+  const { app, call } = await panelApp({ panel, cameras });
+  try {
+    await readyMany(app, panel, 14);
+    await until(() => shows(panel, 34, /All/) && shows(panel, 8, /Bank 1\/3/));
+    const st = await status(call);
+    assert.equal(st.topologySummary.group, 34);
+    assert.equal(st.group, null);
+
+    tap(panel, 8);   // bank 2 of "all"
+    await until(() => shows(panel, 1, /Cam 07/));
+    // Group 1: Studio, ten cameras, two banks.
+    tap(panel, 34);
+    await until(() => shows(panel, 34, /Studio/) && shows(panel, 1, /Cam 01/) && shows(panel, 8, /Bank 1\/2/));
+    assert.equal((await status(call)).group, 'Studio');
+    // Group 2: Stage, four cameras, one bank: the borrowed bank buttons go quiet.
+    tap(panel, 34);
+    await until(() => shows(panel, 34, /Stage/) && shows(panel, 1, /Cam 11/) && shows(panel, 4, /Cam 14/));
+    await until(() => !/Bank/.test(panel.texts.get(8) ?? '') && panel.leds.get(8) === LED.OFF);
+    // The selected camera (c01, in Studio) is still selected; the group button says so.
+    assert.match(panel.texts.get(34), /Sel: Cam 01/);
+    assert.equal((await status(call)).selectedCameraId, 'c01');
+    // A camera on program in another group lights the group button red.
+    app.state.applyTally({ c03: { program: true, preview: false } });
+    await until(() => colourOf(panel, 34) === colourValue(COLOUR.RED));
+    // Selecting in the group works; then back to all.
+    tap(panel, 2);
+    await until(() => panel.leds.get(2) === LED.ON);
+    assert.equal((await status(call)).selectedCameraId, 'c12');
+    tap(panel, 34);
+    await until(() => shows(panel, 34, /All/) && shows(panel, 1, /Cam 01/));
+    assert.equal((await status(call)).group, null);
+  } finally { await app.stop(); await panel.close(); }
+});
+
+test('mapping.group restricts the panel to one group, case-insensitively, with no paging when it fits', async () => {
+  const panel = await startFakePanel();
+  const cameras = fakeCameras(30, (i) => (i <= 24 ? 'Studio' : 'Stage'));
+  const { app, call } = await panelApp({ panel, cameras, mapping: { group: 'stage' } });
+  try {
+    await until(() => app.state.list().filter((c) => c.state === 'connected').length === 30, { timeoutMs: 8000 });
+    await until(() => app.skaarhoj?.client.connected);
+    await until(() => shows(panel, 1, /Cam 25/) && shows(panel, 6, /Cam 30/));
+    const st = await status(call);
+    assert.deepEqual(st.topologySummary.cameraButtons, [1, 2, 3, 4, 5, 6]);
+    assert.equal(st.topologySummary.bankNext, null);
+    assert.equal(st.selectedCameraId, 'c25', 'the first camera of the group, not of the venue');
+    // A stick move drives that camera; button 6 selects c30 and stops it first.
+    const head = fakeHead('fake-c25');
+    panel.speed(37, 300);
+    await until(() => head.v.pan > 0);
+    tap(panel, 6);
+    await until(() => head.v.pan === 0);
+    assert.equal((await status(call)).selectedCameraId, 'c30');
+    assert.equal(fakeHead('fake-c01').v.pan, 0);
   } finally { await app.stop(); await panel.close(); }
 });

@@ -416,6 +416,11 @@ export class StateModel extends EventEmitter {
     return cam ? this.#cameraView(cam, o) : null;
   }
 
+  /** The operator's group for a camera, or null. */
+  groupOf(id) {
+    return this.meta.get(id)?.group ?? null;
+  }
+
   /** Cameras in the operator's order: config order, anything unconfigured last. */
   ordered() {
     const at = (c) => this.meta.get(c.id)?.order ?? Number.MAX_SAFE_INTEGER;

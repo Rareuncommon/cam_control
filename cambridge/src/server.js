@@ -473,10 +473,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   // lifecycle's polling is what keeps CamBridge in step with it.
   let skaarhoj = null;   // { client, controller } while driving a panel
 
-  /** PTZ cameras in config order: the order of the panel's camera buttons. */
+  /** PTZ cameras in the operator's order, with their groups: what the panel's camera buttons page through. */
   function panelCameras() {
-    return ptz.ids().map((id) => state.get(id)).filter(Boolean).map((c) => ({
-      id: c.id, label: c.label, state: c.state, tally: c.tally ?? null, ptz: c.ptz ?? null,
+    const mine = new Set(ptz.ids());
+    return state.ordered().filter((c) => mine.has(c.id)).map((c) => ({
+      id: c.id, label: c.label, group: state.groupOf(c.id), state: c.state, tally: c.tally ?? null, ptz: c.ptz ?? null,
     }));
   }
 
@@ -553,6 +554,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       detail,
       selectedCameraId: cs?.selectedCameraId ?? null,
       topologySummary: st?.connected ? (cs?.topologySummary ?? null) : null,
+      bank: st?.connected ? (cs?.bank ?? null) : null,
+      group: st?.connected ? (cs?.group ?? null) : null,
     };
   }
 

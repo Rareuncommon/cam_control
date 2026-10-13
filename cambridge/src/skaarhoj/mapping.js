@@ -117,7 +117,7 @@ function rows(list) {
   return out;
 }
 
-const OVERRIDE_SINGLE = ['pan', 'tilt', 'rotate', 'zoom', 'focus', 'stop', 'store', 'tracking'];
+const OVERRIDE_SINGLE = ['pan', 'tilt', 'rotate', 'zoom', 'focus', 'stop', 'store', 'tracking', 'bankNext', 'bankPrev'];
 const OVERRIDE_LIST = ['cameras', 'presets', 'encoders'];
 const posInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
 
@@ -144,14 +144,22 @@ const posInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) 
  *     Each shows its setting on its own display if it has one, else on the
  *     nearest display-only control.
  *  5. Buttons, by label: "stop", "store"/"shift"/"save", "track".
- *  6. The remaining buttons with displays, in reading order: one per PTZ
- *     camera, then presets from the start of the next row, then STORE and
- *     TRACKING if no labelled ones were found. STOP is never assigned by
- *     position: a stop button must be one somebody chose.
+ *     Bank and group buttons are found the same way: a label with "group"
+ *     is the group button; "next", "prev", "bank", "page" or an arrow is a
+ *     bank button (a bank button that says only "bank" or "page", or has
+ *     both arrows, pages forward and wraps).
+ *  6. The remaining buttons with displays, in reading order: camera buttons
+ *     (at most `skaarhoj.mapping.cameraButtons`, by default a third of the
+ *     display buttons up to 8), then presets from the start of the next row,
+ *     then STORE and TRACKING if no labelled ones were found. When there are
+ *     more cameras than camera buttons they are paged in banks; with no bank
+ *     buttons found or pinned, the last two camera buttons become bank
+ *     previous and next. STOP is never assigned by position: a stop button
+ *     must be one somebody chose.
  *
  * @param {object|null} topology  the panel's `_panelTopology_HWC` JSON
  * @param {object} o
- * @param {number} o.cameraCount
+ * @param {number} o.cameraCount   cameras the panel can reach (after any group restriction)
  * @param {object} [o.override]   `skaarhoj.mapping` from the config
  * @param {(id: number) => boolean} [o.available]
  */
@@ -162,6 +170,7 @@ export function detectRoles(topology, { cameraCount = 0, override = {}, availabl
   const roles = {
     pan: null, tilt: null, rotate: null, vector: null, zoom: null, focus: null,
     stop: null, store: null, tracking: null,
+    bankNext: null, bankPrev: null, group: null, bankFallback: false,
     cameras: [], presets: [], encoders: [], displays: {},
     pinned: [],
   };
@@ -172,6 +181,10 @@ export function detectRoles(topology, { cameraCount = 0, override = {}, availabl
     const id = posInt(ov[k]);
     if (id) { roles[k] = id; taken.add(id); roles.pinned.push(k); }
   }
+  // `mapping.group` is the *name* of a group to restrict the panel to, so the
+  // button that cycles groups is pinned as `groupButton`.
+  const groupButton = posInt(ov.groupButton);
+  if (groupButton) { roles.group = groupButton; taken.add(groupButton); roles.pinned.push('groupButton'); }
   for (const k of OVERRIDE_LIST) {
     if (!Array.isArray(ov[k])) continue;
     roles[k] = ov[k].map(posInt).filter(Boolean);
@@ -255,20 +268,55 @@ export function detectRoles(topology, { cameraCount = 0, override = {}, availabl
   if (!roles.stop) take('stop', buttons.find((c) => free(c) && /\bstop\b/.test(c.words)));
   if (!roles.store) take('store', buttons.find((c) => free(c) && /\b(store|shift|save)\b/.test(c.words)));
   if (!roles.tracking) take('tracking', buttons.find((c) => free(c) && /track/.test(c.words)));
+  // Bank and group buttons, by label. "group" is checked first so a button
+  // labelled "Next group" cycles groups rather than banks.
+  const navKind = (c) => {
+    const w = c.words;
+    if (/\bgroups?\b/.test(w)) return 'group';
+    const next = /\bnext\b|▶|►|→|\b(bank|page)\s*(up|\+)/.test(w);
+    const prev = /\bprev(ious)?\b|◀|◄|←|\b(bank|page)\s*(down|-)/.test(w);
+    if (next && prev) return 'next';   // "◀▶": one button, pages on and wraps
+    if (prev) return 'prev';
+    if (next || /\b(bank|page)s?\b/.test(w)) return 'next';
+    return null;
+  };
+  if (!roles.group) take('group', buttons.find((c) => free(c) && navKind(c) === 'group'));
+  if (!roles.bankNext) take('bankNext', buttons.find((c) => free(c) && navKind(c) === 'next'));
+  if (!roles.bankPrev) take('bankPrev', buttons.find((c) => free(c) && navKind(c) === 'prev'));
 
   // --- 6. display buttons by position ---
   const grid = rows(buttons.filter((c) => c.disp && free(c)));
   const flat = grid.flat();
   let at = 0;
+  const hasBankButtons = !!(roles.bankNext || roles.bankPrev);
+  // A third of the display buttons, so presets and the rest keep theirs
+  // however many cameras there are; 8 on a PTZ Extreme.
+  const displayButtons = comps.filter((c) => isButton(c.inType) && c.disp).length;
+  const cap = posInt(ov.cameraButtons) ?? Math.max(2, Math.min(8, Math.floor(displayButtons / 3)));
+  /** With nowhere else to page from, the last two camera buttons turn the banks. */
+  const useLastTwoForBanks = (ids) => {
+    roles.bankPrev = ids.at(-2);
+    roles.bankNext = ids.at(-1);
+    roles.bankFallback = true;
+    taken.add(roles.bankPrev);
+    taken.add(roles.bankNext);
+    return ids.slice(0, -2);
+  };
+  let region = [];   // every button set aside for cameras, bank buttons included
   if (!roles.pinned.includes('cameras')) {
-    roles.cameras = flat.slice(0, cameraCount).map((c) => c.id);
-    at = roles.cameras.length;
+    const paging = cameraCount > cap;
+    const slots = paging && !hasBankButtons ? Math.max(cap, 3) : Math.min(cap, cameraCount);
+    region = flat.slice(0, slots).map((c) => c.id);
+    roles.cameras = paging && !hasBankButtons && region.length >= 3 ? useLastTwoForBanks(region) : region;
+    at = region.length;
+  } else if (cameraCount > roles.cameras.length && !hasBankButtons && roles.cameras.length >= 3) {
+    roles.cameras = useLastTwoForBanks(roles.cameras);
   }
   if (!roles.pinned.includes('presets')) {
     // Presets start on a fresh row when there is one, so the two groups read
     // as two groups on the panel.
     if (at > 0) {
-      const lastRow = grid.findIndex((r) => r.some((c) => c.id === roles.cameras.at(-1)));
+      const lastRow = grid.findIndex((r) => r.some((c) => c.id === region.at(-1)));
       const nextRowStart = flat.indexOf(grid[lastRow + 1]?.[0]);
       if (nextRowStart > at) at = nextRowStart;
     }
@@ -276,7 +324,7 @@ export function detectRoles(topology, { cameraCount = 0, override = {}, availabl
     roles.presets = flat.slice(at, at + want).filter(free).map((c) => c.id);
     at += roles.presets.length;
   }
-  const rest = flat.slice(at).filter((c) => free(c) && !roles.cameras.includes(c.id) && !roles.presets.includes(c.id));
+  const rest = flat.slice(at).filter((c) => free(c) && !region.includes(c.id) && !roles.cameras.includes(c.id) && !roles.presets.includes(c.id));
   if (!roles.store) take('store', rest.shift());
   if (!roles.tracking) take('tracking', rest.shift());
 
@@ -293,6 +341,10 @@ export function summarise(roles, topology) {
     zoom: roles.zoom,
     focus: roles.focus,
     cameraButtons: roles.cameras,
+    bankPrev: roles.bankPrev,
+    bankNext: roles.bankNext,
+    bankButtonsAreCameras: roles.bankFallback,
+    group: roles.group,
     presetButtons: roles.presets,
     store: roles.store,
     stop: roles.stop,
@@ -306,13 +358,20 @@ export function summarise(roles, topology) {
 
 const AXES = ['pan', 'tilt', 'zoom', 'focus'];
 
+/** What the group button calls cameras that have no group, once other groups exist. */
+const UNGROUPED = 'Ungrouped';
+
+/** The layout log line's bank/group part. */
+const bankText = (s) => (s.bankPrev || s.bankNext || s.group
+  ? `banks prev ${s.bankPrev ?? '-'} next ${s.bankNext ?? '-'}${s.bankButtonsAreCameras ? ' (camera buttons)' : ''}, group ${s.group ?? '-'}, ` : '');
+
 export class PanelController extends EventEmitter {
   /**
    * @param {object} o
    * @param {import('./rawpanel.js').RawPanelClient} o.client
    * @param {import('../ptz/source.js').PtzSource} o.ptz
-   * @param {() => Array<{id: string, label: string, state: string, tally: object|null, ptz: object|null}>} o.cameras
-   *        PTZ cameras in button order
+   * @param {() => Array<{id: string, label: string, group?: string|null, state: string, tally: object|null, ptz: object|null}>} o.cameras
+   *        PTZ cameras in the operator's order
    * @param {(id: string) => {entries: object[], capabilities: object}|null} o.schema
    * @param {(id: string, prop: string) => any} o.value          current raw value
    * @param {(id: string, prop: string, v: any) => Promise<object>} o.setProperty  the server's applyFn
@@ -347,6 +406,10 @@ export class PanelController extends EventEmitter {
     /** id -> component, from the last layout. */
     this.comps = new Map();
     this.selected = null;
+    /** Which bank of cameras the camera buttons show (0-based), and which group (null: all). */
+    this.bankIndex = 0;
+    this.groupKey = null;
+    this.warnedGroup = false;
     this.axes = { pan: 0, tilt: 0, zoom: 0, focus: 0 };
     this.shift = false;
     /** HWC id -> what was last sent, so a render sends only what changed. */
@@ -399,9 +462,12 @@ export class PanelController extends EventEmitter {
   }
 
   status() {
+    const { view, size, pages, bank, groupKey } = this.#page();
     return {
       selectedCameraId: this.#selected(),
       topologySummary: summarise(this.roles, this.client.topology),
+      bank: { index: bank, count: pages, size, cameras: view.length },
+      group: groupKey === null ? null : (groupKey || UNGROUPED),
     };
   }
 
@@ -416,7 +482,7 @@ export class PanelController extends EventEmitter {
   }
 
   #layout() {
-    const cams = this.cameras();
+    const cams = this.#scope();
     this.needsLayout = false;
     this.layoutHadMap = this.client.mapReceived;
     this.layoutCams = cams.length;
@@ -431,7 +497,7 @@ export class PanelController extends EventEmitter {
     if (key === this.layoutKey) { this.#repaint(); return; }
     this.layoutKey = key;
     this.log('info', `panel layout: joystick ${JSON.stringify(s.joystick)}, zoom ${s.zoom}, focus ${s.focus}, `
-      + `cameras [${s.cameraButtons}], presets [${s.presetButtons}], store ${s.store}, stop ${s.stop}, `
+      + `cameras [${s.cameraButtons}], ${bankText(s)}presets [${s.presetButtons}], store ${s.store}, stop ${s.stop}, `
       + `tracking ${s.tracking}, encoders [${this.roles.encoders}]${s.pinned.length ? `, pinned: ${s.pinned.join(' ')}` : ''}`);
     this.emit('layout', s);
     this.#repaint();
@@ -488,6 +554,9 @@ export class PanelController extends EventEmitter {
     }
     if (kind !== 'Down') return;
     if (id === r.stop) { this.#stopAll(); return; }
+    if (id === r.bankNext) { this.#bank(+1); return; }
+    if (id === r.bankPrev) { this.#bank(r.bankNext ? -1 : +1); return; }
+    if (id === r.group) { this.#cycleGroup(); return; }
     const cam = r.cameras.indexOf(id);
     if (cam >= 0) { this.#select(cam); return; }
     const p = r.presets.indexOf(id);
@@ -567,15 +636,77 @@ export class PanelController extends EventEmitter {
     this.ptz.stopAll('SKAARHOJ STOP').catch(() => {});
   }
 
+  // --- banks and groups --------------------------------------------------------
+
+  /** The cameras this panel can reach: all of them, or the one configured group. */
+  #scope() {
+    const all = this.cameras();
+    const want = typeof this.mapping.group === 'string' ? this.mapping.group.trim().toLowerCase() : '';
+    if (!want) return all;
+    const inGroup = all.filter((c) => (c.group ?? '').toLowerCase() === want);
+    if (!inGroup.length && all.length && !this.warnedGroup) {
+      this.warnedGroup = true;
+      this.log('warn', `skaarhoj.mapping.group "${this.mapping.group}" matches no camera: the panel has none to drive`);
+    }
+    return inGroup;
+  }
+
+  /**
+   * What the camera buttons show right now: the cameras in view (the scope,
+   * narrowed to the chosen group), how many fit on a bank, and which bank.
+   * Clamped here, so a camera removed or a group emptied cannot leave the
+   * panel on a bank that no longer exists.
+   */
+  #page() {
+    const scope = this.#scope();
+    const keys = [];
+    for (const c of scope) { const k = c.group ?? ''; if (!keys.includes(k)) keys.push(k); }
+    // Cycling needs at least two groups to choose between.
+    const groups = keys.length >= 2 ? keys : [];
+    if (this.groupKey !== null && !groups.includes(this.groupKey)) this.groupKey = null;
+    const view = this.groupKey === null ? scope : scope.filter((c) => (c.group ?? '') === this.groupKey);
+    const size = this.roles?.cameras.length ?? 0;
+    const pages = size ? Math.max(1, Math.ceil(view.length / size)) : 1;
+    this.bankIndex = Math.max(0, Math.min(pages - 1, this.bankIndex));
+    return { scope, view, groups, groupKey: this.groupKey, size, pages, bank: this.bankIndex };
+  }
+
+  /**
+   * Moves the camera buttons to another bank, wrapping at the ends. It is a
+   * display change only: the selected camera, and whatever the stick is
+   * holding, are untouched.
+   */
+  #bank(step) {
+    const { pages, bank } = this.#page();
+    if (pages <= 1) return;
+    this.bankIndex = (bank + step + pages) % pages;
+    this.log('info', `panel showing bank ${this.bankIndex + 1}/${pages}`);
+    this.emit('bank', this.bankIndex);
+    this.refresh();
+  }
+
+  /** All cameras, then each group in turn. Like a bank change, it moves nothing. */
+  #cycleGroup() {
+    const { groups, groupKey } = this.#page();
+    if (!groups.length) return;
+    const options = [null, ...groups];
+    this.groupKey = options[(options.indexOf(groupKey) + 1) % options.length];
+    this.bankIndex = 0;
+    this.log('info', `panel showing ${this.groupKey === null ? 'all cameras' : `group ${this.groupKey || UNGROUPED}`}`);
+    this.emit('group', this.groupKey);
+    this.refresh();
+  }
+
   #selected() {
-    const cams = this.cameras();
+    const cams = this.#scope();
     if (!cams.length) return null;
     if (!cams.some((c) => c.id === this.selected)) this.selected = cams[0].id;
     return this.selected;
   }
 
   #select(i) {
-    const cam = this.cameras()[i];
+    const { view, size, bank } = this.#page();
+    const cam = view[bank * size + i];
     const prev = this.#selected();
     if (!cam || cam.id === prev) return;
     // The camera being left must not keep moving: the stick's next value goes
@@ -706,12 +837,14 @@ export class PanelController extends EventEmitter {
     const r = this.roles;
     const want = new Map();
     if (!r) return want;
-    const cams = this.cameras();
+    const page = this.#page();
+    const { view, size, bank: shown } = page;
+    const cams = this.#scope();
     const sel = this.#selected();
     const blank = hwcText({ format: 7 });   // notes §6.4: format 7 = hidden
 
     r.cameras.forEach((id, i) => {
-      const c = cams[i];
+      const c = view[shown * size + i];
       if (!c) { want.set(id, { led: { mode: LED.OFF, colour: COLOUR.OFF }, text: blank }); return; }
       const selected = c.id === sel;
       const pgm = !!c.tally?.program;
@@ -726,6 +859,8 @@ export class PanelController extends EventEmitter {
         text: hwcText({ title, isLabel: !selected, label1: c.label || c.id }),
       });
     });
+
+    this.#desiredNav(want, page, sel, cams, blank);
 
     const caps = sel ? this.schemaOf(sel)?.capabilities : null;
     const base = caps?.presetBase ?? 1;
@@ -772,10 +907,59 @@ export class PanelController extends EventEmitter {
     return want;
   }
 
+  /**
+   * The bank and group buttons. They say which bank is showing, and light red
+   * when a camera that is on program is somewhere the camera buttons are not
+   * showing: the camera buttons keep their own tally, so this covers the rest.
+   */
+  #desiredNav(want, { view, groups, groupKey, size, pages, bank }, sel, cams, blank) {
+    const r = this.roles;
+    const off = { led: { mode: LED.OFF, colour: COLOUR.OFF }, text: blank };
+    const label = (c) => c?.label || c?.id || '';
+    const selCam = cams.find((c) => c.id === sel);
+    const bankOf = (c) => { const j = view.indexOf(c); return j < 0 ? -1 : Math.floor(j / size); };
+    const onProgram = (c) => !!c.tally?.program;
+
+    if ((r.bankNext || r.bankPrev) && size) {
+      const before = view.find((c) => onProgram(c) && bankOf(c) < bank);
+      const after = view.find((c) => onProgram(c) && bankOf(c) > bank);
+      const both = !!(r.bankNext && r.bankPrev);
+      const selBank = selCam ? bankOf(selCam) : bank;
+      const draw = (id, dir, pgm) => {
+        // A labelled bank button on a single bank stays lit-off but readable;
+        // one borrowed from the camera buttons has nothing to say.
+        if (pages <= 1) { want.set(id, r.bankFallback ? off : { led: { mode: LED.OFF, colour: COLOUR.OFF }, text: hwcText({ title: 'BANK', isLabel: true, label1: 'Bank 1/1' }) }); return; }
+        const note = pgm ? `PGM: ${label(pgm)}` : selCam && selBank !== bank ? `Sel: ${label(selCam)}` : '';
+        want.set(id, {
+          led: pgm ? { mode: LED.ON, colour: COLOUR.RED } : { mode: LED.DIM, colour: COLOUR.WHITE },
+          text: hwcText({ title: both ? (dir < 0 ? 'PREV <' : 'NEXT >') : 'BANK >', isLabel: true,
+            label1: `Bank ${bank + 1}/${pages}`, label2: note }),
+        });
+      };
+      if (both) {
+        draw(r.bankPrev, -1, before);
+        draw(r.bankNext, +1, after);
+      } else {
+        draw(r.bankNext ?? r.bankPrev, +1, before ?? after);
+      }
+    }
+
+    if (r.group) {
+      if (!groups.length) { want.set(r.group, off); return; }
+      const named = groupKey === null ? 'All' : groupKey || UNGROUPED;
+      const elsewhere = cams.find((c) => onProgram(c) && !view.includes(c));
+      const note = elsewhere ? `PGM: ${label(elsewhere)}` : selCam && !view.includes(selCam) ? `Sel: ${label(selCam)}` : '';
+      want.set(r.group, {
+        led: elsewhere ? { mode: LED.ON, colour: COLOUR.RED } : { mode: LED.DIM, colour: COLOUR.WHITE },
+        text: hwcText({ title: 'GROUP', isLabel: true, label1: named, label2: note }),
+      });
+    }
+  }
+
   #render() {
     if (!this.client.connected || !this.roles) return;
     // A camera added or removed changes how many buttons select cameras.
-    if (this.needsLayout || this.cameras().length !== this.layoutCams) { this.#layout(); return; }
+    if (this.needsLayout || this.#scope().length !== this.layoutCams) { this.#layout(); return; }
     if (this.clearFirst) {
       this.clearFirst = false;
       this.sent.clear();
