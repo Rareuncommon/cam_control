@@ -10,7 +10,7 @@
 import { EventEmitter } from 'node:events';
 import { PtzCamera } from './lifecycle.js';
 import { DRIVERS } from './drivers/index.js';
-import { request } from './http.js';
+import { request, forgetHost } from './http.js';
 
 export { isPtzEntry } from '../venue.js';
 
@@ -92,6 +92,9 @@ export class PtzSource extends EventEmitter {
     const rec = this.cameras.get(id);
     if (!rec) return false;
     await rec.cam?.stop();
+    // Cached challenges and sockets for the old address go too: a removed or
+    // re-addressed camera's credentials should not outlive its entry.
+    forgetHost(rec.entry.ip, rec.entry.port ?? 80);
     this.cameras.delete(id);
     this.emit('event', { event: 'ptzHello' });
     return true;

@@ -20,6 +20,7 @@ import { validateTable, coerce, labelFor, publicSchema } from '../src/ptz/schema
 import { PtzCamera } from '../src/ptz/lifecycle.js';
 import { FakePtz, fakeHead, resetFakeHeads } from '../src/ptz/drivers/fake.js';
 import { camdNeeded, createApp } from '../src/server.js';
+import { StateModel } from '../src/state.js';
 import { requiredRole } from '../src/auth.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -735,4 +736,58 @@ test('STOP ALL names the heads whose stop was not confirmed; two cameras cannot 
   } finally {
     await app.stop();
   }
+});
+
+test('a host that used Digest does not get the password in Basic later; a scan never sends Basic', async () => {
+  let scheme = 'digest';
+  const seen = [];
+  const srv = createServer((req, res) => {
+    seen.push(req.headers.authorization ?? null);
+    const a = req.headers.authorization ?? '';
+    if (scheme === 'digest') {
+      if (a.startsWith('Digest ')) { res.end('ok'); return; }
+      res.writeHead(401, { 'WWW-Authenticate': 'Digest realm="cam", qop="auth", nonce="n1"' });
+      res.end();
+      return;
+    }
+    if (a.startsWith('Basic ')) { res.end('ok'); return; }
+    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="cam"' });
+    res.end();
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  const auth = { username: 'admin', password: 'never-in-clear' };
+  try {
+    assert.equal((await request({ host: '127.0.0.1', port, path: '/a', auth })).ok, true);
+    scheme = 'basic';   // the address now asks for Basic
+    const r = await request({ host: '127.0.0.1', port, path: '/b', auth, headers: { Connection: 'close' } });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /after using Digest/);
+    assert.ok(!seen.some((h) => h?.startsWith('Basic ')), 'the password never went out in Basic');
+
+    // A scan of an address it has never met still refuses Basic.
+    const fresh = createServer((req, res) => {
+      if ((req.headers.authorization ?? '').startsWith('Basic ')) seen.push('BASIC-SENT');
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="x"' });
+      res.end();
+    });
+    await new Promise((res2) => fresh.listen(0, '127.0.0.1', res2));
+    const scan = await request({ host: '127.0.0.1', port: fresh.address().port, path: '/', auth, noBasic: true });
+    assert.equal(scan.ok, false);
+    assert.ok(!seen.includes('BASIC-SENT'));
+    fresh.close();
+  } finally { srv.closeAllConnections?.(); srv.close(); }
+});
+
+test('a secret value never reaches the browser', () => {
+  const st = new StateModel();
+  st.replaceAll([{ id: 'p', label: 'P', state: 'connected' }], null, 'ptz');
+  st.setPtzSchema('p', { capabilities: {}, entries: [
+    { id: 'streamKey', group: 'streaming', label: 'Stream key', type: 'text', secret: true },
+    { id: 'name', group: 'camera', label: 'Name', type: 'text' },
+  ] });
+  st.mergeProperties('p', { streamKey: { value: 'live_abc123', writable: true }, name: { value: 'Wide', writable: true } });
+  const json = JSON.stringify(st.view());
+  assert.ok(!json.includes('live_abc123'));
+  assert.ok(json.includes('Wide'));
 });

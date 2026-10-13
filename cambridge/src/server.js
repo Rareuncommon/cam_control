@@ -1038,8 +1038,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           // camera turned out not to offer marked, next to the values it gave.
           const sch = ptz.schema(cameraId);
           const props = await ptz.getProperties(cameraId);
-          return sendJson(res, sch.ok ? 200 : sch.status, sch.ok
-            ? { ...sch.body, values: props.body?.properties ?? {} } : sch.body);
+          const values = { ...(props.body?.properties ?? {}) };
+          for (const e of sch.body?.entries ?? []) {
+            if (e.secret && values[e.id]) values[e.id] = { ...values[e.id], value: values[e.id].value ? '(set)' : '' };
+          }
+          return sendJson(res, sch.ok ? 200 : sch.status, sch.ok ? { ...sch.body, values } : sch.body);
         }
         const r = await camd.request(
           'GET', `/cameras/${encodeURIComponent(cameraId)}/properties/raw`);
@@ -1474,8 +1477,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'POST') {
         const [, cameraId, action] = m.map(decodeURIComponent);
         const body = await readBody(req);
-        log.info('action', `${actor()}${cameraId} ${action}${body ? ` ${JSON.stringify(body)}` : ''}`);
         const result = await runAction(cameraId, action, body ?? undefined);
+        // Logged after the refusal checks, and without the body when refused:
+        // an admin action sent to the ordinary route must not leave its
+        // payload in the log on its way to being turned down.
+        log.info('action', `${actor()}${cameraId} ${action}`
+          + (result.status === 403 ? ' REFUSED (admin)' : body ? ` ${JSON.stringify(body)}` : ''));
         if (result.ok) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
           ok: result.ok, cameraId, action, ...(result.body ?? {}),
@@ -1765,6 +1772,19 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     process.stdout.write(`  On iPad:   ${url}\n`);
   }
   process.stdout.write('\n');
+  // A bug must not become a head left moving. A stray rejection is logged and
+  // the server carries on; an uncaught exception leaves state that cannot be
+  // trusted, so every PTZ head is told to stop before the process goes.
+  process.on('unhandledRejection', (err) => {
+    app.log.error('cambridge', `unhandled rejection: ${err?.stack ?? err}`);
+  });
+  process.on('uncaughtException', async (err) => {
+    app.log.error('cambridge', `uncaught exception — stopping PTZ heads and exiting: ${err?.stack ?? err}`);
+    try {
+      await Promise.race([app.ptz.stopAll('CamBridge failed'), new Promise((r) => setTimeout(r, 2000))]);
+    } catch { /* exiting regardless */ }
+    process.exit(1);
+  });
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, async () => {
       app.log.info('cambridge', `${sig} received, shutting down`);

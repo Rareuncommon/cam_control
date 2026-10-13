@@ -12,7 +12,7 @@ import { request } from './http.js';
  * @param {{timeoutMs?: number, log?: Function, drivers?: Map}} [o]
  * @returns {Promise<{ok: true, vendor: string, label: string, identity: object} | {ok: false, error: string, tried: object[]}>}
  */
-export async function detect(input, { timeoutMs = 2500, log = () => {}, drivers = DRIVERS } = {}) {
+export async function detect(input, { timeoutMs = 2500, log = () => {}, drivers = DRIVERS, scan = false } = {}) {
   const host = String(input.host ?? '').trim();
   if (!host) return { ok: false, error: 'an IP address is required', tried: [] };
   const auth = { username: input.username ?? '', password: input.password ?? '' };
@@ -24,7 +24,10 @@ export async function detect(input, { timeoutMs = 2500, log = () => {}, drivers 
   let authRefused = false;
   for (const D of candidates) {
     try {
-      const identity = await D.probe({ host, port: input.port, auth, http: request, timeoutMs, log });
+      // In a scan, Basic is never sent: it would hand the password to every
+      // device in the range that asks for it.
+      const http = scan ? (o) => request({ ...o, noBasic: true }) : request;
+      const identity = await D.probe({ host, port: input.port, auth, http, timeoutMs, log });
       if (identity) return { ok: true, vendor: D.vendor, label: D.label, identity };
       tried.push({ vendor: D.vendor, result: 'not this vendor' });
     } catch (err) {

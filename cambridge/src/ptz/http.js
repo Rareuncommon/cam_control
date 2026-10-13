@@ -13,6 +13,22 @@
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 
+/**
+ * Per-host caches are bounded. A bulk add probes up to 256 addresses, and a
+ * venue runs for weeks; neither should leave a pool or a challenge behind for
+ * every address ever tried.
+ */
+const MAX_HOSTS = 512;
+function remember(map, key, value, onEvict) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_HOSTS) {
+    const [oldKey, oldValue] = map.entries().next().value;
+    map.delete(oldKey);
+    onEvict?.(oldValue);
+  }
+}
+
 /** One keep-alive pool per camera host, so polling does not open a socket per query. */
 const agents = new Map();
 function agentFor(host) {
@@ -22,10 +38,18 @@ function agentFor(host) {
     // sends one command at a time anyway; a second socket would only matter for
     // a snapshot fetched alongside a poll.
     a = new http.Agent({ keepAlive: true, maxSockets: 2, keepAliveMsecs: 5000 });
-    agents.set(host, a);
+    remember(agents, host, a, (old) => old.destroy());
   }
   return a;
 }
+
+/**
+ * The scheme each host has authenticated with. A host that has used Digest
+ * and then asks for Basic does not get the password: Basic sends it in the
+ * clear, and the likeliest reason for the change is that the address now
+ * belongs to something else (a DHCP lease reused) — or is pretending.
+ */
+const schemes = new Map();
 
 /**
  * Parses a WWW-Authenticate header.
@@ -98,6 +122,7 @@ export function digestHeader({ username, password, method, uri, challenge, nc = 
  * limiting commands.
  */
 const digestCache = new Map();
+const cacheDigest = (key, value) => remember(digestCache, key, value);
 
 function rawRequest({ host, port, method, path, headers, body, timeoutMs }) {
   return new Promise((resolve) => {
@@ -172,7 +197,7 @@ export async function request(o) {
       headers.Authorization = digestHeader({
         username: user, password: pass, method, uri: o.path, challenge: cached.challenge, nc: cached.nc,
       });
-    } else if (o.preferBasic) {
+    } else if (o.preferBasic && !o.noBasic && schemes.get(key) !== 'digest') {
       headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
     }
   };
@@ -183,7 +208,8 @@ export async function request(o) {
   if (r.status === 401 && user) {
     const challenge = parseChallenge(r.headers['www-authenticate']);
     if (challenge?.scheme === 'digest') {
-      digestCache.set(key, { challenge, nc: 1 });
+      remember(schemes, key, 'digest');
+      cacheDigest(key, { challenge, nc: 1 });
       headers.Authorization = digestHeader({ username: user, password: pass, method, uri: o.path, challenge, nc: 1 });
       r = await rawRequest({ host, port, method, path: o.path, headers, body, timeoutMs });
       // A stale nonce answers 401 again with stale=true; one more try with the
@@ -191,13 +217,24 @@ export async function request(o) {
       if (r.status === 401) {
         const again = parseChallenge(r.headers['www-authenticate']);
         if (again?.scheme === 'digest' && /^true$/i.test(again.params.stale ?? '')) {
-          digestCache.set(key, { challenge: again, nc: 1 });
+          cacheDigest(key, { challenge: again, nc: 1 });
           headers.Authorization = digestHeader({ username: user, password: pass, method, uri: o.path, challenge: again, nc: 1 });
           r = await rawRequest({ host, port, method, path: o.path, headers, body, timeoutMs });
         }
       }
     } else if (challenge?.scheme === 'basic') {
+      // Never in a scan (the password would go to every device in the range
+      // that asks), and never to a host that has used Digest before.
+      if (o.noBasic || schemes.get(key) === 'digest') {
+        return {
+          ...r, ok: false, kind: 'auth',
+          error: o.noBasic
+            ? 'the device asked for Basic authentication, which a scan does not send'
+            : 'the camera asked for Basic after using Digest — the password was not sent',
+        };
+      }
       digestCache.delete(key);
+      remember(schemes, key, 'basic');
       headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
       r = await rawRequest({ host, port, method, path: o.path, headers, body, timeoutMs });
     }
@@ -215,6 +252,7 @@ export async function request(o) {
 /** Forgets cached credentials for a host — after a password change, say. */
 export function forgetHost(host, port = 80) {
   digestCache.delete(`${host}:${port}`);
+  schemes.delete(`${host}:${port}`);
   const a = agents.get(`${host}:${port}`);
   if (a) { a.destroy(); agents.delete(`${host}:${port}`); }
 }

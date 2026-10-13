@@ -156,7 +156,7 @@ export class BulkAdd {
         Object.assign(r, { status: 'skipped', detail: `already added as "${existing.label}"` });
       } else {
         r.status = 'probing';
-        const d = await this.detect({ host: address, ...creds }, { timeoutMs: this.probeTimeoutMs });
+        const d = await this.detect({ host: address, ...creds }, { timeoutMs: this.probeTimeoutMs, scan: true });
         if (d.ok) {
           Object.assign(r, { status: 'found', vendor: d.vendor, model: d.identity.model, name: d.identity.name ?? null });
           found.push({ i, d });

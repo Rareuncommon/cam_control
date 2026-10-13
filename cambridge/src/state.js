@@ -352,6 +352,9 @@ export class StateModel extends EventEmitter {
 
   #decoratePtz(cameraId, name, p) {
     const entry = this.ptzSchemas.get(cameraId)?.byId.get(name);
+    // A secret (a stream key, a password the camera echoes) never leaves the
+    // server, in a push or anywhere else; the panel only needs to know it is set.
+    if (entry?.secret) return { raw: null, label: p.value ? '••••••' : '—', writable: !!p.writable, secret: true };
     const out = { raw: p.value, label: labelFor(entry, p.value), writable: !!p.writable };
     // Options travel in the schema, fetched once. Only a list the camera
     // narrows at run time (formats that depend on frequency, say) rides along
