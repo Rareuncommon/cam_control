@@ -340,6 +340,14 @@ export class PtzCamera extends EventEmitter {
           const s = await this.queue.run(() => this.driver.status(), { priority: PRIORITY.POLL });
           this.lastOk = Date.now();
           if (s && !s.superseded) this.#ptzStatus(s);
+          // Capabilities can change under a running connection — a Sony whose
+          // VISCA stops answering loses focus velocity — so they are re-asked
+          // here rather than fixed at connect.
+          const caps = this.driver.capabilities(this.identity);
+          if (JSON.stringify(caps) !== JSON.stringify(this.caps)) {
+            this.caps = caps;
+            this.emit('schema', { cameraId: this.id });
+          }
           return;
         }
         case 'fast': {
@@ -540,8 +548,19 @@ export class PtzCamera extends EventEmitter {
     if (notReady) return notReady;
     const max = this.caps?.presets ?? 0;
     const base = this.caps?.presetBase ?? 1;
-    if (!Number.isInteger(n) || n < base || n >= base + max) {
-      return { ok: false, status: 400, body: { error: `preset numbers on this camera run ${base}–${base + max - 1}` } };
+    // `presets` from `presetBase` is the range the panel offers. A camera may
+    // accept more above it (presetMax) with numbers reserved for its own
+    // functions in between — PTZOptics' 150 turns tracking on — which are
+    // refused here with the driver's own reason, before anything is sent.
+    const top = this.caps?.presetMax ?? base + max - 1;
+    if (!Number.isInteger(n) || n < base || n > top) {
+      return { ok: false, status: 400, body: { error: `preset numbers on this camera run ${base}–${top}` } };
+    }
+    // A reserved number with a reason is refused here; a bare number is left
+    // to the driver, which refuses it before sending and says why.
+    const reserved = this.caps?.reservedPresets?.find?.((r) => typeof r === 'object' && r.n === n);
+    if (reserved) {
+      return { ok: false, status: 400, body: { error: reserved.reason ?? `preset ${n} is reserved on this camera` } };
     }
     const fn = { recall: () => this.driver.presetRecall(n, o), store: () => this.driver.presetStore(n),
       delete: () => this.driver.presetDelete(n) }[op];

@@ -559,3 +559,17 @@ test('PTZ heads can be added by host name, and reconnected on demand', async () 
     await app.stop();
   }
 });
+
+test('a camera can offer presets above its grid, around numbers it reserves', async () => {
+  resetFakeHeads();
+  const { cam } = fakeCamera('fake-g');
+  cam.start();
+  try {
+    await until(() => cam.state === 'connected');
+    cam.caps = { ...cam.caps, presetMax: 20, reservedPresets: [{ n: 15, reason: 'preset 15 runs the wiper' }] };
+    assert.equal((await cam.preset('recall', 15)).body.error, 'preset 15 runs the wiper');
+    assert.equal((await cam.preset('recall', 21)).status, 400);
+    // 12 is above the 10-preset grid but within presetMax; the simulated head refuses it as empty.
+    assert.equal((await cam.preset('recall', 12)).status, 409);
+  } finally { await cam.stop(); }
+});

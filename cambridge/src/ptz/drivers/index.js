@@ -8,11 +8,18 @@
 import { CanonXcPtz } from './canon-xc.js';
 import { PanasonicAw } from './panasonic-aw.js';
 import { FakePtz } from './fake.js';
+import { SonyBrc } from './sony-brc.js';
+import { PtzOptics } from './ptzoptics.js';
 
 export const DRIVERS = new Map([
-  // Canon's probe asks a path only an XC camera serves; Panasonic's treats a
-  // 401 on its CGI path as "Panasonic, wrong password", so it goes after.
+  // Most specific first. Sony: one CGI inquiry with a Param=value reply
+  // nobody else sends. Canon: a path only an XC camera serves.
+  [SonyBrc.vendor, SonyBrc],
   [CanonXcPtz.vendor, CanonXcPtz],
+  // PTZOptics: JSON get_device_conf, or raw VISCA on TCP 5678.
+  [PtzOptics.vendor, PtzOptics],
+  // Panasonic treats a 401 on its CGI path as "Panasonic, wrong password",
+  // so it goes after the probes that can tell a camera apart for certain.
   [PanasonicAw.vendor, PanasonicAw],
   [FakePtz.vendor, FakePtz],
 ]);
