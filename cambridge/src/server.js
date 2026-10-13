@@ -429,6 +429,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       tcp: cfg.visca.tcp !== false,
       log: (level, msg) => log.write(level, 'visca', msg),
       udpHoldMs: cfg.visca.udpHoldMs ?? 30_000,
+      cameraPorts: cfg.visca.cameraPorts ?? {},
       // PTZ heads get motion, presets and focus. Writes and actions still go
       // through applyFn and runAction, so they are logged and refuse admin
       // settings exactly as the panel's do.

@@ -358,3 +358,40 @@ test('VISCA zoom, focus, home, one-push and memory reach a PTZ head', async () =
     ['preset', 'canon', 'recall', 5],
   ]);
 });
+
+test('a camera with its own VISCA port is that camera whatever address the packet carries', async () => {
+  const { createSocket } = await import('node:dgram');
+  const state = new StateModel();
+  state.replaceAll([
+    { id: 'one', label: 'One', state: 'connected' },
+    { id: 'two', label: 'Two', state: 'connected' },
+  ], null, 'ptz');
+  const calls = [];
+  const ptz = {
+    move: (id, v) => { calls.push([id, v]); return { ok: true }; },
+    preset: async () => ({ ok: true }), action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1, releaseSource: () => {},
+  };
+  const base = 41000 + Math.floor(Math.random() * 2000);
+  const server = new ViscaServer({ state, ptz, port: base, tcp: false, cameraPorts: { two: base + 1 },
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  await server.start();
+  const client = createSocket('udp4');
+  try {
+    // Each command is answered twice — ACK, then Completion — so wait for both.
+    const send = (port) => new Promise((resolve) => {
+      let n = 0;
+      const on = () => { if (++n === 2) { client.off('message', on); resolve(); } };
+      client.on('message', on);
+      // Address 1 on both ports: on the shared port that is the first camera,
+      // on camera two's own port it is camera two.
+      client.send(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x18, 0x18, 0x02, 0x03, 0xff]), port, '127.0.0.1');
+    });
+    await send(base);
+    await send(base + 1);
+    assert.deepEqual(calls.map((c) => c[0]), ['one', 'two']);
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});

@@ -55,7 +55,21 @@ export class ViscaServer {
    * @param {(level: string, msg: string) => void} opts.log
    */
   constructor({ state, applyFn, actionFn, recallPreset, savePreset, mapping = {},
-    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 30_000 }) {
+    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 30_000,
+    cameraPorts = {} }) {
+    /**
+     * cameraId -> port. A VISCA address is three bits, so the shared port can
+     * tell at most seven cameras apart — and VISCA-over-IP controllers do not
+     * use the address anyway; they pick a camera by IP and port. So each
+     * camera may have a port of its own, where every packet means that camera
+     * whatever address it carries. A controller then adds CamBridge once per
+     * camera, at this machine's address and that camera's port.
+     */
+    this.cameraPorts = Object.entries(cameraPorts ?? {})
+      .map(([cameraId, p]) => [cameraId, Number(p)])
+      .filter(([, p]) => Number.isInteger(p) && p > 0 && p < 65536);
+    /** Listeners beyond the shared one: { udp, tcp } per dedicated port. */
+    this.dedicated = [];
     this.state = state;
     /**
      * PTZ forwarding: { move(id, v, o), preset(id, op, n), action(id, entryId),
@@ -98,28 +112,35 @@ export class ViscaServer {
    */
   cameraFor(address) {
     if (!this.autoMap) return this.byAddress.get(address) ?? null;
-    const list = this.state.list();
+    // The operator's order, so address 1 is the first camera on the panel.
+    const list = this.state.ordered?.() ?? this.state.list();
     return list[address - 1]?.id ?? null;
   }
 
-  start() {
+  /**
+   * One UDP socket and (optionally) one TCP server on a port. `cameraId`
+   * fixes which camera every packet on it means; null is the shared port,
+   * where the VISCA address decides.
+   */
+  #listen(port, cameraId) {
+    const where = cameraId ? `port ${port} (${cameraId})` : `port ${port}`;
     return new Promise((resolve, reject) => {
-      this.udp = createSocket('udp4');
-      this.udp.on('error', (err) => {
-        this.log('error', `VISCA UDP error: ${err.message}`);
+      const l = { udp: createSocket('udp4'), tcp: null, sockets: new Set() };
+      l.udp.on('error', (err) => {
+        this.log('error', `VISCA UDP error on ${where}: ${err.message}`);
         reject(err);
       });
-      this.udp.on('message', async (msg, rinfo) => {
-        const reply = await this.handlePacket(msg, { id: `visca-udp:${rinfo.address}:${rinfo.port}`, tcp: false });
-        for (const frame of reply) this.udp.send(frame, rinfo.port, rinfo.address);
+      l.udp.on('message', async (msg, rinfo) => {
+        const reply = await this.handlePacket(msg, { id: `visca-udp:${rinfo.address}:${rinfo.port}`, tcp: false, cameraId });
+        for (const frame of reply) l.udp.send(frame, rinfo.port, rinfo.address);
       });
-      this.udp.bind(this.port, this.bind, () => {
-        if (!this.useTcp) return resolve();
-        this.tcpServer = createServer((socket) => {
-          this.sockets.add(socket);
-          const peer = { id: `visca-tcp:${socket.remoteAddress}:${socket.remotePort}`, tcp: true };
+      l.udp.bind(port, this.bind, () => {
+        if (!this.useTcp) return resolve(l);
+        l.tcp = createServer((socket) => {
+          l.sockets.add(socket);
+          const peer = { id: `visca-tcp:${socket.remoteAddress}:${socket.remotePort}`, tcp: true, cameraId };
           socket.on('close', () => {
-            this.sockets.delete(socket);
+            l.sockets.delete(socket);
             // Whatever this controller was holding stops with it.
             this.ptz?.releaseSource(peer.id);
           });
@@ -131,24 +152,42 @@ export class ViscaServer {
             for (const frame of reply) socket.write(frame);
           });
         });
-        this.tcpServer.on('error', (err) => {
-          this.log('error', `VISCA TCP error: ${err.message}`);
+        l.tcp.on('error', (err) => {
+          this.log('error', `VISCA TCP error on ${where}: ${err.message}`);
           reject(err);
         });
-        this.tcpServer.listen(this.port, this.bind, () => resolve());
+        l.tcp.listen(port, this.bind, () => resolve(l));
       });
     });
   }
 
-  async stop() {
-    try { this.udp?.close(); } catch { /* already closed */ }
-    for (const s of this.sockets) { try { s.destroy(); } catch { /* gone */ } }
-    this.sockets.clear();
-    this.udp = null;
-    if (this.tcpServer) {
-      await new Promise((r) => this.tcpServer.close(r));
-      this.tcpServer = null;
+  async start() {
+    const shared = await this.#listen(this.port, null);
+    this.udp = shared.udp;
+    this.tcpServer = shared.tcp;
+    this.sockets = shared.sockets;
+    // A dedicated port that cannot open is logged and skipped: one camera's
+    // joystick missing is better than none of them working.
+    for (const [cameraId, port] of this.cameraPorts) {
+      try {
+        this.dedicated.push(await this.#listen(port, cameraId));
+      } catch (err) {
+        this.log('error', `VISCA port ${port} for ${cameraId} could not open (${err.message})`);
+      }
     }
+  }
+
+  async stop() {
+    const all = [{ udp: this.udp, tcp: this.tcpServer, sockets: this.sockets }, ...this.dedicated];
+    for (const l of all) {
+      try { l.udp?.close(); } catch { /* already closed */ }
+      for (const s of l.sockets ?? []) { try { s.destroy(); } catch { /* gone */ } }
+      l.sockets?.clear();
+      if (l.tcp) await new Promise((r) => l.tcp.close(r));
+    }
+    this.udp = null;
+    this.tcpServer = null;
+    this.dedicated = [];
   }
 
   /**
@@ -192,7 +231,7 @@ export class ViscaServer {
 
   /** @returns {Promise<number[][]>} raw VISCA payloads to return, in order */
   async execute(address, msg, peer = { id: 'visca', tcp: false }) {
-    const cameraId = this.cameraFor(address);
+    const cameraId = peer.cameraId ?? this.cameraFor(address);
     const reply = (bytes) => [0x90, ...bytes, 0xff];
     if (!cameraId) return [reply(ERR_NOT_EXECUTABLE)];
 
