@@ -6,6 +6,7 @@
 // posts actions over ordinary fetch — and EventSource reconnects on its own.
 
 import { createServer } from 'node:http';
+import { gzipSync, createGzip, constants as zlibConstants } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
@@ -31,6 +32,7 @@ import { detect as detectPtz } from './ptz/detect.js';
 import { supported as supportedPtz } from './ptz/drivers/index.js';
 import { needsAdmin, roleEntry } from './ptz/schema.js';
 import { PtzPresetBook } from './ptz/presets.js';
+import { BulkAdd } from './ptz/bulk.js';
 import { RawPanelClient, DEFAULT_PORT as SKAARHOJ_PORT } from './skaarhoj/rawpanel.js';
 import { PanelController } from './skaarhoj/mapping.js';
 
@@ -106,14 +108,54 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+/**
+ * JSON replies over this size are compressed for clients that accept it. With
+ * dozens of cameras /api/state is megabytes of very repetitive JSON, and it
+ * compresses about tenfold; below this size the saving is not worth the work.
+ */
+const GZIP_OVER_BYTES = 16 * 1024;
+
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
-  res.writeHead(status, {
+  const headers = {
     'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(text),
     'Cache-Control': 'no-store',
-  });
+  };
+  if (res.acceptsGzip && text.length > GZIP_OVER_BYTES) {
+    const packed = gzipSync(text);
+    res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', 'Content-Length': packed.length, Vary: 'Accept-Encoding' });
+    res.end(packed);
+    return;
+  }
+  res.writeHead(status, { ...headers, 'Content-Length': Buffer.byteLength(text) });
   res.end(text);
+}
+
+/**
+ * Where an event stream's frames go: straight to the socket, or through gzip
+ * with a sync flush after every frame so nothing sits in the compressor
+ * waiting for more. The first frame with dozens of cameras is the whole state;
+ * compressed, it reaches an iPad on Wi-Fi in a fraction of the time.
+ */
+function eventSink(req, res) {
+  const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '');
+  const head = {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+  };
+  if (!gzip) {
+    res.writeHead(200, head);
+    return { write: (s) => res.write(s), end: () => res.end() };
+  }
+  res.writeHead(200, { ...head, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+  const gz = createGzip();
+  gz.pipe(res);
+  gz.on('error', () => {});
+  return {
+    write: (s) => { gz.write(s); gz.flush(zlibConstants.Z_SYNC_FLUSH); return true; },
+    end: () => { try { gz.end(); } catch { /* closed */ } },
+  };
 }
 
 /**
@@ -204,6 +246,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log, ptz);
+  /** Groups and order come from the config; re-read whenever the config changes. */
+  const syncMeta = () => state.setCameraMeta(adoption.adopted());
+  state.setCameraMeta(cfg.cameras);
+  const bulk = new BulkAdd({
+    adopted: () => adoption.adopted(),
+    add: async (input) => { const r = await adoption.addPtz(input); if (r.ok) syncMeta(); return r; },
+    log: (level, msg) => log.write(level, 'ptz', msg),
+  });
 
   const undo = new UndoHistory();
   const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
@@ -515,12 +565,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * With dozens of cameras a full frame is most of a megabyte, so it is only
    * built while a client that needs it is actually connected.
    *
-   * @type {Map<import('node:http').ServerResponse, {patch: boolean}>}
+   * @type {Map<{write: Function, end: Function}, {patch: boolean}>}
    */
   const sseClients = new Map();
 
-  function send(res, payload) {
-    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { sseClients.delete(res); }
+  function send(sink, payload) {
+    try { sink.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { sseClients.delete(sink); }
   }
 
   /** Writes whatever has changed to every client, in the form each one asked for. */
@@ -534,7 +584,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     const full = wantsFull || dirty.full ? { type: 'state', view: state.view(), ...env } : null;
     const patch = wantsPatch && !dirty.full ? buildPatch(env) : null;
     dirty.clear();
-    for (const [res, c] of sseClients) send(res, c.patch && patch ? patch : full);
+    for (const [sink, c] of sseClients) send(sink, c.patch && patch ? patch : full);
   }
 
   const thresholds = resolveThresholds(cfg.alarms);
@@ -821,6 +871,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+    res.acceptsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '');
 
     // Reused by every path-parameter route below.
     let m;
@@ -899,20 +950,17 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 
       // --- events (SSE) ---
       if (path === '/api/events') {
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream; charset=utf-8',
-          'Cache-Control': 'no-store',
-          Connection: 'keep-alive',
-        });
-        res.write(`data: ${JSON.stringify(buildPush())}\n\n`);
-        sseClients.set(res, { patch: url.searchParams.get('patch') === '1' });
+        const sink = eventSink(req, res);
+        sink.write(`data: ${JSON.stringify(buildPush())}\n\n`);
+        sseClients.set(sink, { patch: url.searchParams.get('patch') === '1' });
         // Comment frames keep proxies and sleeping iPads from dropping the stream.
         const keepAlive = setInterval(() => {
-          try { res.write(': keepalive\n\n'); } catch { /* closed */ }
+          try { sink.write(': keepalive\n\n'); } catch { /* closed */ }
         }, 15_000);
         req.on('close', () => {
           clearInterval(keepAlive);
-          sseClients.delete(res);
+          sseClients.delete(sink);
+          sink.end();
         });
         return;
       }
@@ -1105,7 +1153,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const body = await readBody(req);
         if (!body?.mac) return sendJson(res, 400, { error: 'mac is required' });
         const result = await adoption.adopt(body);
-        if (result.ok) await refreshEverything();
+        if (result.ok) { syncMeta(); await refreshEverything(); }
         return sendJson(res, result.ok ? 201 : 409, result);
       }
 
@@ -1114,13 +1162,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const id = decodeURIComponent(am[1]);
         if (req.method === 'DELETE') {
           const result = await adoption.forget(id);
-          if (result.ok) await refreshEverything();
+          if (result.ok) { syncMeta(); await refreshEverything(); }
           return sendJson(res, result.ok ? 200 : 404, result);
         }
         if (req.method === 'PATCH' || req.method === 'PUT') {
           const body = await readBody(req);
           const result = await adoption.update(id, body ?? {});
-          if (result.ok) await refreshEverything();
+          if (result.ok) { syncMeta(); await refreshEverything(); }
           return sendJson(res, result.ok ? 200 : 404, result);
         }
       }
@@ -1191,7 +1239,28 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/ptz/cameras' && req.method === 'POST') {
         const body = await readBody(req);
         const r = await adoption.addPtz(body ?? {});
+        if (r.ok) syncMeta();
         return sendJson(res, r.ok ? 201 : 409, r);
+      }
+
+      // Many at once: a list or range of addresses, one set of credentials.
+      if (path === '/api/ptz/bulk' && req.method === 'POST') {
+        const body = (await readBody(req)) ?? {};
+        const r = bulk.start(body);
+        if (r.ok) log.info('ptz', `${actor()}bulk ${body.dryRun ? 'scan' : 'add'} of ${r.total} address(es)`);
+        return sendJson(res, r.ok ? 202 : 400, r);
+      }
+      m = path.match(/^\/api\/ptz\/bulk\/([^/]+)$/);
+      if (m && req.method === 'GET') {
+        const st = bulk.status(decodeURIComponent(m[1]));
+        return st ? sendJson(res, 200, st) : sendJson(res, 404, { error: 'no such bulk add' });
+      }
+
+      if (path === '/api/cameras/order' && req.method === 'PUT') {
+        const body = (await readBody(req)) ?? {};
+        const r = adoption.reorder(body.ids);
+        if (r.ok) syncMeta();
+        return sendJson(res, r.ok ? 200 : 400, r);
       }
 
       // The panic button: every PTZ head, every axis.

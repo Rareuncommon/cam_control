@@ -313,8 +313,9 @@ test('a silent camera goes to reconnecting and comes back on its own', async () 
     await until(() => cam.state === 'reconnecting', { timeoutMs: 2000 });
     fakeHead('fake-c').down = false;
     await until(() => cam.state === 'connected', { timeoutMs: 2000 });
-    assert.deepEqual(events.state.filter((s, i, a) => s !== a[i - 1]).slice(0, 3),
-      ['connecting', 'connected', 'reconnecting']);
+    // Cameras start out connecting, so the first transition reported is to connected.
+    assert.deepEqual(events.state.filter((s, i, a) => s !== a[i - 1]).slice(0, 2),
+      ['connected', 'reconnecting']);
   } finally { await cam.stop(); }
 });
 
@@ -385,7 +386,9 @@ async function ptzOnlyApp() {
   const configPath = join(dir, 'cambridge.json');
   writeFileSync(configPath, JSON.stringify({
     cambridge: { bind: '127.0.0.1', port: 0 },
-    logging: { dir: join(dir, 'logs'), level: 'error' },
+    // Info, not error: the no-passwords-in-the-log check below should read
+    // everything an ordinary installation writes.
+    logging: { dir: join(dir, 'logs'), level: 'info' },
     ptz: { ...FAST, deadmanMs: 300 },
     cameras: [
       { id: 'left', kind: 'ptz', vendor: 'fake', label: 'Left', ip: 'fake-left', auth: { username: 'u', password: 'pw-not-logged' } },

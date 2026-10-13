@@ -76,6 +76,10 @@ export function evaluateCamera(cam, thresholds = DEFAULT_THRESHOLDS) {
 
   // Rule 2. An offline camera's stored battery and card figures are from before
   // the outage; reporting them would be inventing a present tense for them.
+  // A PTZ head on its first attempt is starting, not failing: the attempt
+  // either succeeds within seconds or ends in 'offline', which does alarm.
+  // Without this, every start-up raised one alarm per camera.
+  if (cam.kind === 'ptz' && cam.state === 'connecting') return out;
   if (cam.state !== 'connected') {
     out.push(alarm('critical', cam, 'offline',
       cam.detail ? `is offline — ${cam.detail}` : 'is offline'));

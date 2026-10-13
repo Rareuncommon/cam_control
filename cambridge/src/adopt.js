@@ -228,6 +228,12 @@ export class Adoption {
     }
     // A PTZ head is reached by address, not discovered by MAC, so its address
     // is something an operator edits. A Sony body's is whatever camd finds.
+    // Groups are the operator's way of finding one camera among thirty:
+    // "Stage", "Balcony". An empty string takes a camera out of its group.
+    if (typeof changes.group === 'string') {
+      const g = changes.group.trim().slice(0, 40);
+      if (g) entry.group = g; else delete entry.group;
+    }
     if (entry.kind === 'ptz' && typeof changes.ip === 'string' && changes.ip.trim()) {
       if (!isHostAddress(changes.ip)) return { ok: false, error: `"${changes.ip}" is not an IP address or host name` };
       entry.ip = changes.ip.trim();
@@ -297,6 +303,7 @@ export class Adoption {
         password: input.password ?? '',
       },
       ...(input.options && typeof input.options === 'object' ? { options: input.options } : {}),
+      ...(typeof input.group === 'string' && input.group.trim() ? { group: input.group.trim().slice(0, 40) } : {}),
     };
 
     try {
@@ -313,5 +320,27 @@ export class Adoption {
     }
     this.log.info('adopt', `added ${entry.vendor} ${entry.model || 'PTZ'} at ${ip} as "${entry.label}" (${id})`);
     return { ok: true, camera: { ...entry, auth: undefined } };
+  }
+
+  /**
+   * The order cameras appear in, everywhere: panel, multiview, Companion,
+   * the SKAARHOJ camera buttons. Ids given come first, in that order; any
+   * camera not named keeps its place after them.
+   */
+  reorder(ids) {
+    if (!Array.isArray(ids)) return { ok: false, error: 'ids must be a list' };
+    const cfg = this.readConfig();
+    const cams = cfg.cameras ?? [];
+    const byId = new Map(cams.map((c) => [c.id, c]));
+    const first = ids.map((id) => byId.get(id)).filter(Boolean);
+    const named = new Set(first.map((c) => c.id));
+    cfg.cameras = [...first, ...cams.filter((c) => !named.has(c.id))];
+    try {
+      this.writeConfig(cfg);
+    } catch (err) {
+      return { ok: false, error: `could not save config: ${err.message}` };
+    }
+    this.log.info('adopt', `camera order: ${cfg.cameras.map((c) => c.id).join(', ')}`);
+    return { ok: true, order: cfg.cameras.map((c) => c.id) };
   }
 }

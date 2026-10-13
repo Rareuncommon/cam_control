@@ -67,7 +67,9 @@ export const ADMIN_ROUTES = [
   /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+\/adoption$/,
   /^POST \/api\/shutdown$/,            // stops the app for everyone
   /^POST \/api\/auth\/pin$/,           // changes who can get in
-  /^POST \/api\/ptz\/(detect|cameras)$/, // probes with, and stores, PTZ credentials
+  /^POST \/api\/ptz\/(detect|cameras|bulk)$/, // probes with, and stores, PTZ credentials
+  /^GET \/api\/ptz\/bulk\/[^/]+$/,      // the progress of the above
+  /^PUT \/api\/cameras\/order$/,          // the order every surface shows cameras in
   // Hands the SKAARHOJ panel to CamBridge or back to Reactor, and stores it:
   // decides which system moves the cameras from the panel, beyond this shoot.
   /^PUT \/api\/skaarhoj$/,

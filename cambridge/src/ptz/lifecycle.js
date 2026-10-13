@@ -73,7 +73,10 @@ export class PtzCamera extends EventEmitter {
     this.log = (level, msg) => log(level, `${this.id}: ${msg}`);
     this.http = http;
 
-    this.state = 'offline';
+    // Connecting from the outset: start() follows construction at once, and a
+    // camera reported offline for the instant before its first attempt raises
+    // an alarm per camera at every start-up — forty-eight of them at a big venue.
+    this.state = 'connecting';
     this.detail = null;
     this.reconnectAttempts = 0;
     this.identity = null;
@@ -140,7 +143,11 @@ export class PtzCamera extends EventEmitter {
       await Promise.race([this.motion.stopAll('CamBridge stopping'), new Promise((r) => setTimeout(r, 1000))]);
     }
     this.#teardown();
-    this.#setState('offline', 'stopped');
+    // Quietly: a camera is stopped because CamBridge is shutting down or the
+    // camera is being removed, and in neither case is "offline" news. The
+    // source drops removed cameras from the state model itself.
+    this.state = 'offline';
+    this.detail = 'stopped';
   }
 
   #teardown() {
