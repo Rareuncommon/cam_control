@@ -504,3 +504,33 @@ test('presets stored from CamBridge get a name and a picture', async () => {
     await app.stop();
   }
 });
+
+test('a camera that drops during its first full read reconnects instead of crashing', async () => {
+  resetFakeHeads();
+  const { cam } = fakeCamera('fake-f');
+  const head = fakeHead('fake-f');
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  // Answer identify, then go silent as the table is being read.
+  const realRead = FakePtz.prototype.read;
+  let reads = 0;
+  FakePtz.prototype.read = async function (entries) {
+    reads += 1;
+    if (reads === 1) head.down = true;
+    return realRead.call(this, entries);
+  };
+  try {
+    cam.start();
+    await until(() => cam.state === 'reconnecting', { timeoutMs: 2000 });
+    FakePtz.prototype.read = realRead;
+    head.down = false;
+    await until(() => cam.state === 'connected', { timeoutMs: 2000 });
+    await sleep(50);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    FakePtz.prototype.read = realRead;
+    process.off('unhandledRejection', onUnhandled);
+    await cam.stop();
+  }
+});

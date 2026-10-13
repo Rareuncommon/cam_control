@@ -106,7 +106,15 @@ export class PtzCamera extends EventEmitter {
 
   start() {
     this.stopped = false;
-    this.#connect();
+    this.#reconnectNow();
+  }
+
+  /** #connect never rejects by design; this makes sure a bug in it is a log line, not a crash. */
+  #reconnectNow() {
+    this.#connect().catch((err) => {
+      this.log('error', `connect failed unexpectedly: ${describe(err)}`);
+      this.#scheduleReconnect();
+    });
   }
 
   async stop() {
@@ -222,8 +230,16 @@ export class PtzCamera extends EventEmitter {
     }
 
     // Everything once, up front, so the panel is complete within a few seconds
-    // rather than filling in over a full sweep.
-    await this.#readEntries(this.entries.filter((e) => e.type !== 'action' && e.poll !== 'never'), PRIORITY.POLL);
+    // rather than filling in over a full sweep. A camera that drops in the
+    // middle of it is a lost connection like any other — and the heartbeat
+    // that would normally notice is not running yet.
+    try {
+      await this.#readEntries(this.entries.filter((e) => e.type !== 'action' && e.poll !== 'never'), PRIORITY.POLL);
+    } catch (err) {
+      if (this.stopped) return;
+      this.#drop(`lost during the first read: ${describe(err)}`);
+      return;
+    }
     this.#poll('position');
     this.#poll('status');
     if (this.stopped || this.state !== 'connected') return;
@@ -238,7 +254,7 @@ export class PtzCamera extends EventEmitter {
     this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.#connect();
+      this.#reconnectNow();
     }, delay);
   }
 
