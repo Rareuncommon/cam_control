@@ -1,5 +1,7 @@
 import { createGamepadControl } from './gamepad.js';
 import { createPtz } from './ptz.js';
+import { createBus } from './bus.js';
+import { createBulkAdd } from './bulkadd.js';
 import { applyPatch } from './patch.js';
 import {
   histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
@@ -30,6 +32,13 @@ const el = (tag, attrs = {}, ...kids) => {
 // builder below returns null when the camera does not expose that property, so
 // appending them has to go through here.
 const add = (parent, ...kids) => { for (const k of kids) if (k) parent.append(k); return parent; };
+// Writes that happen on every push go through these, so a push that changes
+// nothing a node shows leaves the node alone. With dozens of cameras a push
+// arrives several times a second, and rewriting the same text each time is
+// work the browser does for nothing (and noise for anyone measuring).
+const setText = (n, t) => { if (n && n.textContent !== t) n.textContent = t; };
+const setShown = (n, on) => { const v = on ? '' : 'none'; if (n && n.style.display !== v) n.style.display = v; };
+const setClass = (n, c) => { if (n && n.className !== c) n.className = c; };
 
 let view = { camdConnected: false, cameras: [], backend: '' };
 // Alarms arrive with the state they are derived from, in the same push, so the
@@ -598,6 +607,32 @@ const ptzUi = createPtz({
   refreshSetup: () => refreshSetup(),
   undo: (id) => undoState[id] ?? null,
   padDrives: (id) => !!gamepad?.enabled && padTarget()?.id === id,
+  presetsChanged: () => { bus.presetsChanged(); if (currentView === 'control') renderControl(); },
+});
+
+/**
+ * The camera bus and the selected-camera layout (bus.js), and the group
+ * filter shared by Control, Multiview and the Setup list.
+ */
+const bus = createBus({
+  el, add,
+  keysActive: () => currentView === 'control'
+    && bus.layoutFor(view.cameras.filter((c) => c.kind === 'ptz').length) === 'select',
+  endHoldsFor: (id) => ptzUi.endHoldsFor(id),
+  presetName: (id, n) => ptzUi.presetName(id, n),
+  onChange: (why) => {
+    if (currentView === 'control') renderControl();
+    if (why === 'group') {
+      if (currentView === 'multiview') syncMultiview();
+      if (currentView === 'setup') renderSetup();
+    }
+  },
+});
+
+const bulkAdd = createBulkAdd({
+  el, api, toast,
+  isActive: () => currentView === 'setup',
+  refreshSetup: () => refreshSetup(),
 });
 
 /** Last-built Sony card per camera, with what it was built from. */
@@ -614,9 +649,42 @@ function cineSig(cam) {
     advanced, meta.presets?.[cam.id] ?? null, padCamera, !!gamepad?.enabled]);
 }
 
+/** A Sony card, rebuilt only when what it shows changed (see cineSig). */
+function cineNode(cam) {
+  const sig = cineSig(cam);
+  let c = cineCards.get(cam.id);
+  if (!c || c.sig !== sig) {
+    // Keep whichever disclosure the operator opened or closed by hand.
+    const wasOpen = c?.node.querySelector('details.more')?.open;
+    c = { sig, node: cameraCard(cam) };
+    const more = c.node.querySelector('details.more');
+    if (more && wasOpen !== undefined) more.open = wasOpen;
+    cineCards.set(cam.id, c);
+  }
+  return c.node;
+}
+
+/**
+ * The Control view.
+ *
+ * Two layouts for PTZ heads (bus.js): every head's Operate card, which is
+ * right for a small room, or the camera bus with a full card only for the
+ * selected head(s), which is the only thing that works for dozens. Auto picks
+ * by head count; the operator can override it.
+ *
+ * Cards whose camera did not change are skipped by identity (ptzUi.card), and
+ * cards no longer shown are taken down (ptzUi.keepOnly) — which ends any
+ * press on them, stops their picture and lets their watch lease lapse.
+ */
 function renderControl() {
   const grid = $('#grid');
   const nodes = [];
+  const ptzCams = view.cameras.filter((c) => c.kind === 'ptz');
+  const layout = bus.layoutFor(ptzCams.length);
+  const select = layout === 'select';
+  bus.renderBar($('#ctl-bar'), ptzCams, view.cameras, layout);
+  const shown = bus.filter(view.cameras);
+  const keep = new Set();
   if (!view.cameras.length) {
     const noDaemon = view.camdUsed !== false && !view.camdConnected;
     nodes.push(el('section', { class: 'cam' }, el('div', { class: 'body' },
@@ -628,20 +696,39 @@ function renderControl() {
         : el('button', { class: 'primary', onclick: () => switchView('setup') },
             document.createTextNode('Add a camera')))));
   }
-  for (const cam of view.cameras) {
-    if (cam.kind === 'ptz') { nodes.push(ptzUi.card(cam)); continue; }
-    const sig = cineSig(cam);
-    let c = cineCards.get(cam.id);
-    if (!c || c.sig !== sig) {
-      // Keep whichever disclosure the operator opened or closed by hand.
-      const wasOpen = c?.node.querySelector('details.more')?.open;
-      c = { sig, node: cameraCard(cam) };
-      const more = c.node.querySelector('details.more');
-      if (more && wasOpen !== undefined) more.open = wasOpen;
-      cineCards.set(cam.id, c);
+  if (select) {
+    const shownPtz = shown.filter((c) => c.kind === 'ptz');
+    const ids = bus.resolve(ptzCams, shownPtz);
+    bus.renderBus($('#bus'), shownPtz, ids);
+    ids.forEach((id, i) => {
+      const node = ptzUi.card(ptzCams.find((c) => c.id === id));
+      // Which panel is which, when riding more than one: the bus names them
+      // A–D, and the active one is what a tap or a key replaces.
+      bus.setAttr(node, 'data-slot', ids.length > 1 ? 'ABCD'[i] : null);
+      bus.setAttr(node, 'data-active', ids.length > 1 && i === bus.active ? '1' : null);
+      keep.add(id);
+      nodes.push(node);
+    });
+    for (const cam of shown) if (cam.kind !== 'ptz') nodes.push(cineNode(cam));
+  } else {
+    bus.renderBus(null, [], []);
+    for (const cam of shown) {
+      if (cam.kind !== 'ptz') { nodes.push(cineNode(cam)); continue; }
+      const node = ptzUi.card(cam);
+      bus.setAttr(node, 'data-slot', null);
+      bus.setAttr(node, 'data-active', null);
+      keep.add(cam.id);
+      nodes.push(node);
     }
-    nodes.push(c.node);
   }
+  // Before the grid is rearranged: a card leaving the screen ends its presses
+  // (sending stop) and stops polling its picture.
+  ptzUi.keepOnly(keep);
+  const busBox = $('#bus');
+  if (busBox.hidden === select) busBox.hidden = !select;
+  $('#ctl-main').classList.toggle('select', select);
+  grid.classList.toggle('panels', select);
+  bus.setAttr(grid, 'data-up', select ? String(keep.size) : null);
   for (const id of [...cineCards.keys()]) {
     if (!view.cameras.some((cam) => cam.id === id && cam.kind !== 'ptz')) cineCards.delete(id);
   }
@@ -663,12 +750,59 @@ function renderControl() {
 // Polling single frames is a little less efficient and works in every browser.
 // One request in flight at a time, so a slow camera throttles itself rather than
 // building a queue of stale frames.
-const FEED_INTERVAL_MS = 100;
-let feedStops = [];
+//
+// The pause between frames scales with how many tiles are polling, so that
+// the whole wall asks for about the same number of frames a second however
+// many cameras are on it: FEED_BUDGET_FPS shared between the tiles on screen,
+// but never faster than FEED_MIN_MS for one tile nor slower than FEED_MAX_MS.
+//
+//    tiles on screen    each tile every    whole wall
+//          1-4             100 ms           <= 40 frames/s
+//           12             300 ms              40 frames/s
+//           48            1200 ms              40 frames/s
+//
+// Forty a second is what four tiles at ten frames a second always cost, so a
+// big venue costs the server and the cameras no more than a small one. Tiles
+// scrolled out of view, and every tile while the tab is hidden, ask for
+// nothing and do not count towards the share.
+const FEED_MIN_MS = 100;
+const FEED_MAX_MS = 2000;
+const FEED_BUDGET_FPS = 40;
+/** How often a paused tile checks whether it is back on screen. */
+const FEED_PAUSED_MS = 400;
+
+/** cameraId -> multiview tile controller. Tiles persist across pushes. */
+const mvTiles = new Map();
+
+const mvIo = typeof IntersectionObserver === 'function'
+  ? new IntersectionObserver((list) => {
+    for (const e of list) {
+      const t = mvTiles.get(e.target.dataset.id);
+      if (t) t.visible = e.isIntersecting;
+    }
+  }, { rootMargin: '120px 0px' })
+  : null;
+
+function pollingTiles() {
+  let n = 0;
+  for (const t of mvTiles.values()) if (t.live && t.visible) n += 1;
+  return n;
+}
+
+function feedIntervalMs() {
+  const n = Math.max(1, pollingTiles());
+  return Math.min(FEED_MAX_MS, Math.max(FEED_MIN_MS, Math.round((1000 * n) / FEED_BUDGET_FPS)));
+}
+
+function dropTile(t) {
+  t.stop();
+  mvIo?.unobserve(t.node);
+  t.node.remove();
+  mvTiles.delete(t.id);
+}
 
 function stopAllFeeds() {
-  for (const stop of feedStops) stop();
-  feedStops = [];
+  for (const t of [...mvTiles.values()]) dropTile(t);
 }
 
 /**
@@ -684,7 +818,7 @@ function stopAllFeeds() {
  * are readable, and exposure analysis costs no extra traffic because the camera
  * is only ever asked for what it was already sending.
  */
-function startFeed(cam, canvas, onFailure) {
+function startFeed(cam, canvas, onFailure, tile) {
   let stopped = false;
   let failures = 0;
   let frame = 0;
@@ -694,6 +828,11 @@ function startFeed(cam, canvas, onFailure) {
 
   const tick = async () => {
     if (stopped) return;
+    // Off screen, or the tab hidden: ask for nothing, and look again shortly.
+    if (!tile.visible || document.visibilityState === 'hidden') {
+      setTimeout(tick, FEED_PAUSED_MS);
+      return;
+    }
     try {
       const r = await fetch(
         `/api/cameras/${encodeURIComponent(cam.id)}/liveview?single=1`, { cache: 'no-store' });
@@ -715,7 +854,7 @@ function startFeed(cam, canvas, onFailure) {
       // it is genuinely not producing.
       if (++failures === 10) onFailure(err);
     }
-    if (!stopped) setTimeout(tick, FEED_INTERVAL_MS);
+    if (!stopped) setTimeout(tick, feedIntervalMs());
   };
 
   tick();
@@ -770,10 +909,24 @@ function drawFrame(ctx, canvas, bitmap, cam, { frame, lastHist, lastClip }, reme
   if (guides.clipReadout && clip) drawClipReadout(ctx, clip, { x: 8, y: h - 25 });
 }
 
-function feedTile(cam) {
+/** What decides a tile's structure; anything else is updated in place. */
+const tileKey = (cam) => `${cam.state === 'connected'}|${cam.kind}|${soloFeed === cam.id}`;
+
+function feedClass(cam) {
   const rec = cam.status?.recording;
   const tallyClass = cam.tally?.program ? ' pgm' : cam.tally?.preview ? ' pvw' : '';
-  const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
+  return `feed${rec ? ' recording' : ''}${tallyClass}`;
+}
+
+/**
+ * One multiview tile. Built once per camera and connection state; tally,
+ * recording and the overlay text are updated in place, so a push never
+ * restarts a picture.
+ */
+function feedTile(cam) {
+  const tile = el('div', { class: feedClass(cam), 'data-id': cam.id });
+  const t = { id: cam.id, node: tile, cam, key: tileKey(cam), live: cam.state === 'connected',
+    visible: !mvIo, stop: () => {}, update: null };
 
   const isPtz = cam.kind === 'ptz';
   if (cam.state === 'connected') {
@@ -785,7 +938,7 @@ function feedTile(cam) {
       el('div', { text: 'No live view from this camera' }), reason);
     fallback.style.display = 'none';
 
-    feedStops.push(startFeed(cam, img, async () => {
+    t.stop = startFeed(cam, img, async () => {
       img.style.display = 'none';
       fallback.style.display = 'flex';
       // Ask once more, and report whatever the camera actually says rather than
@@ -798,7 +951,7 @@ function feedTile(cam) {
       } catch (e) {
         reason.textContent = `Could not reach the live view endpoint: ${e.message}`;
       }
-    }));
+    }, t);
 
     // Tap-to-focus. Coordinates go up normalised, so the browser never needs to
     // know anything about the camera's AF grid.
@@ -836,54 +989,90 @@ function feedTile(cam) {
       el('div', { text: cam.state }), el('div', { class: 'note', text: cam.detail ?? '' })));
   }
 
-  tile.append(el('div', { class: 'overlay' },
-    el('span', { class: `recdot${rec ? ' on' : ''}` }),
-    el('span', { text: cam.label || cam.id }),
-    tallyBadge(cam),
-    el('span', { class: 'spacer' }),
-    el('span', { class: 'note', text: isPtz ? (cam.model ?? '') : (cam.properties?.fNumber?.label ?? '') })));
+  const overlay = el('div', { class: 'overlay' });
+  const tools = el('div', { class: 'tools' });
+  tile.append(overlay, tools);
+  const enlarge = () => { soloFeed = soloFeed === cam.id ? null : cam.id; syncMultiview(); };
 
-  const enlarge = el('button', {
-    class: 'small',
-    onclick: () => { soloFeed = soloFeed === cam.id ? null : cam.id; renderMultiview(); },
-  }, document.createTextNode(soloFeed === cam.id ? 'Show all' : 'Enlarge'));
-  if (isPtz) {
-    // Not a recorder and no AF point: the useful extras live on its Operate card.
-    tile.append(el('div', { class: 'tools' },
-      el('button', { class: 'small', onclick: () => ptzUi.openSettings(cam.id) },
-        document.createTextNode('Settings')),
-      enlarge));
-    return tile;
-  }
-
-  tile.append(el('div', { class: 'tools' },
-    el('button', { class: 'small', onclick: () => doAction(cam.id, 'autofocus') },
-      document.createTextNode('AF')),
-    el('button', {
-      class: rec ? 'small' : 'small danger',
-      onclick: () => doAction(cam.id, rec ? 'recordStop' : 'recordStart'),
-    }, document.createTextNode(rec ? '■' : '●')),
-    el('button', {
-      class: 'small',
-      onclick: () => { soloFeed = soloFeed === cam.id ? null : cam.id; renderMultiview(); },
-    }, document.createTextNode(soloFeed === cam.id ? 'Show all' : 'Enlarge'))));
-  return tile;
+  t.update = (c) => {
+    t.cam = c;
+    setClass(tile, feedClass(c));
+    const rec = !!c.status?.recording;
+    const note = isPtz ? (c.model ?? '') : (c.properties?.fNumber?.label ?? '');
+    const sig = JSON.stringify([rec, c.label, c.tally?.program, c.tally?.preview, note]);
+    if (overlay.dataset.sig !== sig) {
+      overlay.dataset.sig = sig;
+      overlay.textContent = '';
+      add(overlay,
+        el('span', { class: `recdot${rec ? ' on' : ''}` }),
+        el('span', { text: c.label || c.id }),
+        tallyBadge(c),
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'note', text: note }));
+    }
+    if (tools.dataset.sig !== String(rec)) {
+      tools.dataset.sig = String(rec);
+      tools.textContent = '';
+      const big = el('button', { class: 'small', onclick: enlarge },
+        document.createTextNode(soloFeed === c.id ? 'Show all' : 'Enlarge'));
+      if (isPtz) {
+        // Not a recorder and no AF point: the useful extras live on its Operate card.
+        tools.append(el('button', { class: 'small', onclick: () => ptzUi.openSettings(c.id) },
+          document.createTextNode('Settings')), big);
+      } else {
+        tools.append(
+          el('button', { class: 'small', onclick: () => doAction(c.id, 'autofocus') },
+            document.createTextNode('AF')),
+          el('button', {
+            class: rec ? 'small' : 'small danger',
+            onclick: () => doAction(c.id, rec ? 'recordStop' : 'recordStart'),
+          }, document.createTextNode(rec ? '■' : '●')),
+          big);
+      }
+    }
+  };
+  t.update(cam);
+  return t;
 }
 
-function renderMultiview() {
+/**
+ * Brings the multiview in step with the camera list, the group filter and
+ * Enlarge. Only tiles whose camera changed are touched, and only a tile whose
+ * camera connected or dropped is rebuilt; every other push leaves the
+ * pictures running.
+ */
+function syncMultiview() {
   const grid = $('#mvgrid');
-  // Every rebuild abandons the old <img> elements, so their polling loops have
-  // to be stopped or they pile up: leave and re-enter the tab a few times and
-  // the cameras are being asked for frames by a dozen dead tiles.
-  stopAllFeeds();
-  grid.textContent = '';
-  const cams = soloFeed ? view.cameras.filter((c) => c.id === soloFeed) : view.cameras;
-  grid.className = soloFeed ? 'solo' : '';
+  bus.renderChips($('#mv-groups'), view.cameras);
+  const cams = soloFeed
+    ? view.cameras.filter((c) => c.id === soloFeed)
+    : bus.filter(view.cameras);
+  setClass(grid, soloFeed ? 'solo' : cams.length > 9 ? 'dense' : '');
+  const none = grid.querySelector(':scope > .mv-none');
   if (!cams.length) {
-    grid.append(el('div', { class: 'note', style: 'padding:12px', text: 'No cameras to show.' }));
+    stopAllFeeds();
+    if (!none) grid.append(el('div', { class: 'note mv-none', style: 'padding:12px', text: 'No cameras to show.' }));
     return;
   }
-  for (const cam of cams) grid.append(feedTile(cam));
+  none?.remove();
+  const want = new Set(cams.map((c) => c.id));
+  for (const t of [...mvTiles.values()]) if (!want.has(t.id)) dropTile(t);
+  cams.forEach((cam, i) => {
+    let t = mvTiles.get(cam.id);
+    if (t && t.key !== tileKey(cam)) { dropTile(t); t = null; }
+    if (!t) {
+      t = feedTile(cam);
+      mvTiles.set(cam.id, t);
+      mvIo?.observe(t.node);
+    } else if (t.cam !== cam) t.update(cam);
+    if (grid.children[i] !== t.node) grid.insertBefore(t.node, grid.children[i] ?? null);
+  });
+}
+
+/** Restart feeds: every tile rebuilt from scratch. */
+function renderMultiview() {
+  stopAllFeeds();
+  syncMultiview();
 }
 
 let setupSig = null;
@@ -892,10 +1081,13 @@ function renderSetup() {
   // Only when something Setup shows has changed. A moving PTZ head pushes
   // state several times a second, and rebuilding the tables each time can
   // swallow a tap on Edit or Remove between press and release.
-  const sig = JSON.stringify([discovery, health.configPath, view.camdUsed,
-    view.cameras.map((c) => [c.id, c.kind, c.label, c.model, c.vendor, c.ip, c.state, c.detail, c.reconnectAttempts])]);
+  const filterText = ($('#cam-filter')?.value ?? '').trim().toLowerCase();
+  const sig = JSON.stringify([discovery, health.configPath, view.camdUsed, filterText, reordering,
+    bus.filter(view.cameras).length,
+    view.cameras.map((c) => [c.id, c.kind, c.label, c.model, c.vendor, c.ip, c.group, c.state, c.detail, c.reconnectAttempts])]);
   if (sig === setupSig) return;
   setupSig = sig;
+  renderGroupList();
   // A venue with only PTZ heads runs no daemon and has no Sony bodies to
   // discover; a section that can only ever say "nothing found" is noise.
   $('#discover-card').hidden = view.camdUsed === false || discovery.camdUsed === false;
@@ -936,21 +1128,45 @@ function renderSetup() {
             document.createTextNode('Add')))));
   }
 
+  // A long list gets a search box and the group chips; the order shown is
+  // the operator's order, which is also the bus's and Multiview's.
+  const long = view.cameras.length > 8;
+  $('#cam-filter-row').hidden = !long;
+  bus.renderChips($('#setup-groups'), view.cameras);
+  const matches = (c) => !filterText || [c.label, c.ip, c.model, c.vendor, c.group]
+    .some((v) => String(v ?? '').toLowerCase().includes(filterText));
+  const listed = (long ? bus.filter(view.cameras) : view.cameras).filter(matches);
+  const anyGroup = view.cameras.some((c) => c.group);
+
   const at = $('#adopted-table');
+  const focusKey = document.activeElement?.dataset?.move;
   at.textContent = '';
-  at.append(el('tr', {}, el('th', { text: 'Name' }), el('th', { text: 'Model' }),
-    el('th', { text: 'State' }), el('th', { text: '' })));
+  at.append(el('tr', {}, el('th', { text: 'Order', class: 'ordercol' }), el('th', { text: 'Name' }),
+    anyGroup ? el('th', { text: 'Group' }) : null,
+    el('th', { text: 'Model', class: 'col-model' }), el('th', { text: 'State' }), el('th', { text: '' })));
+  const cols = anyGroup ? 6 : 5;
   if (!view.cameras.length) {
-    at.append(el('tr', {}, el('td', { colspan: '4', class: 'note', text: 'Nothing added yet.' })));
+    at.append(el('tr', {}, el('td', { colspan: String(cols), class: 'note', text: 'Nothing added yet.' })));
+  } else if (!listed.length) {
+    at.append(el('tr', {}, el('td', { colspan: String(cols), class: 'note', text: 'No camera matches that.' })));
   }
-  for (const cam of view.cameras) {
+  listed.forEach((cam, i) => {
+    const arrow = (dir, text, label) => el('button', {
+      class: 'small ghost', text, 'aria-label': `${label} ${cam.label}`, title: label,
+      'data-move': `${cam.id}:${dir}`,
+      disabled: reordering || (dir < 0 ? i === 0 : i === listed.length - 1),
+      onclick: () => moveCamera(cam.id, dir, listed),
+    });
     at.append(el('tr', {},
+      el('td', { class: 'ordercol' }, el('div', { class: 'line nowrap' },
+        arrow(-1, '\u25b2', 'Move up'), arrow(1, '\u25bc', 'Move down'))),
       el('td', { text: cam.label }),
-      el('td', { class: 'note', text: cam.kind === 'ptz'
+      anyGroup ? el('td', {}, cam.group ? el('span', { class: 'pill', text: cam.group }) : null) : null,
+      el('td', { class: 'note col-model', text: cam.kind === 'ptz'
         ? `${cam.model || cam.vendor || 'PTZ'} · ${cam.ip || '—'}`
         : (cam.model || '—') }),
       el('td', {}, stateBadge(cam)),
-      el('td', {}, el('div', { class: 'line' },
+      el('td', {}, el('div', { class: 'line nowrap' },
         el('button', { class: 'small', onclick: () => openEdit(cam) }, document.createTextNode('Edit')),
         el('button', {
           class: 'small', onclick: async () => {
@@ -959,7 +1175,56 @@ function renderSetup() {
             if (r.ok) { toast(`Removed ${cam.label}`); refreshSetup(); }
           },
         }, document.createTextNode('Remove'))))));
+  });
+  // Keep a keyboard user on the arrow they pressed, which the rebuild replaced.
+  if (focusKey) at.querySelector(`[data-move="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+}
+
+/** Group names for the group fields' suggestions. */
+function renderGroupList() {
+  const dl = $('#group-list');
+  if (!dl) return;
+  const groups = [...new Set(view.cameras.map((c) => c.group).filter(Boolean))];
+  const sig = JSON.stringify(groups);
+  if (dl.dataset.sig === sig) return;
+  dl.dataset.sig = sig;
+  dl.textContent = '';
+  for (const g of groups) dl.append(el('option', { value: g }));
+}
+
+let reordering = false;
+
+/**
+ * Moves a camera one place up or down among the cameras listed, and saves
+ * the whole order. Relative to what is listed, so with a group or search
+ * filter on, "up" means past the camera above it on screen.
+ */
+async function moveCamera(id, dir, listed) {
+  const i = listed.findIndex((c) => c.id === id);
+  const other = listed[i + dir];
+  if (!other || reordering) return;
+  const ids = view.cameras.map((c) => c.id).filter((x) => x !== id);
+  ids.splice(ids.indexOf(other.id) + (dir > 0 ? 1 : 0), 0, id);
+  reordering = true;
+  renderSetup();
+  const r = await api('PUT', '/api/cameras/order', { ids }).finally(() => { reordering = false; });
+  if (r.httpOk && Array.isArray(r.order)) {
+    // Put the list in the saved order now rather than wait for the push, so a
+    // second press straight after the first moves from where this one left it.
+    applyOrder(r.order);
   }
+  renderSetup();
+}
+
+/** Reorders the cameras this page holds, keeping every camera object as it is. */
+function applyOrder(order) {
+  const byId = new Map(view.cameras.map((c) => [c.id, c]));
+  const next = order.map((id) => byId.get(id)).filter(Boolean);
+  for (const c of view.cameras) if (!order.includes(c.id)) next.push(c);
+  view = { ...view, cameras: next };
+  if (frame) frame = { ...frame, view };
+  ptzUi.onView(view);
+  render();
 }
 
 // --- adoption dialog --------------------------------------------------------
@@ -1001,16 +1266,18 @@ function openAdopt(cam) {
 }
 
 /** The dialog serves both kinds; a PTZ head is reached by address and has no Sony menus. */
-function setDialogKind(ptz) {
+function setDialogKind(ptz, edit = false) {
   for (const n of document.querySelectorAll('#adopt-dialog .ptz-only')) n.hidden = !ptz;
   for (const n of document.querySelectorAll('#adopt-dialog .sony-only')) n.hidden = ptz;
+  for (const n of document.querySelectorAll('#adopt-dialog .edit-only')) n.hidden = !edit;
 }
 
 function openEdit(cam) {
   editTarget = cam; adoptTarget = null;
   const ptz = cam.kind === 'ptz';
-  setDialogKind(ptz);
+  setDialogKind(ptz, true);
   $('#adopt-title').textContent = `Edit ${cam.label}`;
+  $('#adopt-group').value = cam.group ?? '';
   $('#adopt-sub').textContent = ptz
     ? `${cam.model || cam.vendor || 'PTZ camera'} · ${cam.ip || 'unknown address'}`
     : `${cam.ip || 'unknown address'} · ${cam.mac}`;
@@ -1027,6 +1294,7 @@ function openEdit(cam) {
 }
 
 async function refreshSetup() {
+  bulkAdd.resume();
   discovery = await api('GET', '/api/discovered');
   renderSetup();
   ptzUi.refreshSkaarhoj($);
@@ -1038,23 +1306,23 @@ function render() {
   const pill = $('#camd-pill');
   // A PTZ-only venue runs no daemon on purpose. A permanent "daemon offline"
   // there would be the panel crying wolf, so the pill is simply not shown.
-  pill.style.display = view.camdUsed === false ? 'none' : '';
-  pill.textContent = view.camdConnected ? 'connected' : 'daemon offline';
-  pill.className = `pill ${view.camdConnected ? 'ok' : 'bad'}`;
+  setShown(pill, view.camdUsed !== false);
+  setText(pill, view.camdConnected ? 'connected' : 'daemon offline');
+  setClass(pill, `pill ${view.camdConnected ? 'ok' : 'bad'}`);
 
   // STOP ALL whenever there is a head to stop. Record all / Stop all only
   // when there is something that records: PTZ heads are not recorders, and a
   // record button that does nothing at a PTZ-only venue invites the wrong press.
   const anyPtz = view.cameras.some((c) => c.kind === 'ptz');
   const allPtz = anyPtz && view.cameras.every((c) => c.kind === 'ptz');
-  $('#ptz-stop-all').style.display = anyPtz ? '' : 'none';
-  $('#rec-all').style.display = allPtz ? 'none' : '';
-  $('#stop-all').style.display = allPtz ? 'none' : '';
-  $('#advanced-toggle').style.display = allPtz ? 'none' : '';
+  setShown($('#ptz-stop-all'), anyPtz);
+  setShown($('#rec-all'), !allPtz);
+  setShown($('#stop-all'), !allPtz);
+  setShown($('#advanced-toggle'), !allPtz);
   // Scenes, match and link capture Sony exposure and colour; with no Sony
   // body there is nothing for them to capture, and a drawer of controls that
   // cannot do anything is a drawer someone opens mid-shoot to find out.
-  document.querySelector('details.tools').style.display = allPtz ? 'none' : '';
+  setShown(document.querySelector('details.tools'), !allPtz);
 
   renderBanner();
   renderRollPill();
@@ -1062,8 +1330,8 @@ function render() {
   const activeKey = document.activeElement?.dataset?.key ?? interacting;
   if (currentView === 'control') renderControl();
   else if (currentView === 'setup') renderSetup();
-  // Multiview is not re-rendered on state change: replacing an <img> restarts
-  // its MJPEG stream, so the feeds would flicker on every property update.
+  // Multiview tiles are updated in place (syncMultiview, from adopt): a push
+  // never restarts a picture.
   if (activeKey) {
     const restore = document.querySelector(`[data-key="${CSS.escape(activeKey)}"]`);
     if (restore) restore.focus({ preventScroll: true });
@@ -1082,8 +1350,17 @@ function render() {
  * state to raise alarms from, and every camera would otherwise be reported
  * offline individually when the real problem is one process.
  */
+let bannerSig = null;
+
 function renderBanner() {
   const banner = $('#banner');
+  // Every push carries the alarms afresh; the banner is redrawn only when
+  // what it would say is different.
+  const sig = JSON.stringify([view.camdUsed ?? health.camdUsed, view.camdConnected, health.logDir,
+    alarmSummary, authState.enabled, authState.warning,
+    alarms.filter((a) => a.code === 'recordDropped').map((a) => [a.cameraId, a.label])]);
+  if (sig === bannerSig) return;
+  bannerSig = sig;
   banner.textContent = '';
   banner.classList.remove('warn');
 
@@ -1142,15 +1419,16 @@ function renderRollPill() {
   const pill = $('#roll-pill');
   if (!pill) return;
   if (!roll || roll.total === 0 || roll.idle) {
-    pill.style.display = 'none';
+    setShown(pill, false);
     return;
   }
-  pill.style.display = '';
-  pill.textContent = `${roll.rolling} of ${roll.total} rolling`;
-  pill.className = `pill ${roll.all ? 'rec' : 'warn'}`;
-  pill.title = roll.all
+  setShown(pill, true);
+  setText(pill, `${roll.rolling} of ${roll.total} rolling`);
+  setClass(pill, `pill ${roll.all ? 'rec' : 'warn'}`);
+  const title = roll.all
     ? 'Every connected camera is recording'
     : `Not rolling: ${roll.notRolling.map((c) => c.label).join(', ')}`;
+  if (pill.title !== title) pill.title = title;
 }
 
 let toolsSig = null;
@@ -1202,7 +1480,7 @@ function switchView(name) {
     s.classList.toggle('active', s.id === `view-${name}`);
   }
   if (name === 'multiview') renderMultiview();
-  if (name === 'setup') refreshSetup();
+  if (name === 'setup') { setupSig = null; refreshSetup(); }
   if (name === 'control') renderControl();
 }
 
@@ -1212,6 +1490,23 @@ for (const b of document.querySelectorAll('nav.tabs button')) {
   b.addEventListener('click', () => switchView(b.dataset.view));
 }
 $('#mv-refresh').addEventListener('click', renderMultiview);
+$('#cam-filter')?.addEventListener('input', () => renderSetup());
+
+// With more than one panel up, a touch anywhere on a panel makes it the one
+// the bus and the number keys act on. Capture phase, so it is decided before
+// the panel's own controls see the press; nothing is detached by it.
+$('#grid').addEventListener('pointerdown', (e) => {
+  const slot = e.target.closest?.('.ptzcam[data-slot]')?.dataset.slot;
+  if (slot) bus.setActive('ABCD'.indexOf(slot));
+}, true);
+
+// The bus sticks below the header, whose height changes as it wraps.
+{
+  const top = $('#top');
+  const setHdr = () => document.documentElement.style.setProperty('--hdr', `${top.offsetHeight}px`);
+  setHdr();
+  if (typeof ResizeObserver === 'function') new ResizeObserver(setHdr).observe(top);
+}
 
 // --- monitoring assists -----------------------------------------------------
 // None of these restart the feeds. The draw path reads the current settings on
@@ -1297,6 +1592,7 @@ $('#stop-all').addEventListener('click', async () => {
 // is about cards and one is about heads, and they must never be confused.
 $('#ptz-stop-all').addEventListener('click', () => ptzUi.stopAll());
 ptzUi.wireSetup($);
+bulkAdd.wire($);
 
 $('#scene-save').addEventListener('click', async () => {
   const name = $('#scene-name').value.trim();
@@ -1438,6 +1734,9 @@ $('#adopt-confirm').addEventListener('click', async () => {
     // A PTZ head is reached by address, so its address is editable here.
     const ip = $('#adopt-ip').value.trim();
     if (editTarget.kind === 'ptz' && ip && ip !== editTarget.ip) body.ip = ip;
+    // An empty group takes the camera out of its group.
+    const group = $('#adopt-group').value.trim();
+    if (group !== (editTarget.group ?? '')) body.group = group;
     const r = await api('PATCH', `/api/cameras/${encodeURIComponent(editTarget.id)}/adoption`, body);
     if (r.ok) { toast(`Updated ${label || editTarget.label}`); $('#adopt-dialog').close(); refreshSetup(); }
   }
@@ -1606,40 +1905,68 @@ async function loadMeta() {
 // resend each time one of them pans. A reconnect starts again from the full
 // state, so a patch is never applied to a frame from before an outage.
 let frame = null;
+let undoJson = null;
+
+/**
+ * A full frame — on connect, after a reconnect, when cameras are added,
+ * reordered or regrouped — brings a new object for every camera. Where one is
+ * unchanged, keep the object already held, so that "same object" still means
+ * "nothing to redraw" and forty-eight cards and tiles are not rebuilt because
+ * one camera was renamed.
+ */
+function keepUnchanged(next) {
+  const before = new Map(view.cameras.map((c) => [c.id, c]));
+  next.view.cameras = next.view.cameras.map((c) => {
+    const b = before.get(c.id);
+    return b && JSON.stringify(b) === JSON.stringify(c) ? b : c;
+  });
+}
 
 function adopt(next) {
-  const before = view.cameras;
-  const changed =
-    next.view.cameras.length !== before.length ||
-    next.view.cameras.some((c, i) => c.id !== before[i]?.id || c.state !== before[i]?.state);
   frame = next;
   view = next.view;
   alarms = next.alarms ?? [];
   alarmsByCamera = next.alarmsByCamera ?? {};
   alarmSummary = next.alarmSummary ?? null;
   roll = next.roll ?? null;
-  undoState = next.undo ?? {};
+  // Every frame carries the undo summary afresh. Kept as the same object while
+  // it says the same thing, so a card's "has my undo changed" is an identity test.
+  const u = JSON.stringify(next.undo ?? {});
+  if (u !== undoJson) { undoJson = u; undoState = next.undo ?? {}; }
   ptzUi.onView(view);
   render();
-  if (currentView === 'multiview' && changed) renderMultiview();
+  if (currentView === 'multiview') syncMultiview();
 }
 
 async function resync() {
   const r = await fetch('/api/state').catch(() => null);
-  if (r?.ok) adopt({ type: 'state', ...(await r.json()) });
+  if (!r?.ok) return;
+  const next = { type: 'state', ...(await r.json()) };
+  keepUnchanged(next);
+  adopt(next);
 }
+
+// ?profile on the URL records how long each pushed frame takes to apply and
+// render, as User Timing measures ("cb:patch", "cb:state") for the browser's
+// performance tools. Off by default: measures accumulate.
+const PROFILE = /[?&]profile\b/.test(location.search);
 
 function connectEvents() {
   const es = new EventSource('/api/events?patch=1');
   es.onmessage = (e) => {
+    const t0 = performance.now();
+    let kind = null;
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'state') { adopt(msg); return; }
+      kind = msg.type;
+      if (msg.type === 'state') { keepUnchanged(msg); adopt(msg); return; }
       if (msg.type !== 'patch' || !frame) return;
       const r = applyPatch(frame, msg);
       adopt(r.frame);
       if (r.resync) resync();
-    } catch { /* ignore malformed frame */ }
+    } catch { /* ignore malformed frame */ } finally {
+      if (PROFILE && kind) performance.measure(`cb:${kind}`, { start: t0, end: performance.now() });
+    }
   };
   es.onerror = () => {
     // About CamBridge itself, not the daemon, so shown at every venue.
