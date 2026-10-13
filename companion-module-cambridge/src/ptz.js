@@ -27,9 +27,20 @@ export const HOLD_REFRESH_MS = 150;
 /**
  * A key that never reports its release (page change mid-press, a lost event)
  * must not pan the head into the wall forever, because we would keep refreshing
- * it. Nobody holds a key this long on purpose.
+ * it. Nobody holds a key this long on purpose. Configurable in the module (5-120 s).
  */
-export const HOLD_MAX_MS = 60_000;
+export const HOLD_MAX_MS = 15_000;
+/** Bounds for the module option (seconds). */
+export const HOLD_MAX_MIN_S = 5;
+export const HOLD_MAX_MAX_S = 120;
+export const HOLD_MAX_DEFAULT_S = HOLD_MAX_MS / 1000;
+
+/** Config value (seconds) -> milliseconds, clamped; anything unusable gives the default. */
+export function holdCeilingMs(seconds) {
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n <= 0) return HOLD_MAX_MS;
+  return Math.min(HOLD_MAX_MAX_S, Math.max(HOLD_MAX_MIN_S, n)) * 1000;
+}
 
 export const isPtz = (cam) => cam?.kind === 'ptz';
 
@@ -144,7 +155,13 @@ export class PtzHolds {
     for (const [id, cam] of this.cameras) {
       clearInterval(cam.timer);
       cam.timer = null;
-      if (stop) jobs.push(this.#chain(cam, () => this.stopFn(id)));
+      // Forget the holds themselves, not just the timer: a move already queued
+      // on the chain reads them when it runs, and must find nothing to send.
+      cam.holds.clear();
+      if (stop) this.#chain(cam, () => this.stopFn(id));
+      // Resolve once everything already queued or in flight has settled, so a
+      // caller sending its own stop (STOP ALL) lands after it on the wire.
+      jobs.push(cam.pending);
     }
     this.cameras.clear();
     return Promise.all(jobs);

@@ -8,9 +8,17 @@ Controls Sony FX3 and FX30 bodies through a running **CamBridge** server.
 2. In this connection's config, enter the address you open the CamBridge control
    panel on, and its port (8088 by default). If Companion runs on the same Mac
    as CamBridge, `127.0.0.1` is correct.
-3. The status goes green once connected. Cameras appear in every dropdown
+3. If CamBridge has a PIN set, create a token in its config (`tokens`, see
+   *running the app*) and paste it into **Access token** (a secret field; it is
+   sent as `Authorization: Bearer ...` and never logged). Without it every
+   request, including STOP, is refused and the status reads "CamBridge needs a
+   token — set one in the module config".
+4. The status goes green once connected. Cameras appear in every dropdown
    automatically — a camera added in the CamBridge web panel shows up here
    without restarting anything.
+
+**Held-key safety limit** (default 15 s, 5-120): if a held PTZ key never reports
+its release (page change mid-press, lost event), movement stops after this long.
 
 Cameras themselves are added in the CamBridge **Setup** tab, not here.
 

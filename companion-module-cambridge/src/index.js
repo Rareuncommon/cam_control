@@ -10,13 +10,13 @@
 
 import { InstanceBase, InstanceStatus, Regex, runEntrypoint } from '@companion-module/base';
 
-import { CambridgeApi } from './api.js';
+import { CambridgeApi, AUTH_MESSAGE } from './api.js';
 import { buildActions } from './actions.js';
 import { buildFeedbacks } from './feedbacks.js';
 import { buildPresets } from './presets.js';
 import { buildVariableDefinitions, buildVariableValues } from './variables.js';
 import { STEPPABLE } from './step.js';
-import { PtzHolds, isPtz, SELECTED, SELECTED_TAG } from './ptz.js';
+import { PtzHolds, holdCeilingMs, HOLD_MAX_MIN_S, HOLD_MAX_MAX_S, HOLD_MAX_DEFAULT_S, isPtz, SELECTED, SELECTED_TAG } from './ptz.js';
 import {
   bankSizeOf, bankCount, bankOf, stepSelection, selectionVariableDefs, selectionVariableValues,
 } from './select.js';
@@ -86,12 +86,14 @@ class CambridgeInstance extends InstanceBase {
 
   async init(config) {
     this.config = config;
+    this.ptzHolds.maxMs = holdCeilingMs(config?.holdCeilingSec);
     this.updateStatus(InstanceStatus.Connecting);
     this.#connect();
   }
 
   async configUpdated(config) {
     this.config = config;
+    this.ptzHolds.maxMs = holdCeilingMs(config?.holdCeilingSec);
     // Bank size and the per-camera button switch change the definitions.
     const signature = this.#signature();
     if (this.cameras.length && signature !== this.definitionSignature) {
@@ -134,6 +136,16 @@ class CambridgeInstance extends InstanceBase {
         default: 8088, min: 1, max: 65535,
       },
       {
+        type: 'secret-text', id: 'token', label: 'Access token', width: 12,
+        default: '',
+        tooltip: 'Only needed once CamBridge has a PIN set. A token from CamBridge\'s config (tokens). Sent as "Authorization: Bearer ..." on every request. Treat it as a password.',
+      },
+      {
+        type: 'number', id: 'holdCeilingSec', label: 'Held-key safety limit (seconds)', width: 6,
+        default: HOLD_MAX_DEFAULT_S, min: HOLD_MAX_MIN_S, max: HOLD_MAX_MAX_S,
+        tooltip: 'If a held PTZ key never reports its release, movement stops after this long.',
+      },
+      {
         type: 'number', id: 'bankSize', label: 'Camera-select keys per bank', width: 6,
         default: 8, min: 1, max: 32,
       },
@@ -150,6 +162,11 @@ class CambridgeInstance extends InstanceBase {
       host: this.config?.host || '127.0.0.1',
       port: Number(this.config?.port) || 8088,
       log: (level, msg) => this.log(level, msg),
+      token: this.config?.token,
+      onAuthError: () => {
+        this.ptzHolds.clearAll();
+        this.updateStatus(InstanceStatus.AuthenticationFailure, AUTH_MESSAGE);
+      },
       onState: (view) => this.applyState(view),
       onConnection: (up, detail) => {
         if (up) {

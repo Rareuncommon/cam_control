@@ -8,7 +8,8 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CambridgeInstance } from '../src/index.js';
-import { PtzHolds, usableEntries, HOLD_REFRESH_MS, HOLD_MAX_MS } from '../src/ptz.js';
+import { PtzHolds, usableEntries, HOLD_REFRESH_MS, HOLD_MAX_MS, holdCeilingMs } from '../src/ptz.js';
+import { CambridgeApi } from '../src/api.js';
 import { buildVariableValues, buildVariableDefinitions } from '../src/variables.js';
 
 if (typeof process.send !== 'function') process.send = () => true;
@@ -385,6 +386,142 @@ test('STOP ALL clears local holds then calls the server-wide stop', async () => 
   await captured.actions.ptzStopAll.callback({ options: {} });
   assert.equal(inst.ptzHolds.active, false);
   assert.ok(api.sent.some((s) => s.method === 'POST' && s.path === '/api/ptz/stop-all'));
+});
+
+// --- review fixes: STOP ALL ordering, token, hold ceiling -------------------------
+
+test('STOP ALL: a move queued behind one in flight never reaches the wire after stop-all', async () => {
+  const wire = [];
+  let release;
+  const holds = new PtzHolds({
+    move: (id) => new Promise((resolve) => { wire.push(`move ${id}`); release = resolve; }),
+    stop: async (id) => { wire.push(`stop ${id}`); },
+    log: () => {},
+  });
+  holds.start('k|ptzPanTilt', 'cam1', { pan: 1 });   // in flight
+  await flush();
+  holds.start('k|ptzZoom', 'cam1', { zoom: 1 });     // queued behind it
+  const cleared = holds.clearAll();
+  let settled = false;
+  cleared.then(() => { settled = true; });
+  await flush();
+  assert.equal(settled, false, 'clearAll waits for the move already on the wire');
+  release();
+  await cleared;
+  wire.push('stop-all');
+  await flush();
+  assert.deepEqual(wire, ['move cam1', 'stop-all']);
+});
+
+test('STOP ALL action: with a slow server and a queued move on two cameras, the wire ends with stop-all', async () => {
+  const { inst, captured } = makeInstance();
+  const wire = [];
+  const releases = [];
+  inst.api = { request: async (m, p) => { wire.push(`${m} ${p}`); return { ok: true, status: 200, body: {} }; } };
+  inst.applyState(ptzOnlyFrame());
+  await flush();
+  inst.ptzHolds = new PtzHolds({
+    move: (id) => new Promise((r) => { wire.push(`move ${id}`); releases.push(r); }),
+    stop: async () => {}, log: () => {},
+  });
+  inst.ptzHolds.start('a|x', 'left', { pan: 1 });
+  await flush();
+  inst.ptzHolds.start('a|y', 'left', { tilt: 1 });
+  inst.ptzHolds.start('b|x', 'right', { pan: -1 });
+  await flush();
+  const done = captured.actions.ptzStopAll.callback({ options: {} });
+  await flush();
+  releases.forEach((r) => r());
+  await done;
+  await flush();
+  releases.forEach((r) => r());
+  assert.equal(wire.at(-1), 'POST /api/ptz/stop-all');
+  assert.equal(wire.filter((w) => w.startsWith('move')).length, 2);
+});
+
+test('the hold ceiling defaults to 15 s and is clamped to 5-120 s', () => {
+  assert.equal(HOLD_MAX_MS, 15_000);
+  assert.equal(holdCeilingMs(undefined), 15_000);
+  assert.equal(holdCeilingMs(''), 15_000);
+  assert.equal(holdCeilingMs(1), 5_000);
+  assert.equal(holdCeilingMs(30), 30_000);
+  assert.equal(holdCeilingMs(9999), 120_000);
+});
+
+test('a configured ceiling applies to a key that never releases', async () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  try {
+    const { holds, calls } = holdHarness({ maxMs: holdCeilingMs(5) });
+    holds.start('c|ptzZoom', 'left', { zoom: 1 });
+    await flush();
+    mock.timers.tick(4_000);
+    assert.equal(holds.active, true);
+    mock.timers.tick(1_500);
+    await flush();
+    assert.deepEqual(calls.at(-1), ['stop', 'left']);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('the token is sent as a Bearer header on requests and the event stream, and never logged', async () => {
+  const seen = [];
+  const logs = [];
+  const fetchImpl = async (url, opts) => {
+    seen.push({ url, headers: opts.headers });
+    return { ok: false, status: 401, json: async () => ({ error: 'unauthorized' }), body: null };
+  };
+  let auth = 0;
+  const api = new CambridgeApi({
+    host: 'h', port: 1, token: ' s3cret ', fetchImpl,
+    log: (l, m) => logs.push(m), onState() {}, onConnection() {}, onAuthError: () => { auth += 1; },
+  });
+  const r = await api.request('POST', '/api/ptz/stop-all');
+  assert.equal(r.status, 401);
+  assert.equal(seen[0].headers.Authorization, 'Bearer s3cret');
+  assert.equal(auth, 1);
+  api.start();
+  await flush();
+  api.stop();
+  const stream = seen.find((s) => s.url.includes('/api/events'));
+  assert.equal(stream.headers.Authorization, 'Bearer s3cret');
+  assert.equal(stream.headers.Accept, 'text/event-stream');
+  assert.ok(auth >= 2, 'stream 401 reports an auth error');
+  assert.ok(!logs.some((m) => m.includes('s3cret')));
+});
+
+test('no token configured: no Authorization header', async () => {
+  const seen = [];
+  const api = new CambridgeApi({
+    host: 'h', port: 1, log() {}, onState() {}, onConnection() {},
+    fetchImpl: async (u, o) => { seen.push(o.headers); return { ok: true, status: 200, json: async () => ({}) }; },
+  });
+  await api.request('GET', '/api/state');
+  await api.request('POST', '/x', { a: 1 });
+  assert.equal(seen[0], undefined);
+  assert.equal(seen[1].Authorization, undefined);
+});
+
+test('config has a secret token field and the hold ceiling option; a 401 sets an authentication status', async () => {
+  const { inst } = makeInstance();
+  const fields = inst.getConfigFields();
+  assert.equal(fields.find((f) => f.id === 'token').type, 'secret-text');
+  const c = fields.find((f) => f.id === 'holdCeilingSec');
+  assert.deepEqual([c.min, c.max, c.default], [5, 120, 15]);
+  const statuses = [];
+  inst.updateStatus = (s, msg) => statuses.push([s, msg]);
+  inst.refreshPresetLists = () => {};
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({}), body: null });
+  try {
+    await inst.init({ host: '127.0.0.1', port: 1, token: 'x' });
+    await flush();
+    await flush();
+  } finally {
+    globalThis.fetch = orig;
+    inst.api?.stop();
+  }
+  assert.ok(statuses.some(([s, m]) => s === 'authentication_failure' && /needs a token/.test(m)));
 });
 
 // --- feedbacks and variables ------------------------------------------------------
