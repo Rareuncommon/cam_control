@@ -6,10 +6,14 @@
 // be misidentified, so the most specific probes go first.
 
 import { CanonXcPtz } from './canon-xc.js';
+import { PanasonicAw } from './panasonic-aw.js';
 import { FakePtz } from './fake.js';
 
 export const DRIVERS = new Map([
+  // Canon's probe asks a path only an XC camera serves; Panasonic's treats a
+  // 401 on its CGI path as "Panasonic, wrong password", so it goes after.
   [CanonXcPtz.vendor, CanonXcPtz],
+  [PanasonicAw.vendor, PanasonicAw],
   [FakePtz.vendor, FakePtz],
 ]);
 
