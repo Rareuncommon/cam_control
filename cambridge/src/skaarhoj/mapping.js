@@ -33,13 +33,11 @@ export const SOURCE = 'skaarhoj';
 const ENCODER_FIRST = ['iris', 'gain', 'shutter', 'nd', 'colorTemp'];
 
 /**
- * Role names the drivers tag entries with. A table not yet tagged (the
- * simulated head, until the base branch adds them) still works where an
- * entry's id *is* the role name; a tagged role always wins.
+ * Entries are bound by the role their driver tagged them with, and only by
+ * that. Guessing from an id would bind an untagged entry that merely happens
+ * to be called "gain" on some vendor to the gain encoder.
  */
-const ROLES = new Set(['home', 'onePushAf', 'focusMode', 'iris', 'irisMode', 'gain', 'shutter', 'nd',
-  'whiteBalanceMode', 'colorTemp', 'trackingEnabled', 'trackingTarget', 'tally', 'ipAddress', 'cameraName']);
-export const roleOf = (entry) => entry?.role ?? (ROLES.has(entry?.id) ? entry.id : null);
+export const roleOf = (entry) => entry?.role ?? null;
 
 // --- topology ------------------------------------------------------------------
 
