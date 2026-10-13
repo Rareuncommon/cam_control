@@ -297,6 +297,11 @@ export function tableFor(model) {
 
 const STANDBY = 'the camera is in standby (or busy) — power it on, or wait, and try again';
 
+/** A read stopped early because a move or stop was waiting (see #read). */
+const YIELDED = Symbol('yielded');
+/** Velocities and stops: the lane that goes ahead of reads (see #get). */
+const MOTION = Object.freeze({ motion: true });
+
 /** How long one camdata.html read answers for. See #camdataMap. */
 const CAMDATA_REUSE_MS = 1500;
 
@@ -338,7 +343,11 @@ export class PanasonicAw extends PtzDriver {
     this.known = new Map();
     this.camdata = { ok: this.options.camdata !== false, at: 0, map: null, seen: new Set() };
     this.lastStart = 0;
-    this.chain = Promise.resolve();
+    /** Requests waiting for the wire: motion first, then everything else (see #get). */
+    this.lanes = { motion: [], other: [] };
+    this.pumping = false;
+    /** Requests sent so far: a read yields only once it has made one of its own. */
+    this.requestCount = 0;
     /** False after a timeout or network failure, until a request gets through. */
     this.reachable = true;
     this.push = null;
@@ -351,27 +360,62 @@ export class PanasonicAw extends PtzDriver {
   /**
    * One HTTP request, after the previous one and at least 16 ms after it began.
    *
+   * Requests go out one at a time — the spec does not say how many HTTP
+   * connections the camera takes at once (notes §2: UNKNOWN) — from two lanes.
+   * Motion (`motion: true`: velocities and stops) always goes next, ahead of
+   * whatever a read has queued: the lifecycle lets a stop start while a
+   * settings read is still running, and a stop that waited for the rest of
+   * that read would be a head still panning. So a stop waits for at most the
+   * one request already on the wire, plus the 16 ms gap counted from the last
+   * request actually sent (IF p.6, p.8). Each lane keeps its order, so motion
+   * calls reach the camera in the order they were made.
+   *
    * `Connection: close` on every request: the spec says the camera does not
    * keep HTTP connections alive and connects and disconnects for each command
    * (IF p.8). The shared transport pools keep-alive sockets per host; without
    * this, the next command would be written to a socket the camera has already
    * dropped.
    */
-  #get(path, { timeoutMs = this.timeoutMs } = {}) {
-    const run = async () => {
-      const wait = this.lastStart + MIN_GAP_MS - Date.now();
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      this.lastStart = Date.now();
-      const r = await this.http({
-        host: this.host, port: this.port, path, auth: this.auth, timeoutMs,
-        headers: { Connection: 'close' },
-      });
-      this.reachable = r.kind !== 'timeout' && r.kind !== 'network';
-      return r;
-    };
-    const p = this.chain.then(run, run);
-    this.chain = p.catch(() => {});
-    return p;
+  #get(path, { timeoutMs = this.timeoutMs, motion = false } = {}) {
+    return new Promise((resolve, reject) => {
+      (motion ? this.lanes.motion : this.lanes.other).push({ path, timeoutMs, resolve, reject });
+      this.#pump();
+    });
+  }
+
+  async #pump() {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      while (this.lanes.motion.length || this.lanes.other.length) {
+        // Always at least one turn of the event loop: the caller whose request
+        // just finished (a stop with three more to send) gets to queue its
+        // next one before a read's next request is picked.
+        const wait = this.lastStart + MIN_GAP_MS - Date.now();
+        await new Promise((r) => (wait > 0 ? setTimeout(r, wait) : setImmediate(r)));
+        // Picked after the wait, so a stop that arrived during it goes first.
+        const job = this.lanes.motion.shift() ?? this.lanes.other.shift();
+        this.lastStart = Date.now();
+        this.requestCount += 1;
+        try {
+          const r = await this.http({
+            host: this.host, port: this.port, path: job.path, auth: this.auth, timeoutMs: job.timeoutMs,
+            headers: { Connection: 'close' },
+          });
+          this.reachable = r.kind !== 'timeout' && r.kind !== 'network';
+          job.resolve(r);
+        } catch (err) {
+          job.reject(err);
+        }
+      }
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  /** A move or stop is waiting for the camera: a read with more to ask should hand back what it has. */
+  #shouldYield() {
+    try { return !!this.ctx?.shouldYield?.(); } catch { return false; }
   }
 
   /** Whole-call failures from the transport, as DriverErrors. Credentials never appear in messages. */
@@ -390,8 +434,8 @@ export class PanasonicAw extends PtzDriver {
    * busy, ER3 = outside the acceptable range (IF p.19-20). All three mean the
    * camera answered, so none counts against its health.
    */
-  async #cmd(path, cmd) {
-    const r = await this.#get(commandUrl(path, cmd));
+  async #cmd(path, cmd, { motion = false } = {}) {
+    const r = await this.#get(commandUrl(path, cmd), { motion });
     if (!r.ok) throw PanasonicAw.#transportError(r);
     const text = String(r.text ?? '').trim();
     const m = /^[eE]R([123]):(.*)$/.exec(text);
@@ -526,7 +570,10 @@ export class PanasonicAw extends PtzDriver {
     const w = e.wire;
     try {
       if (w.path === 'cgi') return { value: await this.#readCgi(e) };
-      if (w.codec?.k === 'presetEntries') return { value: await this.#presetEntries() };
+      if (w.codec?.k === 'presetEntries') {
+        const value = await this.#presetEntries();
+        return value === YIELDED ? YIELDED : { value };
+      }
       const text = await this.#cmd(w.path, w.q);
       if (!text.startsWith(w.r)) return { error: `unexpected reply "${text.slice(0, 40)}"` };
       const value = decode(e, text.slice(w.r.length));
@@ -557,10 +604,11 @@ export class PanasonicAw extends PtzDriver {
     return kv.filter(([k]) => !re || re.test(k)).map(([k, v]) => `${k}=${v}`).join(', ').slice(0, 2000);
   }
 
-  /** #PE00–#PE02: 40 presets per reply, bit 0 = Data1·40 + 1 (IF p.85). */
+  /** #PE00–#PE02: 40 presets per reply, bit 0 = Data1·40 + 1 (IF p.85). YIELDED when a move needs the camera first. */
   async #presetEntries() {
     const stored = [];
     for (const block of [0, 1, 2]) {
+      if (block > 0 && this.#shouldYield()) return YIELDED;
       const text = await this.#cmd('ptz', `#PE${pad(block, 2)}`);
       const m = /^pE(\d\d)([0-9A-Fa-f]{10})$/.exec(text);
       if (!m) throw new DriverError(`unexpected reply "${text.slice(0, 40)}"`, { kind: 'refused' });
@@ -603,21 +651,35 @@ export class PanasonicAw extends PtzDriver {
     const queried = want.filter((e) => !e.writeOnly);
     if (!queried.length) return out;
 
+    // Every request after the first checks whether a move or stop is waiting
+    // for the camera, and if so the read ends with what it has: the rest is
+    // asked on the next sweep. (Entries left out are simply not reported.)
+    const start = this.requestCount;
+    const one = async (e) => {
+      if (this.requestCount > start && this.#shouldYield()) return YIELDED;
+      return this.#readOne(e);
+    };
     const cam = await this.#camdataMap();
     const values = {};
     if (cam) {
       // Everything camdata carried, not only what was asked: the lifecycle uses the extra.
       for (const [id, value] of cam) values[id] = { value };
     }
+    let yielded = false;
     for (const e of queried) {
       if (values[e.id]) continue;
-      values[e.id] = await this.#readOne(e);
+      const r = await one(e);
+      if (r === YIELDED) { yielded = true; break; }
+      values[e.id] = r;
     }
     // A gate the batch did not include, asked once so writability is right.
-    for (const e of queried) {
+    for (const e of yielded ? [] : queried) {
       if (!e.gate || values[e.gate.id] || this.known.has(e.gate.id)) continue;
       const g = this.byId.get(e.gate.id);
-      if (g) values[g.id] = await this.#readOne(g);
+      if (!g) continue;
+      const r = await one(g);
+      if (r === YIELDED) break;
+      values[g.id] = r;
     }
     for (const [id, r] of Object.entries(values)) if (r.value !== undefined) this.known.set(id, r.value);
     for (const [id, r] of Object.entries(values)) {
@@ -710,17 +772,48 @@ export class PanasonicAw extends PtzDriver {
    */
   async panTilt(pan, tilt) {
     this.#forgetCamdata();
-    await this.#cmd('ptz', `#PTS${speedCode(pan)}${speedCode(tilt)}`);
+    await this.#velocity(`#PTS${speedCode(pan)}${speedCode(tilt)}`, !pan && !tilt);
   }
 
   /** #Z: 01 wide full … 49 wide slowest, 50 stop, 51 tele slowest … 99 tele full (IF p.67). */
   async zoom(speed) {
-    await this.#cmd('ptz', `#Z${speedCode(speed)}`);
+    await this.#velocity(`#Z${speedCode(speed)}`, !speed);
   }
 
   /** #F: 01 near full … 50 stop … 99 far full (IF p.67). */
   async focus(speed) {
-    await this.#cmd('ptz', `#F${speedCode(speed)}`);
+    await this.#velocity(`#F${speedCode(speed)}`, !speed);
+  }
+
+  /** A velocity command, in the motion lane. A stop refused with ER2 is checked: see #standbyOrBusy. */
+  async #velocity(cmd, isStop) {
+    try {
+      await this.#cmd('ptz', cmd, MOTION);
+    } catch (err) {
+      if (!isStop || err.code !== 'ER2') throw err;
+      await this.#standbyOrBusy(err);
+    }
+  }
+
+  /**
+   * ER2 is "standby **or busy**" (IF p.19). In standby nothing can move, so a
+   * refused stop there is no problem; a busy camera that refused a stop may
+   * well be moving. #O tells the two apart — p0 = STANDBY, p1 = POWERON,
+   * p3 = STARTING (IF p.97) — and anything but a plain p0 (including no
+   * answer: whether #O answers in standby is UNKNOWN, notes §2) counts as
+   * busy, and the stop as not taken: thrown, so the motion controller sends
+   * it again.
+   */
+  async #standbyOrBusy(refusal) {
+    let power = null;
+    try {
+      power = /^p(\d)$/.exec(await this.#cmd('ptz', '#O', MOTION))?.[1] ?? null;
+    } catch { /* not knowing is not standby */ }
+    if (power === '0') return;
+    throw new DriverError(
+      `the camera answered "busy" to a stop (${refusal.code}${power ? `, power state p${power}` : ''}) — the head may still be moving`,
+      { kind: 'refused', code: 'ER2busy' },
+    );
   }
 
   /**
@@ -730,15 +823,24 @@ export class PanasonicAw extends PtzDriver {
    * so the three per-axis stops the notes give as the fallback that always
    * works (#PTS5050, #Z50, #F50; IF p.67, p.77) follow it every time.
    * Throws when any per-axis stop did not reach the camera, so the motion
-   * controller retries the whole set. "Busy" (ER2) is not a failure here: a
-   * camera in standby has nothing moving.
+   * controller retries the whole set. A per-axis stop refused with ER2 is a
+   * failure unless #O says the camera is in standby (#standbyOrBusy).
    */
   async stop() {
     this.#forgetCamdata();
     const errors = [];
-    try { await this.#cmd('ptz', '#HV150505050'); } catch (err) { if (['timeout', 'network', 'auth'].includes(err.kind)) errors.push(err); }
+    let busy = null;
+    try { await this.#cmd('ptz', '#HV150505050', MOTION); } catch (err) { if (['timeout', 'network', 'auth'].includes(err.kind)) errors.push(err); }
     for (const cmd of ['#PTS5050', '#Z50', '#F50']) {
-      try { await this.#cmd('ptz', cmd); } catch (err) { if (err.code !== 'ER2') errors.push(err); }
+      try {
+        await this.#cmd('ptz', cmd, MOTION);
+      } catch (err) {
+        if (err.code === 'ER2') busy ??= err;
+        else errors.push(err);
+      }
+    }
+    if (busy) {
+      try { await this.#standbyOrBusy(busy); } catch (err) { errors.push(err); }
     }
     if (errors.length) throw errors.find((e) => e.kind !== 'refused' && e.kind !== 'unsupported') ?? errors[0];
   }
@@ -764,11 +866,13 @@ export class PanasonicAw extends PtzDriver {
     const p = await this.#cmd('ptz', '#O').catch((err) => { if (err.kind === 'timeout' || err.kind === 'network') throw err; return null; });
     const power = { 1: 'on', 0: 'standby', 3: 'starting' }[/^p(\d)$/.exec(p ?? '')?.[1]];
     if (power) out.power = power;
-    if (this.hasTracking) {
+    // Three requests at most; each later one gives way to a waiting move or stop.
+    if (this.hasTracking && !this.#shouldYield()) {
       // Read-only: AUTO TRACKING MODE 0 OFF / 1 ON and TRACKING STATUS 0 NOT
       // TRACKING / 1 TRACKING / 2 LOST (IF p.38). There is no command to change either.
       const mode = await this.#readOne(this.byId.get('autoTrackingMode'));
       if (mode.value !== undefined) out.tracking = mode.value;
+      if (this.#shouldYield()) return out;
       const st = await this.#readOne(this.byId.get('trackingStatus'));
       if (st.value !== undefined) out.trackingState = { 0: 'idle', 1: 'tracking', 2: 'lost' }[Number(st.value)] ?? null;
     }

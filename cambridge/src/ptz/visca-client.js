@@ -176,9 +176,22 @@ export class ViscaClient {
   /**
    * Sends a command (`8x 01 ...`). Resolves `{ socket }` on ACK, or after the
    * Completion with `{ completion: true }`.
+   *
+   * `urgent`: motion — velocities and stops. Goes ahead of every queued
+   * non-urgent message (an inquiry a position poll or settings read left
+   * waiting, a tally refresh), behind urgent ones already queued, so motion
+   * stays in the order it was asked for. It still waits for the one message
+   * already awaiting its reply: one message at a time is the camera's rule.
+   *
+   * `stillWanted`: checked just before the message is sent, and before any
+   * resend; when it answers false the message is not sent and the call
+   * rejects with code `superseded`. For a stop that is only worth sending if
+   * nothing has moved the head since it was asked for.
    */
-  command(payload, { completion = false, timeoutMs } = {}) {
-    return this.#enqueue({ kind: 'command', payload: toBuf(payload), completion, timeoutMs: timeoutMs ?? this.timeoutMs });
+  command(payload, { completion = false, timeoutMs, urgent = false, stillWanted } = {}) {
+    return this.#enqueue({
+      kind: 'command', payload: toBuf(payload), completion, timeoutMs: timeoutMs ?? this.timeoutMs, urgent, stillWanted,
+    });
   }
 
   /** Sends an inquiry (`8x 09 ...`). Resolves with the whole reply, `90 50 ... FF`. */
@@ -221,9 +234,22 @@ export class ViscaClient {
       job.resolve = (v) => { if (!settled) { settled = true; resolve(v); } };
       job.reject = (e) => { if (!settled) { settled = true; reject(e); } };
       job.settled = () => settled;
-      this.queue.push(job);
+      if (job.urgent) {
+        // After the urgent jobs already waiting, before everything else.
+        let i = 0;
+        while (i < this.queue.length && this.queue[i].urgent) i++;
+        this.queue.splice(i, 0, job);
+      } else {
+        this.queue.push(job);
+      }
       this.#pump();
     });
+  }
+
+  /** False when the caller no longer wants this message sent (see command()). */
+  #wanted(job) {
+    if (!job.stillWanted) return true;
+    try { return !!job.stillWanted(); } catch { return false; }
   }
 
   async #pump() {
@@ -232,6 +258,10 @@ export class ViscaClient {
     try {
       while (this.queue.length && !this.closed) {
         const job = this.queue.shift();
+        if (!this.#wanted(job)) {
+          job.reject(new DriverError('no longer wanted; not sent', { code: 'superseded', kind: 'refused' }));
+          continue;
+        }
         try {
           await this.#exchange(job);
         } catch (err) {
@@ -257,12 +287,19 @@ export class ViscaClient {
     // Buffer full means "not executed", so one retry cannot run anything
     // twice. (The PTZOptics module resends once in the same case:
     // companion-module-ptzoptics-visca src/visca/port.ts:939-950, impl.)
-    if (job.retryBufferFull && !job.settled() && !this.closed) {
+    if (job.retryBufferFull && !job.settled() && !this.closed && this.#wanted(job)) {
       job.retryBufferFull = false;
       await this.#waitForFree(Math.min(this.socketWaitMs, Math.max(0, deadline - Date.now())));
       job.retried = true;
       if (this.framing === FRAMING.SONY_IP) await this.#exchangeSony(job, deadline);
       else await this.#exchangeRaw(job, deadline);
+    }
+    // A retry that did not happen (closed, or no longer wanted) must still
+    // settle the call: it was refused with "buffer full".
+    if (job.retryBufferFull) {
+      job.retryBufferFull = false;
+      job.reject(this.#wanted(job) ? viscaError(0x03)
+        : new DriverError('no longer wanted; not sent again', { code: 'superseded', kind: 'refused' }));
     }
   }
 
@@ -612,6 +649,10 @@ export class ViscaClient {
    */
   #attemptTimedOut(job) {
     if (this.current !== job) return;
+    if (!this.#wanted(job)) {
+      this.#finishFirst(job, new DriverError('no answer, and no longer wanted; not sent again', { code: 'superseded', kind: 'refused' }));
+      return;
+    }
     if (job.attempts < 2) {
       job.attempts += 1;
       job.retransmitted = true;
@@ -693,6 +734,11 @@ export class ViscaClient {
   #exchangeRaw(job, deadline) {
     return (async () => {
       await this.#connectTcp(Math.max(50, deadline - Date.now()));
+      // Connecting can take a while; ask again whether it is still wanted.
+      if (!this.#wanted(job)) {
+        job.reject(new DriverError('no longer wanted; not sent', { code: 'superseded', kind: 'refused' }));
+        return;
+      }
       await new Promise((done) => {
         job.firstDone = done;
         this.current = job;
@@ -709,5 +755,93 @@ export class ViscaClient {
         }, Math.max(50, deadline - Date.now()));
       });
     })();
+  }
+}
+
+/** Spacing of re-sent stops: quick at first, then steady. */
+const RESTOP_DELAYS_MS = [0, 100, 250, 500, 1000, 2000];
+
+/**
+ * A stop sent again over VISCA after it had to go another way.
+ *
+ * When VISCA does not take a stop, the drivers stop the head over HTTP-CGI
+ * instead. But a move sent over VISCA just before — still in a socket
+ * buffer, or a UDP retransmission on its way — can reach the camera *after*
+ * that CGI stop and start the head again. So once a stop for an axis group
+ * has gone over CGI, the same stop is sent over VISCA again as soon as VISCA
+ * answers: tried at once, then at growing intervals, until the camera takes
+ * it. The CGI stop stays sent; this is in addition to it.
+ *
+ * It stands down without sending when that group is moved again (`cancel`
+ * from the driver's next move — a late stop must not cut across a move the
+ * operator has just made), when a VISCA stop for the group gets through
+ * anyway (`cancel`), or on `close()`. Each send carries `stillWanted`, so the
+ * client drops a re-stop that is overtaken while it waits.
+ */
+export class ViscaRestop {
+  /**
+   * @param {object} [o]
+   * @param {(level: string, msg: string) => void} [o.log]
+   * @param {number[]} [o.delaysMs]
+   */
+  constructor({ log = () => {}, delaysMs = RESTOP_DELAYS_MS } = {}) {
+    this.log = log;
+    this.delaysMs = delaysMs;
+    /** group -> the token of the loop that owns it */
+    this.pending = new Map();
+    this.timers = new Set();
+    this.closed = false;
+  }
+
+  /** A re-stop for this group is still to be delivered. */
+  has(group) { return this.pending.has(group); }
+
+  /**
+   * @param {string} group  'panTilt' | 'zoom' | 'focus'
+   * @param {(o: {urgent: true, stillWanted: () => boolean}) => Promise<any>} send  this group's VISCA stop
+   * @param {() => void} [onDelivered]
+   */
+  arm(group, send, onDelivered = () => {}) {
+    if (this.closed) return;
+    const token = {};
+    this.pending.set(group, token);
+    const owns = () => !this.closed && this.pending.get(group) === token;
+    (async () => {
+      for (let attempt = 0; owns(); attempt++) {
+        await this.#sleep(this.delaysMs[Math.min(attempt, this.delaysMs.length - 1)]);
+        if (!owns()) return;
+        try {
+          await send({ urgent: true, stillWanted: owns });
+        } catch (err) {
+          if (err?.code === 'superseded') return;
+          continue;   // refused or not answered: VISCA is not taking stops yet
+        }
+        if (!owns()) return;
+        this.pending.delete(group);
+        this.log('info', `${group} stop delivered over VISCA as well (it had gone over HTTP)`);
+        try { onDelivered(); } catch { /* the stop is what matters */ }
+        return;
+      }
+    })();
+  }
+
+  /** The group moved again, or its stop got through: nothing left to re-send. */
+  cancel(group) { this.pending.delete(group); }
+
+  close() {
+    this.closed = true;
+    this.pending.clear();
+    for (const t of this.timers) { clearTimeout(t.timer); t.resolve(); }
+    this.timers.clear();
+  }
+
+  #sleep(ms) {
+    if (ms <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const t = { resolve };
+      t.timer = setTimeout(() => { this.timers.delete(t); resolve(); }, ms);
+      t.timer.unref?.();
+      this.timers.add(t);
+    });
   }
 }

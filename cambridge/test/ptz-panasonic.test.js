@@ -58,6 +58,12 @@ test('the AW-UE160 table is sound, and every row of the notes is accounted for',
   for (const id of ['serialBaudRate', 'wirelessControl', 'wirelessId', 'network', 'streamMode', 'rtspSettings', 'mdnsHost', 'ipAddress']) {
     assert.equal(byId[id].danger, 'reconnect', id);
   }
+  // Soft travel limits and the mounting setting: releasing a limit or turning
+  // the head's world upside down mid-show is an administrator's call.
+  for (const id of ['limitationTiltUp', 'limitationTiltDown', 'limitationPanLeft', 'limitationPanRight',
+    'limitationControlL', 'installPosition']) {
+    assert.equal(byId[id].danger, 'admin', id);
+  }
   assert.equal(byId.ipAddress.role, 'ipAddress');
   // At most one entry per role.
   const roles = TABLE.filter((e) => e.role).map((e) => e.role);
@@ -200,6 +206,91 @@ test('commands are at least 16 ms apart', async () => {
     d.http = (o) => { starts.push(Date.now()); return orig(o); };
     await Promise.all([d.zoom(0.3), d.zoom(0.4), d.zoom(0)]);
     for (let i = 1; i < starts.length; i++) assert.ok(starts[i] - starts[i - 1] >= 15, `gap ${starts[i] - starts[i - 1]}`);
+    // Motion and reads interleaved still keep the gap, and motion keeps its order.
+    starts.length = 0;
+    const from = fake.state.log.length;
+    await Promise.all([d.read([byId.focusMode, byId.zoomScale]), d.panTilt(0.5, 0), d.zoom(0.2), d.panTilt(0, 0)]);
+    for (let i = 1; i < starts.length; i++) assert.ok(starts[i] - starts[i - 1] >= 15, `gap ${starts[i] - starts[i - 1]}`);
+    const motion = sent(fake, from, 'ptz').filter((c) => /^#(PTS|Z)/.test(c));
+    assert.deepEqual(motion, ['#PTS7550', '#Z60', '#PTS5050']);
+  } finally { d.close(); await fake.close(); }
+});
+
+test('a stop during a slow read goes out after at most the request already on the wire, and the read gives way', async () => {
+  const fake = await startFakePanasonic({ camdata: false });
+  let motionWaiting = false;
+  const d = driverFor(fake, { auth: {}, timeoutMs: 2000, shouldYield: () => motionWaiting });
+  try {
+    const DELAY = 200;
+    fake.state.delayMs = DELAY;    // a busy camera: every answer takes 200 ms
+    const ids = ['focusMode', 'zoomScale', 'limitationTiltUp', 'limitationTiltDown', 'limitationPanLeft',
+      'limitationPanRight', 'installPosition', 'ptSpeedMode'];
+    const reading = d.read(ids.map((id) => byId[id]));
+    // camdata.html (404 here) and then the first single query are on their way.
+    await until(() => fake.state.arrivals.length >= 2, { stepMs: 5 });
+    await sleep(20);
+    const asked = Date.now();
+    motionWaiting = true;            // the lifecycle's motion lane has a stop
+    const stopping = d.stop();
+    await until(() => fake.state.arrivals.some((a) => a.url.includes('#HV1')), { stepMs: 5 });
+    const hv = fake.state.arrivals.findIndex((a) => a.url.includes('#HV1'));
+    const latency = fake.state.arrivals[hv].at - asked;
+    assert.ok(latency < DELAY + 100, `the stop reached the camera ${latency} ms after it was asked`);
+    await stopping;
+    // The per-axis stops follow straight on: nothing of the read's in between.
+    assert.deepEqual(fake.state.arrivals.slice(hv, hv + 4).map((a) => /cmd=([^&]+)/.exec(a.url)[1]),
+      ['#HV150505050', '#PTS5050', '#Z50', '#F50']);
+    const got = await reading;
+    motionWaiting = false;
+    const read = ids.filter((id) => got[id]);
+    assert.ok(read.length >= 1 && read.length < ids.length, `the read handed back what it had (${read.length} of ${ids.length})`);
+    assert.equal(fake.state.arrivals.length, hv + 4, 'and asked nothing more');
+  } finally { d.close(); await fake.close(); }
+});
+
+test('reads and status give way between requests when a move is waiting', async () => {
+  const fake = await startFakePanasonic({ camdata: false });
+  let yieldNow = false;
+  const d = driverFor(fake, { auth: {}, shouldYield: () => yieldNow });
+  try {
+    await d.identify();
+    assert.equal(d.hasTracking, true);
+    yieldNow = true;
+    let n = fake.state.arrivals.length;
+    const got = await d.read([byId.focusMode, byId.zoomScale, byId.limitationTiltUp]);
+    // camdata.html (absent) is the read's one request; then it yields.
+    assert.equal(fake.state.arrivals.length - n, 1);
+    assert.equal(Object.keys(got).length, 0);
+    n = fake.state.arrivals.length;
+    const s = await d.status();
+    assert.equal(s.power, 'on');
+    assert.equal(fake.state.arrivals.length - n, 1, 'status asked #O only; tracking waits for the next poll');
+    yieldNow = false;
+    const all = await d.read([byId.focusMode, byId.zoomScale, byId.limitationTiltUp]);
+    assert.deepEqual(Object.keys(all).sort(), ['focusMode', 'limitationTiltUp', 'zoomScale']);
+    assert.ok('tracking' in (await d.status()));
+  } finally { d.close(); await fake.close(); }
+});
+
+test('a stop answered "busy" (ER2) is a failed stop unless #O says standby', async () => {
+  const fake = await startFakePanasonic();
+  const d = driverFor(fake, { auth: {} });
+  try {
+    await d.panTilt(0.5, 0);
+    fake.state.busy = true;          // powered on (p1) but busy: the head may be moving
+    await assert.rejects(d.stop(), (err) => err.code === 'ER2busy' && /may still be moving/.test(err.message));
+    await assert.rejects(d.panTilt(0, 0), (err) => err.code === 'ER2busy');
+    await assert.rejects(d.zoom(0), (err) => err.code === 'ER2busy');
+    await assert.rejects(d.focus(0), (err) => err.code === 'ER2busy');
+    // A refused move is an ordinary refusal, as before.
+    await assert.rejects(d.panTilt(0.5, 0), (err) => err.code === 'ER2');
+    // In standby nothing can move: the same refusal is a stop that holds.
+    fake.state.busy = false;
+    fake.state.power = '0';
+    await d.stop();
+    await d.panTilt(0, 0);
+    await d.zoom(0);
+    await d.focus(0);
   } finally { d.close(); await fake.close(); }
 });
 

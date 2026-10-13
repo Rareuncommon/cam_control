@@ -12,7 +12,7 @@ import { PtzCamera } from '../src/ptz/lifecycle.js';
 import { DriverError } from '../src/ptz/driver.js';
 import { driverFor } from '../src/ptz/drivers/index.js';
 import {
-  CanonXcPtz, MultipartReader, parseXc, panTiltSpeed, zoomSpeed, focusSpeed, parseAddonConfig,
+  CanonXcPtz, MultipartReader, parseXc, panTiltSpeed, zoomSpeed, focusSpeed, parseAddonConfig, forgetStreamScheme,
 } from '../src/ptz/drivers/canon-xc.js';
 import { TABLE, GAPS } from '../src/ptz/tables/canon-cr-n500.js';
 import { startFakeCanon } from './fakes/canon-xc.js';
@@ -58,6 +58,8 @@ test('the CR-N500 table is sound', () => {
   assert.equal(new Set(roles).size, roles.length);
   assert.equal(byId.focusMode.autoValue, 'auto');
   assert.equal(byId.focusMode.manualValue, 'manual');
+  // Mounting (image flip) and re-initialising the head (it moves through its range): admin.
+  for (const id of ['imageFlip', 'headReinitialise']) assert.equal(byId[id].danger, 'admin', id);
   // Everything the add-on provides is impl-only, so flagged, and only offered with it.
   for (const e of TABLE.filter((x) => x.group === 'tracking')) {
     assert.equal(e.verify, true, e.id);
@@ -258,6 +260,85 @@ test('stop() sends every stop the notes call for, and the head is still', async 
   } finally { await fake.close(); }
 });
 
+test('a stop the camera answers ==? is a failed stop, from stop() and from a zero velocity', async () => {
+  const fake = await startFakeCanon();
+  try {
+    const d = driver(fake);
+    await d.panTilt(0.5, 0.5);
+    fake.state.rejectStop = new Set(['c.1.pan']);
+    await rejects(d.panTilt(0, 0), 'refused', /refused the stop.*c\.1\.pan/);
+    await rejects(d.panTilt(0, 0.5), 'refused', /refused the stop/);      // pan stopping while tilting
+    await rejects(d.stop(), 'refused', /refused the stop|still reports moving/);
+    fake.state.rejectStop = new Set(['c.1.zoom']);
+    await rejects(d.zoom(0), 'refused', /Zoom: the camera refused the stop/);
+    // Focus: a refused stop in auto focus is fine (no manual drive can run),
+    // in manual it is not.
+    fake.state.rejectStop = new Set(['c.1.focus.action']);
+    await d.focus(0);
+    await d.write(byId.focusMode, 'manual');
+    await rejects(d.focus(0), 'refused', /Focus: the camera refused the stop/);
+    fake.state.rejectStop = new Set();
+    await d.stop();
+    assert.deepEqual(fake.state.vel, { pan: 0, tilt: 0, zoom: 0, focus: 0 });
+  } finally { await fake.close(); }
+});
+
+test('a head still reporting moving after the second stop is a failed stop', async () => {
+  const fake = await startFakeCanon();
+  try {
+    const d = driver(fake);
+    await d.panTilt(0.5, 0);
+    fake.state.ignoreStop = true;                 // answers :=stop, keeps going
+    const before = controls(fake).length;
+    await rejects(d.stop(), 'refused', /still reports moving \(c\.1\.pan\.status\) after two stops/);
+    const axesStops = controls(fake).slice(before).filter((p) => p[0][0] === 'c.1.pan');
+    assert.equal(axesStops.length, 2, 'the stop was sent twice first');
+    fake.state.ignoreStop = false;
+    await d.stop();
+  } finally { await fake.close(); }
+});
+
+test('motion alongside a slow read: the 30 ms pacing holds, the stop does not wait for the read, reads give way', async () => {
+  const fake = await startFakeCanon({ tracking: true });
+  let motionWaiting = false;
+  const d = new CanonXcPtz({
+    host: '127.0.0.1', port: fake.port, auth: {}, http: request, timeoutMs: 2000, options: {}, log: () => {},
+    shouldYield: () => motionWaiting,
+  });
+  try {
+    await d.identify();
+    const starts = [];
+    const orig = d.http;
+    d.http = (o) => { starts.push(Date.now()); return orig(o); };
+    await d.panTilt(0.5, 0);
+    fake.state.infoDelayMs = 300;
+    const addonEntry = d.schema().find((e) => e.wire?.addon);
+    assert.ok(addonEntry, 'the add-on is installed');
+    const n = fake.state.requests;
+    const reading = d.read([byId.whiteBalance, byId.knee, addonEntry]);
+    await sleep(20);
+    motionWaiting = true;
+    const t0 = Date.now();
+    await d.panTilt(0, 0);
+    const took = Date.now() - t0;
+    assert.ok(took < 150, `the pan/tilt stop took ${took} ms behind a 300 ms read`);
+    assert.equal(fake.state.vel.pan, 0);
+    const got = await reading;
+    motionWaiting = false;
+    assert.equal(got.whiteBalance.value, 'auto');
+    assert.equal(got[addonEntry.id], undefined, 'the add-on request gave way');
+    assert.equal(fake.state.requests - n, 2, 'one info.cgi and the stop; no add-on request');
+    for (let i = 1; i < starts.length; i++) assert.ok(starts[i] - starts[i - 1] >= 29, `gap ${starts[i] - starts[i - 1]} ms`);
+    // status() gives way before its add-on request as well.
+    fake.state.infoDelayMs = 0;
+    motionWaiting = true;
+    const s = await d.status();
+    motionWaiting = false;
+    assert.equal(s.tracking, undefined);
+    assert.equal(typeof (await d.status()).tracking, 'boolean');
+  } finally { d.close(); await fake.close(); }
+});
+
 test('another client holding control is a clear refusal, not a failure', async () => {
   const fake = await startFakeCanon();
   try {
@@ -445,6 +526,45 @@ test('event stream: initial values, changes from other clients, reconnects, ends
     await sleep(1200);
     assert.equal(fake.state.streams.size, 0, 'no reconnect after close()');
   } finally { await fake.close(); }
+});
+
+test('event stream: a camera that has asked for Digest never gets Basic credentials, even from a new driver', async () => {
+  const fake = await startFakeCanon({ username: 'operator', password: 'made-up-pass' });
+  const auth = { username: 'operator', password: 'made-up-pass' };
+  try {
+    forgetStreamScheme('127.0.0.1', fake.port);
+    const d = driver(fake, { auth });
+    await d.identify();
+    d.subscribe({ onValues: () => {}, onPtz: () => {} });
+    await until(() => fake.state.streams.size === 1);
+    assert.ok(fake.state.authSeen.includes('digest'));
+    // The address now asks for Basic (another device, or one pretending).
+    fake.state.scheme = 'basic';
+    for (const c of fake.state.streams) c.res.end('--boundary--\r\n');
+    await until(() => fake.state.streams.size === 0);
+    await sleep(1500);                              // the driver reopens after 1 s
+    d.close();
+    // A driver made afresh (a reconnect) remembers it too.
+    const d2 = driver(fake, { auth });
+    d2.subscribe({ onValues: () => {}, onPtz: () => {} });
+    await sleep(300);
+    d2.close();
+    assert.ok(!fake.state.authSeen.includes('basic'), 'no Basic header was ever sent');
+    assert.equal(fake.state.streams.size, 0);
+  } finally { await fake.close(); }
+});
+
+test('event stream: a camera that only ever asked for Basic gets it', async () => {
+  const fake = await startFakeCanon({ username: 'operator', password: 'made-up-pass' });
+  try {
+    forgetStreamScheme('127.0.0.1', fake.port);
+    fake.state.scheme = 'basic';
+    const d = driver(fake, { auth: { username: 'operator', password: 'made-up-pass' } });
+    d.subscribe({ onValues: () => {}, onPtz: () => {} });
+    await until(() => fake.state.streams.size === 1);
+    assert.ok(fake.state.authSeen.includes('basic'));
+    d.close();
+  } finally { forgetStreamScheme('127.0.0.1', fake.port); await fake.close(); }
 });
 
 // --- end to end ---------------------------------------------------------------------

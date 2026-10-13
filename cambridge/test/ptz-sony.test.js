@@ -66,6 +66,11 @@ test('the BRC-AM7 table is sound, roles are unique, and S3-only rows are flagged
   }
   assert.ok(TABLE.filter((e) => e.requires === 'tracking').every((e) => e.group === 'tracking'));
   assert.ok(GAPS.length > 5);
+  // What moves the head on its own, inverts or unlimits its travel, or turns
+  // stream authentication off is an administrator's call.
+  for (const id of ['panTiltReset', 'settingPosition', 'panDirection', 'tiltDirection', 'panLimitMode', 'tiltLimitMode', 'rtspAuth']) {
+    assert.equal(TABLE.find((e) => e.id === id).danger, 'admin', id);
+  }
   // Any other Sony model: same rows, every one to be verified.
   const other = tableFor('BRC-X400');
   assert.equal(other.length, TABLE.length);
@@ -152,7 +157,12 @@ test('with VISCA off (SETUP switch 4): CGI does everything it can, and the opera
       '/command/ptzf.cgi?ZoomMove=tele,16383',
       '/command/ptzf.cgi?PanTiltMove=stop,0,0',
       '/command/ptzf.cgi?ZoomMove=stop,0',
+      '/command/ptzf.cgi?Cancel=on',
     ]);
+    // A focus stop with VISCA off: nothing to stop (focus never moved), no request.
+    const m = fake.state.cgiLog.length;
+    await d.focus(0);
+    assert.equal(fake.state.cgiLog.length, m);
     await assert.rejects(d.focus(0.5), (e) => e.kind === 'unsupported' && /SETUP switch 4/.test(e.message));
     assert.equal(fake.state.viscaLog.length, 0, 'nothing reached VISCA (the fake ignores it while off)');
     // Auto Framing on over CGI.
@@ -248,8 +258,125 @@ test('VISCA stops answering mid-session: motion and stop fall back to CGI', asyn
       '/command/ptzf.cgi?PanTiltMove=right,64,0',
       '/command/ptzf.cgi?PanTiltMove=stop,0,0',
       '/command/ptzf.cgi?ZoomMove=stop,0',
+      '/command/ptzf.cgi?Cancel=on',
     ]);
+    assert.deepEqual(fake.state.head.v, { pan: 0, tilt: 0, zoom: 0 });
   });
+});
+
+const PT_STOP = '81 01 06 01 01 01 03 03 ff';
+
+test('a stop that went over CGI is sent over VISCA again once VISCA answers: a late VISCA move cannot outlast it', async () => {
+  await withFake({ driver: { timeoutMs: 400 } }, async (fake, d) => {
+    await d.identify();
+    await d.panTilt(0.5, 0);                        // over VISCA
+    fake.state.viscaEnabled = false;                // VISCA goes quiet
+    await d.stop();                                 // ...so the stop goes over CGI
+    assert.equal(fake.state.head.v.pan, 0);
+    assert.ok(fake.state.cgiLog.includes('/command/ptzf.cgi?PanTiltMove=stop,0,0'));
+    // The move sent before the stop arrives late (a retransmission, a queue
+    // somewhere): the head starts again after the CGI stop.
+    fake.state.head.v.pan = 0.5;
+    const n = fake.state.viscaLog.length;
+    fake.state.viscaEnabled = true;                 // VISCA answers again
+    await until(() => viscaSince(fake, n).includes(PT_STOP), { timeoutMs: 5000 });
+    assert.equal(fake.state.head.v.pan, 0, 'the VISCA stop caught the late move');
+    await until(() => d.capabilities().visca.available, { timeoutMs: 2000 });
+  });
+});
+
+test('a new move cancels the pending VISCA re-stop, so a late stop never cuts across it', async () => {
+  await withFake({ driver: { timeoutMs: 300 } }, async (fake, d) => {
+    await d.identify();
+    await d.panTilt(0.5, 0);
+    fake.state.viscaEnabled = false;
+    await d.stop();
+    await d.panTilt(0.3, 0);                        // the operator moves again (over CGI: VISCA is lost)
+    assert.ok(fake.state.head.v.pan > 0);
+    const n = fake.state.viscaLog.length;
+    fake.state.viscaEnabled = true;
+    await sleep(1500);
+    assert.ok(!viscaSince(fake, n).includes(PT_STOP), 'no re-stop was sent');
+    assert.ok(fake.state.head.v.pan > 0, 'the new move is still running');
+  });
+});
+
+test('a VISCA stop refused with buffer full falls back to the CGI stop', async () => {
+  await withFake({}, async (fake, d) => {
+    await d.identify();
+    await d.panTilt(0.5, 0);
+    await d.zoom(0.5);
+    fake.state.busy = true;                         // every VISCA command: buffer full
+    const n = fake.state.cgiLog.length;
+    await d.stop();
+    assert.deepEqual(fake.state.cgiLog.slice(n), [
+      '/command/ptzf.cgi?PanTiltMove=stop,0,0',
+      '/command/ptzf.cgi?ZoomMove=stop,0',
+      '/command/ptzf.cgi?Cancel=on',
+    ]);
+    assert.deepEqual(fake.state.head.v, { pan: 0, tilt: 0, zoom: 0 });
+    // Per-axis stops do the same, without Cancel=on (it could cut short another axis).
+    await d.zoom(0.5).catch(() => {});              // refused (busy): VISCA answered, so no CGI move
+    fake.state.head.v.zoom = 0.5;
+    const m = fake.state.cgiLog.length;
+    await d.zoom(0);
+    assert.deepEqual(fake.state.cgiLog.slice(m), ['/command/ptzf.cgi?ZoomMove=stop,0']);
+    assert.equal(fake.state.head.v.zoom, 0);
+    // And the VISCA stops follow once VISCA takes commands again.
+    const k = fake.state.viscaLog.length;
+    fake.state.busy = false;
+    await until(() => viscaSince(fake, k).includes(PT_STOP) && viscaSince(fake, k).includes('81 01 04 07 00 ff'), { timeoutMs: 5000 });
+  });
+});
+
+test('focus has no CGI stop: with VISCA gone while focus moves, the stop says so and is retried until VISCA takes it', async () => {
+  await withFake({ driver: { timeoutMs: 300 } }, async (fake, d) => {
+    await d.identify();
+    await d.write(entry(d, 'focusMode'), 'manual');
+    await d.focus(0.5);
+    fake.state.viscaEnabled = false;
+    await assert.rejects(d.stop(), (e) => e.code === 'focusNotStopped' && /only be stopped over VISCA/.test(e.message));
+    await assert.rejects(d.focus(0), (e) => e.code === 'focusNotStopped');
+    // Pan/tilt and zoom were stopped over CGI regardless.
+    assert.ok(fake.state.cgiLog.includes('/command/ptzf.cgi?PanTiltMove=stop,0,0'));
+    const n = fake.state.viscaLog.length;
+    fake.state.viscaEnabled = true;
+    await until(() => viscaSince(fake, n).includes('81 01 04 08 00 ff'), { timeoutMs: 5000 });
+    await d.stop();                                 // now it holds
+  });
+});
+
+test('motion overlaps a slow read: the VISCA stop does not wait for the CGI read, and the read gives way', async () => {
+  const fake = await startFakeSony({ password: AUTH.password });
+  let motionWaiting = false;
+  const d = new SonyBrc({
+    host: '127.0.0.1', port: fake.port, auth: AUTH, http: request, timeoutMs: 2000,
+    options: { viscaPort: fake.viscaPort }, shouldYield: () => motionWaiting,
+  });
+  try {
+    const id = await d.identify();
+    d.schema(id);
+    await d.panTilt(0.5, 0);
+    fake.state.cgiDelayMs = 300;
+    const ids = ['gain', 'afrCompSize', 'rtspAuth', 'bitRate1', 'cameraName', 'panDirection'];
+    const reading = d.read(ids.map((x) => entry(d, x)));
+    await sleep(50);
+    motionWaiting = true;
+    const t0 = Date.now();
+    await d.stop();
+    const took = Date.now() - t0;
+    assert.ok(took < 250, `stop took ${took} ms behind a read of 300 ms requests`);
+    assert.equal(fake.state.head.v.pan, 0);
+    const got = await reading;
+    motionWaiting = false;
+    const groupsAsked = new Set(ids.map((x) => entry(d, x).wire.inq)).size;
+    const answered = ids.filter((x) => got[x]);
+    assert.ok(answered.length >= 1 && answered.length < ids.length, `the read handed back ${answered.length} of ${ids.length}`);
+    assert.ok(groupsAsked > 1);
+  } finally {
+    d.close();
+    await fake.close();
+  }
 });
 
 // --- settings ---------------------------------------------------------------------------
