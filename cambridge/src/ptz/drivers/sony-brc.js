@@ -34,11 +34,18 @@
 // what its CGI reports, or conservative defaults (UNKNOWN_MODEL). Auto
 // Framing is offered only when the camera answers its inquiry.
 //
-// Per camera this holds one UDP socket on an ephemeral port and at most one
-// timer (tally refresh); close() releases both.
+// Per camera this holds one UDP socket on an ephemeral port, at most one
+// timer for the tally refresh, and timers only while a stop that had to go
+// over CGI is being re-sent over VISCA (ViscaRestop); close() releases all.
+//
+// Motion may run while a read is in progress (the lifecycle's motion lane).
+// Moves and stops are `urgent` in the VISCA client, so they go ahead of any
+// inquiry or tally refresh waiting there; CGI requests run side by side; and
+// reads give way between requests when the lifecycle's `shouldYield` says a
+// move is waiting.
 
 import { PtzDriver, DriverError } from '../driver.js';
-import { ViscaClient, FRAMING, nibbles, signed, toNibbles } from '../visca-client.js';
+import { ViscaClient, ViscaRestop, FRAMING, nibbles, signed, toNibbles } from '../visca-client.js';
 import { TABLE, GAPS } from '../tables/sony-brc-am7.js';
 
 export { GAPS };
@@ -109,7 +116,20 @@ const BYTES = Object.freeze({
   zoomStop: [0x81, 0x01, 0x04, 0x07, 0x00, 0xff],                 // V-EN p.16
   zoomStopHiRes: [0x81, 0x01, 0x7e, 0x04, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff], // V-EN p.16
   focusStop: [0x81, 0x01, 0x04, 0x08, 0x00, 0xff],                // V-EN p.16
+  panTiltStop: [0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff], // V-EN p.17: VV WW valid, DD EE 03 03
 });
+
+/** Velocities and stops jump queued inquiries in the VISCA client. */
+const MOTION = Object.freeze({ urgent: true });
+
+/**
+ * There is no CGI focus stop: focus velocity exists only over VISCA (V-EN
+ * p.16; notes §5 "focusDrive … CGI none"). `ptzf.cgi?Cancel=on` "cancels the
+ * running PTZ command" (C-EN p.17) and is sent with the CGI stops, but the
+ * notes do not say it stops a focus drive started over VISCA.
+ */
+const NO_CGI_FOCUS_STOP = 'focus may still be moving: it can only be stopped over VISCA, which is not answering '
+  + '(the CGI has no focus stop; Cancel=on was sent but is not documented to stop focus)';
 
 /** Pan/tilt drive `81 01 06 01 VV WW DD EE FF` (V-EN p.17). Direction bytes: pan 01 left / 02 right / 03 stop; tilt 01 up / 02 down / 03 stop. */
 function panTiltBytes(vv, ww, dd, ee) {
@@ -220,6 +240,19 @@ export class SonyBrc extends PtzDriver {
     this.tallyTimer = null;
     this.tallyRefreshMs = o.tallyRefreshMs ?? TALLY_REFRESH_MS;
     this.closed = false;
+    /**
+     * Stops that went over CGI because VISCA did not take them, to be sent
+     * over VISCA too once it answers (see ViscaRestop). A VISCA stop that
+     * gets through again also means VISCA is back.
+     */
+    this.restop = new ViscaRestop({ log: this.log });
+    /** Focus was driven over VISCA and no focus stop has been taken since. */
+    this.focusMaybeMoving = false;
+  }
+
+  /** A move or stop is waiting for the camera: a read with more to ask hands back what it has. */
+  #shouldYield() {
+    try { return !!this.ctx?.shouldYield?.(); } catch { return false; }
   }
 
   #useProfile(p) {
@@ -435,7 +468,7 @@ export class SonyBrc extends PtzDriver {
    */
   async read(entries) {
     try {
-      return await this.#read(entries);
+      return await this.#read(entries, { yieldable: true });
     } catch (err) {
       if (!isLinkFailure(err)) throw err;
       this.log('debug', `read not answered: ${err.message}`);
@@ -443,7 +476,14 @@ export class SonyBrc extends PtzDriver {
     }
   }
 
-  async #read(entries) {
+  /**
+   * `yieldable`: the lifecycle's read. After its first request it gives way
+   * to a waiting move or stop between requests, returning what it has; the
+   * rest is asked on the next sweep. A write's own gate read never yields.
+   */
+  async #read(entries, { yieldable = false } = {}) {
+    let requests = 0;
+    const giveWay = () => yieldable && requests > 0 && this.#shouldYield();
     const out = {};
     const groups = new Map();
     const viaVisca = [];
@@ -457,7 +497,10 @@ export class SonyBrc extends PtzDriver {
       } else if (w.visca) viaVisca.push(e);
     }
 
+    let yielded = false;
     for (const [group, asked] of groups) {
+      if (giveWay()) { yielded = true; break; }
+      requests += 1;
       let params;
       try {
         params = await this.#inquiry(group);
@@ -483,8 +526,10 @@ export class SonyBrc extends PtzDriver {
       }
     }
 
-    for (const e of viaVisca) {
+    for (const e of yielded ? [] : viaVisca) {
       if (!this.#viscaUp) { out[e.id] = { error: 'needs VISCA, which is off' }; continue; }
+      if (giveWay()) break;
+      requests += 1;
       try {
         const v = e.wire.visca.dec(await this.visca.inquiry(e.wire.visca.inq));
         out[e.id] = { value: v };
@@ -607,6 +652,8 @@ export class SonyBrc extends PtzDriver {
   // --- motion --------------------------------------------------------------------
 
   async panTilt(pan, tilt) {
+    if (!pan && !tilt) { await this.#stopGroups(['panTilt']); return; }
+    this.restop.cancel('panTilt');
     const max = this.ptMax;
     await this.#viscaOr(
       () => {
@@ -616,7 +663,7 @@ export class SonyBrc extends PtzDriver {
         const ww = tilt === 0 ? 0x01 : speedFor(tilt, max);
         const dd = pan > 0 ? 0x02 : pan < 0 ? 0x01 : 0x03;
         const ee = tilt > 0 ? 0x01 : tilt < 0 ? 0x02 : 0x03;
-        return this.visca.command(panTiltBytes(vv, ww, dd, ee));
+        return this.visca.command(panTiltBytes(vv, ww, dd, ee), MOTION);
       },
       () => {
         // ptzf.cgi?PanTiltMove=<dir>,<pan speed>,<tilt speed>; speeds 0..24 or
@@ -633,40 +680,36 @@ export class SonyBrc extends PtzDriver {
   }
 
   async zoom(speed) {
+    if (!speed) { await this.#stopGroups(['zoom']); return; }
+    this.restop.cancel('zoom');
     await this.#viscaOr(
       async () => {
-        if (speed === 0) {
-          // High-resolution zoom stop, then the standard one: the notes give
-          // both and do not say one stops the other's motion (V-EN p.16).
-          await this.visca.command(BYTES.zoomStopHiRes);
-          await this.visca.command(BYTES.zoomStop);
-          return;
-        }
         // High-resolution zoom: 81 01 7E 04 17 02|03 0p 0p 0p 0p FF, tele 02,
         // wide 03, speed 0000..7FFE (V-EN p.16) — 32 767 steps rather than 8.
         const s = speedFor(speed, ZOOM_SPEED_MAX);
-        await this.visca.command([0x81, 0x01, 0x7e, 0x04, 0x17, speed > 0 ? 0x02 : 0x03, ...toNibbles(s, 4), 0xff]);
+        await this.visca.command([0x81, 0x01, 0x7e, 0x04, 0x17, speed > 0 ? 0x02 : 0x03, ...toNibbles(s, 4), 0xff], MOTION);
       },
-      () => {
-        // ZoomMove=<tele|wide|stop>,<0..32766> (C-EN p.19).
-        if (speed === 0) return this.#set('ptzf', 'ZoomMove', 'stop,0');
-        return this.#set('ptzf', 'ZoomMove', `${speed > 0 ? 'tele' : 'wide'},${speedFor(speed, ZOOM_SPEED_MAX)}`);
-      },
+      // ZoomMove=<tele|wide|stop>,<0..32766> (C-EN p.19).
+      () => this.#set('ptzf', 'ZoomMove', `${speed > 0 ? 'tele' : 'wide'},${speedFor(speed, ZOOM_SPEED_MAX)}`),
     );
   }
 
   async focus(speed) {
+    if (!speed) { await this.#stopGroups(['focus']); return; }
     if (!this.#viscaUp) {
       throw new DriverError(`Focus speed control needs VISCA, which is off on this camera. ${VISCA_DOWN_FIX}`, { kind: 'unsupported' });
     }
+    this.restop.cancel('focus');
     // Far 81 01 04 08 2p FF, near 3p, p 0 (slow)..7 (fast); stop 00. Manual
     // focus only — otherwise 90 6z 41 FF (V-EN p.16, p.8).
-    const bytes = speed === 0 ? BYTES.focusStop
-      : [0x81, 0x01, 0x04, 0x08, (speed > 0 ? 0x20 : 0x30) | (speedFor(speed, 8) - 1), 0xff];
+    const bytes = [0x81, 0x01, 0x04, 0x08, (speed > 0 ? 0x20 : 0x30) | (speedFor(speed, 8) - 1), 0xff];
+    // Counted as moving from before it is sent: a lost ACK may still have run it.
+    this.focusMaybeMoving = true;
     try {
-      await this.visca.command(bytes);
+      await this.visca.command(bytes, MOTION);
     } catch (err) {
       if (err.code === 'notExecutable') {
+        this.focusMaybeMoving = false;
         throw new DriverError('Focus is on auto — set Focus mode to Manual to pull focus', { code: err.code, kind: 'refused' });
       }
       if (isLinkFailure(err)) this.#viscaLost(err);
@@ -675,50 +718,135 @@ export class SonyBrc extends PtzDriver {
   }
 
   /**
+   * One axis group's VISCA stop (V-EN p.16-17). Zoom sends the
+   * high-resolution stop and then the standard one: the notes give both and
+   * do not say one stops the other's motion. A focus stop refused as "not
+   * executable" counts as taken — focus is on auto, so no manual focus drive
+   * can be running.
+   */
+  async #viscaStop(group, o = MOTION) {
+    if (group === 'panTilt') {
+      await this.visca.command(BYTES.panTiltStop, o);
+    } else if (group === 'zoom') {
+      await this.visca.command(BYTES.zoomStopHiRes, o);
+      await this.visca.command(BYTES.zoomStop, o);
+    } else {
+      try {
+        await this.visca.command(BYTES.focusStop, o);
+      } catch (err) {
+        if (err.code !== 'notExecutable') throw err;
+      }
+      this.focusMaybeMoving = false;
+    }
+  }
+
+  /** The re-stop over VISCA got through: VISCA answers again. */
+  #viscaBack() {
+    if (this.viscaState.available || this.closed) return;
+    this.viscaState = { available: true, reason: null, lostMidSession: false };
+    this.log('info', 'VISCA answers again');
+  }
+
+  /**
+   * Stops these axis groups ('panTilt', 'zoom', 'focus'; pan/tilt first:
+   * it is the axis that hits things).
+   *
+   * Over VISCA while it answers. If VISCA does not take a stop — no answer,
+   * or refused (both command buffers still full after the client's retry) —
+   * the CGI stops go out instead: `PanTiltMove=stop,0,0` and `ZoomMove=stop,0`
+   * (C-EN p.19), then `Cancel=on`, "cancels the running PTZ command" (C-EN
+   * p.17; notes §5 "Safest stop everything" lists all three). After a CGI
+   * stop for a group that VISCA may have moved, the VISCA stop is sent again
+   * as soon as VISCA answers, so a late VISCA move cannot outlast the stop.
+   *
+   * Focus has no CGI stop (see NO_CGI_FOCUS_STOP): when focus may be moving
+   * and VISCA will not take the stop, this throws, so the motion controller
+   * keeps the stop alive and retries, and the re-stop keeps trying VISCA.
+   */
+  async #stopGroups(groups) {
+    let viscaErr = null;
+    const wasUp = this.#viscaUp;
+    if (wasUp) {
+      try {
+        for (const g of groups) {
+          await this.#viscaStop(g);
+          this.restop.cancel(g);
+        }
+        return;
+      } catch (err) {
+        viscaErr = err;
+        if (isLinkFailure(err)) this.#viscaLost(err);
+        this.log('warn', `VISCA stop not taken (${err.message}); stopping over CGI`);
+      }
+    }
+    let focusPending = groups.includes('focus') && this.focusMaybeMoving;
+    let cgiErr = null;
+    const cgi = async (fn) => { try { await fn(); } catch (err) { cgiErr ??= err; } };
+    if (groups.includes('panTilt')) await cgi(() => this.#set('ptzf', 'PanTiltMove', 'stop,0,0'));   // C-EN p.19
+    if (groups.includes('zoom')) await cgi(() => this.#set('ptzf', 'ZoomMove', 'stop,0'));           // C-EN p.19
+    // Cancel=on (C-EN p.17) cancels whatever PTZ command is running — on a
+    // single-axis stop that could cut short a move on another axis, so it
+    // goes with a stop of everything, or when focus may be moving and this
+    // is the only thing left to try. Best effort: not every firmware may
+    // have it, and the stops above are what count.
+    if (groups.length === 3 || focusPending) {
+      await this.#set('ptzf', 'Cancel', 'on').catch((err) => this.log('debug', `Cancel=on: ${err.message}`));
+    }
+    // Focus can only be stopped over VISCA. If VISCA was already marked down
+    // (not tried above), one brief try now — after the CGI stops, so a dead
+    // link does not hold up pan/tilt — in case it has come back.
+    if (focusPending && !wasUp && !this.closed) {
+      try {
+        await this.#viscaStop('focus', { ...MOTION, timeoutMs: 500 });
+        this.restop.cancel('focus');
+        this.#viscaBack();
+        focusPending = false;
+      } catch (err) {
+        viscaErr ??= err;
+      }
+    }
+    // Re-send over VISCA once it answers — where VISCA could have moved the
+    // head: it failed just now, or answered earlier in this session.
+    if (viscaErr || this.viscaState.lostMidSession) {
+      for (const g of groups) {
+        if (g === 'focus' && !this.focusMaybeMoving) continue;
+        this.restop.arm(g, (o) => this.#viscaStop(g, o), () => this.#viscaBack());
+      }
+    }
+    if (cgiErr) {
+      throw viscaErr
+        ? new DriverError(`the stop did not reach the camera: VISCA ${viscaErr.message}; CGI ${cgiErr.message}`, { kind: cgiErr.kind, code: cgiErr.code })
+        : cgiErr;
+    }
+    if (focusPending) {
+      throw new DriverError(NO_CGI_FOCUS_STOP, { kind: viscaErr?.kind ?? 'timeout', code: 'focusNotStopped' });
+    }
+  }
+
+  /**
    * Every axis. There is no single stop-all: pan/tilt stop, zoom stop (both
    * kinds, since high-res zoom is what we drive) and focus stop, each on its
    * own (V-EN p.6, p.16-17; notes §5 "Safest stop everything"). IF_Clear "does
-   * not guarantee" the running operation stops, so it is not used.
-   *
-   * Pan/tilt first: it is the axis that hits things. A focus stop refused in
-   * auto focus is fine — nothing was moving.
+   * not guarantee" the running operation stops, so it is not used. When
+   * VISCA does not take them, the CGI stops go out instead (#stopGroups).
    */
   async stop() {
-    let failure = null;
-    const viaCgi = async () => {
-      await this.#set('ptzf', 'PanTiltMove', 'stop,0,0');                 // C-EN p.19
-      await this.#set('ptzf', 'ZoomMove', 'stop,0');                      // C-EN p.19
-    };
-    if (this.#viscaUp) {
-      try {
-        await this.visca.command(panTiltBytes(0x01, 0x01, 0x03, 0x03));
-        await this.visca.command(BYTES.zoomStopHiRes);
-        await this.visca.command(BYTES.zoomStop);
-        await this.visca.command(BYTES.focusStop).catch((err) => { if (isLinkFailure(err)) throw err; });
-        return;
-      } catch (err) {
-        if (!isLinkFailure(err)) failure = err;
-        else this.#viscaLost(err);
-      }
-    }
-    try {
-      await viaCgi();
-    } catch (err) {
-      throw failure ?? err;
-    }
+    await this.#stopGroups(['panTilt', 'zoom', 'focus']);
   }
 
   async position() {
     const read = await this.#viscaOr(
       async () => {
+        // Three inquiries; a waiting move or stop goes between them, and
+        // what was not asked is left out (undefined) rather than reported.
         const pt = await this.visca.inquiry(BYTES.panTiltPosInq);        // 90 50 0p×5 0t×5 FF (V-EN p.21)
-        const z = await this.visca.inquiry(BYTES.zoomPosInq);            // 90 50 0z×4 FF
-        const f = await this.visca.inquiry(BYTES.focusPosInq);           // 90 50 0p×4 FF
+        const z = this.#shouldYield() ? null : await this.visca.inquiry(BYTES.zoomPosInq);            // 90 50 0z×4 FF
+        const f = !z || this.#shouldYield() ? null : await this.visca.inquiry(BYTES.focusPosInq);     // 90 50 0p×4 FF
         return {
           pan: signed(nibbles(pt, 2, 5), 20),
           tilt: signed(nibbles(pt, 7, 5), 20),
-          zoom: nibbles(z, 2, 4),
-          focus: nibbles(f, 2, 4),
+          zoom: z ? nibbles(z, 2, 4) : undefined,
+          focus: f ? nibbles(f, 2, 4) : undefined,
         };
       },
       async () => {
@@ -739,9 +867,10 @@ export class SonyBrc extends PtzDriver {
       pan: this.panRange ? clamp01((this.panRange.left - read.pan) / (this.panRange.left - this.panRange.right)) : null,
       tilt: this.tiltRange ? clamp01((read.tilt - this.tiltRange.low) / (this.tiltRange.high - this.tiltRange.low)) : null,
       // Across the optical range; Clear Image Zoom beyond it reads as 1.
-      zoom: zoomTele ? clamp01(read.zoom / zoomTele) : null,
+      // (Not asked this time — a read that gave way to a stop — stays undefined.)
+      zoom: read.zoom === undefined ? undefined : zoomTele ? clamp01(read.zoom / zoomTele) : null,
       // 1 = far, matching positive focus velocity = far.
-      focus: focusNear ? clamp01((focusNear - read.focus) / focusNear) : null,
+      focus: read.focus === undefined ? undefined : focusNear ? clamp01((focusNear - read.focus) / focusNear) : null,
       raw: read,
     };
   }
@@ -749,13 +878,16 @@ export class SonyBrc extends PtzDriver {
   async status() {
     // VISCA lost mid-session (not switched off at power-on, where asking
     // again cannot help): look for it again now and then, briefly.
+    let asked = false;
     if (!this.viscaState.available && this.viscaState.lostMidSession && Date.now() - this.lastViscaProbe > 30_000) {
+      asked = true;
       await this.#probeVisca(300);
       if (this.viscaState.available) this.log('info', 'VISCA answers again');
       else this.viscaState.lostMidSession = true;
     }
     const out = { visca: this.viscaState.available };
-    if (!this.identity?.autoFraming) return out;
+    // A second request gives way to a waiting move or stop.
+    if (!this.identity?.autoFraming || (asked && this.#shouldYield())) return out;
     out.tracking = await this.#viscaOr(
       async () => (await this.visca.inquiry(BYTES.afrInq))[2] === 0x01,          // V-EN p.21: 1 = on
       async () => (await this.#inquiry('ptzautoframing')).PtzAutoFraming === 'on', // C-EN p.23
@@ -845,6 +977,7 @@ export class SonyBrc extends PtzDriver {
     this.closed = true;
     if (this.tallyTimer) clearInterval(this.tallyTimer);
     this.tallyTimer = null;
+    this.restop.close();
     this.visca.close();
   }
 }

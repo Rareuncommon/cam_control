@@ -321,7 +321,10 @@ export const TABLE = [
   { id: 'home', group: 'ptz', label: 'Home', type: 'action', operate: true, role: 'home',
     wire: { act: 'set', set: 'presetposition', param: 'HomePos', value: 'recall',    // C-EN p.20
       visca: [[0x81, 0x01, 0x06, 0x04, 0xff]] } },                                   // V-EN p.18
-  { id: 'panTiltReset', group: 'ptz', label: 'Pan / tilt reset', type: 'action',
+  // Settings that move the head on their own, invert or unlimit its travel, or
+  // outlast the shoot are admin: an operator's slip here is a head swinging
+  // the wrong way, or into the set.
+  { id: 'panTiltReset', group: 'ptz', label: 'Pan / tilt reset', type: 'action', danger: 'admin',
     help: 'Re-initialises the head: it moves through its whole range.',
     wire: { act: 'set', set: 'ptzf', param: 'PanTiltReset', value: 'on' } },         // C-EN p.17
   { id: 'panTiltSpeedStep', group: 'ptz', label: 'P/T speed step', type: 'enum',
@@ -335,20 +338,20 @@ export const TABLE = [
     wire: cgi('ptzf', 'RampCurve', INT) },                                           // C-EN p.17
   { id: 'panTiltSpeedScale', group: 'ptz', label: 'Web P/T speed scale', type: 'range',
     range: { min: 10, max: 100, step: 1 }, wire: cgi('ptzf', 'PanTiltSpeedScale', INT) }, // C-EN p.19
-  { id: 'settingPosition', group: 'ptz', label: 'Install position', type: 'enum',
+  { id: 'settingPosition', group: 'ptz', label: 'Install position', type: 'enum', danger: 'admin',
     help: 'Changes the tilt range and directions, and requires PTZ Auto Framing to be set up again.',
     options: opts([['desktop', 'Desktop'], ['ceiling', 'Ceiling']]),
     wire: cgi('ptzf', 'SettingPosition', TOKEN) },                                   // C-EN p.17; HG p.171
-  { id: 'panDirection', group: 'ptz', label: 'Pan direction', type: 'enum',
+  { id: 'panDirection', group: 'ptz', label: 'Pan direction', type: 'enum', danger: 'admin',
     options: opts([['normal', 'Normal'], ['opposite', 'Opposite']]),
     wire: cgi('ptzf', 'PanDirection', TOKEN) },                                      // C-EN p.17
-  { id: 'tiltDirection', group: 'ptz', label: 'Tilt direction', type: 'enum',
+  { id: 'tiltDirection', group: 'ptz', label: 'Tilt direction', type: 'enum', danger: 'admin',
     options: opts([['normal', 'Normal'], ['opposite', 'Opposite']]),
     wire: cgi('ptzf', 'TiltDirection', TOKEN) },                                     // C-EN p.17
-  { id: 'panLimitMode', group: 'ptz', label: 'Pan limit', type: 'enum',
+  { id: 'panLimitMode', group: 'ptz', label: 'Pan limit', type: 'enum', danger: 'admin',
     options: opts([['unlimited', 'Unlimited'], ['limited', 'Limited']]),
     wire: cgi('ptzf', 'PanLimitMode', TOKEN) },                                      // C-EN p.18
-  { id: 'tiltLimitMode', group: 'ptz', label: 'Tilt limit', type: 'enum',
+  { id: 'tiltLimitMode', group: 'ptz', label: 'Tilt limit', type: 'enum', danger: 'admin',
     options: opts([['unlimited', 'Unlimited'], ['limited', 'Limited']]),
     wire: cgi('ptzf', 'TiltLimitMode', TOKEN) },                                     // C-EN p.18
   { id: 'ptzfStatus', group: 'ptz', label: 'Pan, tilt, zoom, focus status', type: 'text', readOnly: true, poll: 'fast',
@@ -532,7 +535,8 @@ export const TABLE = [
     range: { min: 512, max: 80000, step: 1, unit: ' kbps' }, help: 'Applies when CBR is on.',
     wire: cgi('codecconfig', 'BitRate1', INT) },                                     // C-EN p.66
   { id: 'cbr1', group: 'streaming', label: 'Stream 1 CBR', type: 'bool', wire: cgi('codecconfig', 'CBR1', ONOFF) }, // C-EN p.66
-  { id: 'rtspAuth', group: 'streaming', label: 'RTSP authentication', type: 'bool',
+  { id: 'rtspAuth', group: 'streaming', label: 'RTSP authentication', type: 'bool', danger: 'admin',
+    help: 'Off lets anyone on the network watch the stream.',
     wire: cgi('rtspconfig', 'AuthenRTSP', ONOFF) },                                  // C-EN p.62
   { id: 'rtspPort', group: 'streaming', label: 'RTSP port', type: 'range', danger: 'reconnect',
     range: { min: 554, max: 65534, step: 1 }, help: '554, or 1024–65534.',

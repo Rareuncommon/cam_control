@@ -32,10 +32,16 @@
 // (tableFor). Auto tracking is offered on another model only if its query
 // reports an `autotrack` key; snapshot firmware thresholds are the SE's.
 //
-// Per camera: one TCP socket, no timers.
+// Per camera: one TCP socket; timers only while a stop that had to go over
+// CGI is being re-sent over VISCA (ViscaRestop), and close() ends those.
+//
+// Motion may run while a read is in progress (the lifecycle's motion lane):
+// velocities and stops are `urgent` in the VISCA client, so they go ahead of
+// any inquiry a read has queued, and reads give way between requests when
+// the lifecycle's `shouldYield` says a move is waiting.
 
 import { PtzDriver, DriverError } from '../driver.js';
-import { ViscaClient, FRAMING, nibbles, signed } from '../visca-client.js';
+import { ViscaClient, ViscaRestop, FRAMING, nibbles, signed } from '../visca-client.js';
 import { TABLE, GAPS } from '../tables/ptzoptics-move-se.js';
 
 export { GAPS };
@@ -112,7 +118,22 @@ const BYTES = Object.freeze({
   focusPosInq: [0x81, 0x09, 0x04, 0x48, 0xff],                  // VISCA-PDF p.22
   zoomStop: [0x81, 0x01, 0x04, 0x07, 0x00, 0xff],               // VISCA-PDF p.28
   focusStop: [0x81, 0x01, 0x04, 0x08, 0x00, 0xff],              // VISCA-PDF p.13
+  panTiltStop: [0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff], // VISCA-PDF p.24-27: speeds valid, DP DT 03 03
 });
+
+/**
+ * Each axis group's stop, over VISCA and over HTTP-CGI (`ptzctrl.cgi?ptzcmd&
+ * ptzstop|zoomstop|focusstop`, HTTP-PDF p.124-143, SE+). Pan/tilt first: it
+ * is the axis that hits things.
+ */
+const STOPS = Object.freeze([
+  { group: 'panTilt', visca: BYTES.panTiltStop, cgi: '/cgi-bin/ptzctrl.cgi?ptzcmd&ptzstop' },
+  { group: 'zoom', visca: BYTES.zoomStop, cgi: '/cgi-bin/ptzctrl.cgi?ptzcmd&zoomstop' },
+  { group: 'focus', visca: BYTES.focusStop, cgi: '/cgi-bin/ptzctrl.cgi?ptzcmd&focusstop' },
+]);
+const STOP_OF = Object.fromEntries(STOPS.map((s) => [s.group, s]));
+/** Velocities and stops jump queued inquiries in the VISCA client. */
+const MOTION = Object.freeze({ urgent: true });
 
 /** |v| in 0..1 onto 1..max; the smallest non-zero velocity is the slowest speed. */
 export function speedFor(v, max) {
@@ -238,6 +259,15 @@ export class PtzOptics extends PtzDriver {
     /** CGI queries found missing on this camera; not asked again until reconnect. */
     this.missing = new Set();
     this.snapshotState = 'maybe';
+    /** Stops that went over CGI, to be sent over VISCA too once it answers (see ViscaRestop). */
+    this.restop = new ViscaRestop({ log: this.log });
+    /** The last motion command over VISCA got no answer (cleared by the next that does). */
+    this.viscaSuspect = false;
+  }
+
+  /** A move or stop is waiting for the camera: a read with more to ask hands back what it has. */
+  #shouldYield() {
+    try { return !!this.ctx?.shouldYield?.(); } catch { return false; }
   }
 
   // --- transports --------------------------------------------------------------
@@ -373,7 +403,7 @@ export class PtzOptics extends PtzDriver {
    */
   async read(entries) {
     try {
-      return await this.#read(entries);
+      return await this.#read(entries, { yieldable: true });
     } catch (err) {
       if (!isLinkFailure(err)) throw err;
       this.log('debug', `read not answered: ${err.message}`);
@@ -381,11 +411,17 @@ export class PtzOptics extends PtzDriver {
     }
   }
 
-  async #read(entries) {
+  /** `yieldable`: the lifecycle's read, which may stop early; a write's own gate read never does. */
+  async #read(entries, { yieldable = false } = {}) {
     const out = {};
     const cache = new Map();
+    let first = true;
     for (const e of entries) {
       if (e.type === 'action') continue;
+      // Between entries (each may be a request), give way to a waiting move
+      // or stop; what was not read is asked on the next sweep.
+      if (!first && yieldable && this.#shouldYield()) break;
+      first = false;
       const rd = e.wire?.read;
       if (!rd) { out[e.id] = { value: null }; continue; }        // write-only: nothing to read back
       try {
@@ -497,18 +533,32 @@ export class PtzOptics extends PtzDriver {
    * 02 down / 03 stop (VISCA-PDF p.24-25).
    */
   async panTilt(pan, tilt) {
+    if (!pan && !tilt) { await this.#stopGroup('panTilt'); return; }
     const vv = pan === 0 ? 0x01 : speedFor(pan, PAN_MAX);
     const ww = tilt === 0 ? 0x01 : speedFor(tilt, TILT_MAX);
     const dp = pan > 0 ? 0x02 : pan < 0 ? 0x01 : 0x03;
     const dt = tilt > 0 ? 0x01 : tilt < 0 ? 0x02 : 0x03;
-    await this.visca.command([0x81, 0x01, 0x06, 0x01, vv, ww, dp, dt, 0xff]);
+    this.restop.cancel('panTilt');
+    await this.#viscaMove([0x81, 0x01, 0x06, 0x01, vv, ww, dp, dt, 0xff]);
+  }
+
+  /** A velocity over VISCA (urgent), noting whether VISCA is answering (see #stopGroup). */
+  async #viscaMove(bytes) {
+    try {
+      await this.visca.command(bytes, MOTION);
+      this.viscaSuspect = false;
+    } catch (err) {
+      if (isLinkFailure(err)) this.viscaSuspect = true;
+      throw err;
+    }
   }
 
   /** Tele `81 01 04 07 2p FF`, wide `3p`, p 0 (low)..7 (high); stop `00` (VISCA-PDF p.28-29). */
   async zoom(speed) {
-    if (speed === 0) { await this.visca.command(BYTES.zoomStop); return; }
+    if (!speed) { await this.#stopGroup('zoom'); return; }
     const p = speedFor(speed, 8) - 1;
-    await this.visca.command([0x81, 0x01, 0x04, 0x07, (speed > 0 ? 0x20 : 0x30) | p, 0xff]);
+    this.restop.cancel('zoom');
+    await this.#viscaMove([0x81, 0x01, 0x04, 0x07, (speed > 0 ? 0x20 : 0x30) | p, 0xff]);
   }
 
   /**
@@ -518,9 +568,11 @@ export class PtzOptics extends PtzDriver {
    * magnitude only decides direction.
    */
   async focus(speed) {
-    const b = speed === 0 ? 0x00 : speed > 0 ? 0x02 : 0x03;
+    if (!speed) { await this.#stopGroup('focus'); return; }
+    const b = speed > 0 ? 0x02 : 0x03;
+    this.restop.cancel('focus');
     try {
-      await this.visca.command([0x81, 0x01, 0x04, 0x08, b, 0xff]);
+      await this.#viscaMove([0x81, 0x01, 0x04, 0x08, b, 0xff]);
     } catch (err) {
       if (err.code === 'notExecutable') {
         throw new DriverError('Focus is on auto — set Focus mode to Manual to pull focus', { code: err.code, kind: 'refused' });
@@ -530,27 +582,98 @@ export class PtzOptics extends PtzDriver {
   }
 
   /**
+   * One group's VISCA stop. Resolves when the camera took it; a focus stop
+   * refused as "not executable" counts as taken — focus is on auto, and the
+   * manual drive it would stop cannot be running. Anything else throws.
+   */
+  async #viscaStop(group, o = MOTION) {
+    try {
+      await this.visca.command(STOP_OF[group].visca, o);
+    } catch (err) {
+      if (isLinkFailure(err)) this.viscaSuspect = true;
+      if (group === 'focus' && err.code === 'notExecutable') { this.viscaSuspect = false; return; }
+      throw err;
+    }
+    this.viscaSuspect = false;
+  }
+
+  /** VISCA did not answer last time: stops go over CGI first, VISCA follows (#cgiStops). */
+  #viscaDown() {
+    return this.viscaSuspect
+      ? new DriverError('VISCA was not answering', { kind: 'timeout' })
+      : null;
+  }
+
+  /**
+   * One group's stop (the joystick let go of that axis): VISCA, and if VISCA
+   * did not take it — no answer, a dead socket, or a refusal such as both
+   * command buffers still full after the client's one retry — the same stop
+   * over CGI, then the VISCA stop again once VISCA answers (#cgiStops).
+   * When VISCA failed to answer last time, CGI goes first rather than after
+   * another timeout.
+   */
+  async #stopGroup(group) {
+    const down = this.#viscaDown();
+    if (down) { await this.#cgiStops([group], down); return; }
+    try {
+      await this.#viscaStop(group);
+      this.restop.cancel(group);
+      return;
+    } catch (err) {
+      if (err.code === 'superseded') throw err;
+      this.log('warn', `VISCA ${group} stop not taken (${err.message}); stopping over HTTP`);
+      await this.#cgiStops([group], err);
+    }
+  }
+
+  /**
+   * Stops over CGI for these groups, each tried even if one fails. Then, for
+   * each, the VISCA stop is sent again as soon as VISCA answers: a move sent
+   * over VISCA before the stop could still arrive after the CGI stop.
+   * Throws when any CGI stop failed (the VISCA failure, `viscaErr`, is the
+   * likelier explanation and is the one thrown when both failed).
+   */
+  async #cgiStops(groups, viscaErr) {
+    let failed = null;
+    for (const group of groups) {
+      try {
+        await this.#cgi(STOP_OF[group].cgi);
+      } catch (err) {
+        failed ??= err;
+      }
+      this.restop.arm(group, (o) => this.#viscaStop(group, o));
+    }
+    if (failed) {
+      throw new DriverError(`the stop did not reach the camera: VISCA ${viscaErr.message}; HTTP ${failed.message}`,
+        { kind: failed.kind === 'refused' || failed.kind === 'unsupported' ? viscaErr.kind : failed.kind, code: failed.code });
+    }
+  }
+
+  /**
    * Three separate stops. Since firmware 12X 9.1.46 / 20X 9.1.34 / 30X 9.1.39
    * a pan/tilt stop no longer stops zoom (FW-0112), so the pan/tilt stop
    * alone is not "stop everything" (notes §5). Pan/tilt goes first.
    *
-   * If VISCA is not answering, the same three stops go over CGI
-   * (`ptzcmd&ptzstop`, `zoomstop`, `focusstop`; HTTP-PDF p.124-143, SE+):
-   * a stop must not depend on one socket.
+   * If VISCA does not take any of them — no answer, or refused (both command
+   * buffers full even after the client's one retry) — all three go over CGI
+   * (`ptzcmd&ptzstop`, `zoomstop`, `focusstop`; HTTP-PDF p.124-143, SE+): a
+   * stop must not depend on one socket. After a CGI stop the VISCA stops are
+   * sent again once VISCA answers (#cgiStops).
    */
   async stop() {
+    const down = this.#viscaDown();
+    if (down) { await this.#cgiStops(STOPS.map((s) => s.group), down); return; }
     try {
-      await this.visca.command([0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff]);
-      await this.visca.command(BYTES.zoomStop);
-      await this.visca.command(BYTES.focusStop).catch((err) => { if (isLinkFailure(err)) throw err; });
+      for (const { group } of STOPS) {
+        await this.#viscaStop(group);
+        this.restop.cancel(group);
+      }
       return;
     } catch (err) {
-      if (!isLinkFailure(err)) throw err;
-      this.log('warn', `VISCA stop failed (${err.message}); stopping over HTTP`);
+      if (err.code === 'superseded') throw err;
+      this.log('warn', `VISCA stop not taken (${err.message}); stopping over HTTP`);
+      await this.#cgiStops(STOPS.map((s) => s.group), err);
     }
-    await this.#cgi('/cgi-bin/ptzctrl.cgi?ptzcmd&ptzstop');
-    await this.#cgi('/cgi-bin/ptzctrl.cgi?ptzcmd&zoomstop');
-    await this.#cgi('/cgi-bin/ptzctrl.cgi?ptzcmd&focusstop');
   }
 
   /**
@@ -561,17 +684,20 @@ export class PtzOptics extends PtzDriver {
    * p.140, SE+). Focus range is undocumented.
    */
   async position() {
+    // Three inquiries; a waiting move or stop goes between them, and what was
+    // not asked is left out (undefined), not reported as unknown.
     const pt = await this.visca.inquiry(BYTES.panTiltPosInq);
-    const z = await this.visca.inquiry(BYTES.zoomPosInq);
-    const f = await this.visca.inquiry(BYTES.focusPosInq);
+    const z = this.#shouldYield() ? null : await this.visca.inquiry(BYTES.zoomPosInq);
+    const f = !z || this.#shouldYield() ? null : await this.visca.inquiry(BYTES.focusPosInq);
     const raw = {
       pan: pt.length >= 11 ? signed(nibbles(pt, 2, 4), 16) : null,
       tilt: pt.length >= 11 ? signed(nibbles(pt, 6, 4), 16) : null,
-      zoom: nibbles(z, 2, 4),
-      focus: nibbles(f, 2, 4),
     };
+    if (z) raw.zoom = nibbles(z, 2, 4);
+    if (f) raw.focus = nibbles(f, 2, 4);
     const tele = MODELS[this.model]?.zoomTele;
-    return { pan: null, tilt: null, zoom: tele ? Math.max(0, Math.min(1, raw.zoom / tele)) : null, focus: null, raw };
+    const zoom = !z ? undefined : tele ? Math.max(0, Math.min(1, raw.zoom / tele)) : null;
+    return { pan: null, tilt: null, zoom, focus: f ? null : undefined, raw };
   }
 
   async status() {
@@ -636,6 +762,7 @@ export class PtzOptics extends PtzDriver {
   }
 
   close() {
+    this.restop.close();
     this.visca.close();
   }
 }

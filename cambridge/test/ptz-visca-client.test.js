@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
 import net from 'node:net';
 
-import { ViscaClient, FRAMING, nibbles, toNibbles, signed, viscaError } from '../src/ptz/visca-client.js';
+import { ViscaClient, ViscaRestop, FRAMING, nibbles, toNibbles, signed, viscaError } from '../src/ptz/visca-client.js';
 import { startFakeSony } from './fakes/sony-brc.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -230,4 +230,89 @@ test('raw TCP: an unreachable port is a network failure; close() rejects what is
   await assert.rejects(c2.inquiry([0x81, 0x09, 0x04, 0x00, 0xff]), (e) => e.kind === 'network');
   c.close();
   await srv.close();
+});
+
+test('urgent commands (motion) go ahead of queued inquiries, in their own order, one message at a time', async () => {
+  const srv = await tcpScript((m, sock) => {
+    // Inquiries answer slowly; commands at once.
+    if (m[1] === 0x09) setTimeout(() => sock.write(Buffer.from([0x90, 0x50, 0x02, 0xff])), 60);
+    else sock.write(Buffer.from([0x90, 0x41, 0xff, 0x90, 0x51, 0xff]));
+  });
+  const c = new ViscaClient({ host: '127.0.0.1', port: srv.port, framing: FRAMING.RAW_TCP, timeoutMs: 2000 });
+  try {
+    const inq = [0x81, 0x09, 0x04, 0x47, 0xff];
+    const jobs = [c.inquiry(inq), c.inquiry(inq), c.inquiry(inq), c.command([0x81, 0x01, 0x06, 0x01, 0x05, 0x05, 0x02, 0x03, 0xff])];
+    await sleep(20);
+    jobs.push(c.command([0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff], { urgent: true }));
+    jobs.push(c.command([0x81, 0x01, 0x04, 0x07, 0x00, 0xff], { urgent: true }));
+    await Promise.all(jobs);
+    const name = (m) => (m[1] === 0x09 ? 'inq' : m[3] === 0x07 ? 'zoomStop' : m[6] === 0x03 ? 'ptStop' : 'move');
+    // The first inquiry was already on the wire; the stops go next, in the
+    // order asked, ahead of the waiting inquiries and the plain command.
+    assert.deepEqual(srv.seen.map(name), ['inq', 'ptStop', 'zoomStop', 'inq', 'inq', 'move']);
+  } finally { c.close(); await srv.close(); }
+});
+
+test('stillWanted: a message no longer wanted is not sent (nor resent), and says superseded', async () => {
+  const srv = await tcpScript((m, sock) => {
+    if (m[1] === 0x09) setTimeout(() => sock.write(Buffer.from([0x90, 0x50, 0x02, 0xff])), 60);
+    else sock.write(Buffer.from([0x90, 0x41, 0xff, 0x90, 0x51, 0xff]));
+  });
+  const c = new ViscaClient({ host: '127.0.0.1', port: srv.port, framing: FRAMING.RAW_TCP, timeoutMs: 1000 });
+  try {
+    let wanted = true;
+    const slow = c.inquiry([0x81, 0x09, 0x04, 0x47, 0xff]);
+    const stop = c.command([0x81, 0x01, 0x04, 0x07, 0x00, 0xff], { urgent: true, stillWanted: () => wanted });
+    await sleep(10);
+    wanted = false;                 // the axis was moved again while the stop waited
+    await assert.rejects(stop, (e) => e.code === 'superseded');
+    await slow;
+    assert.ok(!srv.seen.some((m) => m[1] === 0x01), 'the unwanted stop never went out');
+  } finally { c.close(); await srv.close(); }
+  // Sony: a lost transmission is not retransmitted once unwanted.
+  const udp = await udpScript((type) => (type === 0x0200 ? [[0x0201, [0x01]]] : []));
+  const s = new ViscaClient({ host: '127.0.0.1', port: udp.port, framing: FRAMING.SONY_IP, timeoutMs: 900 });
+  try {
+    let wanted = true;
+    const p = s.command([0x81, 0x01, 0x04, 0x07, 0x00, 0xff], { stillWanted: () => wanted });
+    await sleep(100);
+    wanted = false;
+    await assert.rejects(p, (e) => e.code === 'superseded');
+    assert.equal(udp.seen.filter((x) => x.type === 0x0100).length, 1, 'sent once, not retransmitted');
+  } finally { s.close(); udp.close(); }
+});
+
+test('a buffer-full retry that cannot happen still settles the call', async () => {
+  const srv = await tcpScript((m, sock) => sock.write(Buffer.from([0x90, 0x60, 0x03, 0xff])));
+  const c = new ViscaClient({ host: '127.0.0.1', port: srv.port, framing: FRAMING.RAW_TCP, timeoutMs: 1000, socketWaitMs: 200 });
+  try {
+    let wanted = true;
+    const p = c.command([0x81, 0x01, 0x04, 0x07, 0x00, 0xff], { stillWanted: () => wanted });
+    await sleep(30);
+    wanted = false;                 // during the wait before the retry
+    await assert.rejects(p, (e) => e.code === 'superseded');
+    assert.equal(srv.seen.length, 1);
+  } finally { c.close(); await srv.close(); }
+});
+
+test('ViscaRestop: retries until the stop is taken, stands down when cancelled or closed', async () => {
+  const r = new ViscaRestop({ delaysMs: [0, 20] });
+  let calls = 0;
+  let delivered = 0;
+  r.arm('panTilt', async () => { calls += 1; if (calls < 3) throw new Error('no answer'); }, () => { delivered += 1; });
+  for (let i = 0; i < 50 && r.has('panTilt'); i++) await sleep(10);
+  assert.equal(calls, 3);
+  assert.equal(delivered, 1);
+  assert.equal(r.has('panTilt'), false);
+  // Cancelled (the axis moved again): nothing more is sent.
+  let sends = 0;
+  r.arm('zoom', async () => { sends += 1; throw new Error('no answer'); });
+  await sleep(5);
+  r.cancel('zoom');
+  const after = sends;
+  await sleep(80);
+  assert.equal(sends, after);
+  r.arm('focus', async () => { throw new Error('no answer'); });
+  r.close();
+  assert.equal(r.has('focus'), false);
 });

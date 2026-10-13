@@ -154,10 +154,14 @@ export const TABLE = [
     wire: { read: key('image', 'sharpness'), write: image('sharpness') } }, // HTTP-PDF p.90 (SE+) vs MSE-IMG / GEN3-UI: conflict
   { id: 'blackWhite', group: 'image', label: 'Black & white', type: 'bool',
     wire: { read: { visca: [0x81, 0x09, 0x04, 0x63, 0xff], dec: (r) => r[2] === 0x04 }, write: image('bwmode', (v) => (v ? 1 : 0)) } }, // HTTP-PDF p.101 (SE+); VISCA-PDF p.16,21
-  { id: 'imageOrientation', group: 'image', label: 'Flip / mirror', type: 'enum', verify: true,
+  // Mounting settings (picture orientation, ceiling inversion): admin, like
+  // the Canon image flip and the Sony/Panasonic install position.
+  { id: 'imageOrientation', group: 'image', label: 'Flip / mirror', type: 'enum', verify: true, danger: 'admin',
+    help: 'An installation setting. Do not change during a show.',
     options: opts([[0, 'Off'], [1, 'Flip'], [2, 'Mirror'], [3, 'Flip + mirror']]),
     wire: { read: key('image', 'imageOrientation'), write: image('imageorientation') } }, // HTTP-PDF p.107 (SE+)
-  { id: 'autoInversion', group: 'image', label: 'Auto inversion (ceiling)', type: 'bool', verify: true,
+  { id: 'autoInversion', group: 'image', label: 'Auto inversion (ceiling)', type: 'bool', verify: true, danger: 'admin',
+    help: 'An installation setting. Do not change during a show.',
     wire: { read: key('image', 'inversionMode', (s) => Number(s) === 2), write: image('inversionmode', (v) => (v ? 2 : 0)) } }, // HTTP-PDF p.97 (SE+): [2, 0]
   { id: 'noise2d', group: 'image', label: '2D noise reduction', type: 'enum', verify: true,
     options: opts([[0, 'Off'], [1, '1'], [2, '2'], [3, '3'], [4, '4'], [5, '5'], [6, 'Auto']]),
@@ -289,7 +293,8 @@ export const TABLE = [
     wire: { write: post('post_network_other_conf', 'srt_port') } },     // HTTP-PDF p.242 (SE+)
   { id: 'srtLatency', group: 'streaming', label: 'SRT latency', type: 'range', writeOnly: true,
     range: { min: 20, max: 8000, step: 1, unit: ' ms' }, wire: { write: post('post_network_other_conf', 'srt_latency') } }, // HTTP-PDF p.236 (SE+)
-  { id: 'rtspAuth', group: 'streaming', label: 'RTSP authentication', type: 'bool', writeOnly: true,
+  // Turning stream or API authentication off weakens the camera for good: admin.
+  { id: 'rtspAuth', group: 'streaming', label: 'RTSP authentication', type: 'bool', writeOnly: true, danger: 'admin',
     wire: { write: post('post_network_other_conf', 'rtsp_auth_en', (v) => (v ? 1 : 0)) } }, // HTTP-PDF p.226 (SE+)
   { id: 'rtspPort', group: 'streaming', label: 'RTSP port', type: 'range', writeOnly: true, danger: 'reconnect',
     range: { min: 554, max: 65535, step: 1 }, help: '554, or 1025–65535.',
@@ -298,7 +303,7 @@ export const TABLE = [
     wire: { write: post('post_network_other_conf', 'multicast_en', (v) => (v ? 1 : 0)) } }, // HTTP-PDF p.210 (SE+)
   { id: 'onvif', group: 'streaming', label: 'ONVIF', type: 'bool', writeOnly: true, danger: 'reconnect',
     wire: { write: post('post_network_other_conf', 'onvif_en', (v) => (v ? 1 : 0)) } }, // HTTP-PDF p.218 (SE+)
-  { id: 'onvifAuth', group: 'streaming', label: 'ONVIF authentication', type: 'bool', writeOnly: true,
+  { id: 'onvifAuth', group: 'streaming', label: 'ONVIF authentication', type: 'bool', writeOnly: true, danger: 'admin',
     wire: { write: post('post_network_other_conf', 'onvif_auth_en', (v) => (v ? 1 : 0)) } }, // HTTP-PDF p.216 (SE+)
   { id: 'ndiName', group: 'streaming', label: 'NDI name', type: 'text', writeOnly: true, maxLength: 64,
     wire: { write: post('post_ndi_info', 'channelName') } },            // HTTP-PDF p.145 (SE+)

@@ -92,6 +92,12 @@ export async function startFakePanasonic({
     requests: [],               // { url, connection }
     silent: false,
     pushes: [],
+    /** Every request as it arrived (before any delay): { at, url }. */
+    arrivals: [],
+    /** Answer every request after this many ms. */
+    delayMs: 0,
+    /** Powered on but busy: head commands answer eR2 ("standby or busy", IF p.19); #O still says p1. */
+    busy: false,
   };
   seed(state);
   if (!tracking) { state.settings.delete('OSL:B6:'); state.settings.delete('OSL:BB:'); }
@@ -201,7 +207,7 @@ export async function startFakePanasonic({
     if (body === 'O') return `p${state.power}`;
     let m = /^O([01])$/.exec(body);
     if (m) { state.power = m[1]; notify(`p${m[1]}`); return `p${m[1]}`; }
-    if (state.power !== '1') return err('ptz', 2, body.replace(/\d+$/, ''));
+    if (state.power !== '1' || state.busy) return err('ptz', 2, body.replace(/\d+$/, ''));
     integrate();
     m = /^PTS(\d\d)(\d\d)$/.exec(body);
     if (m) { state.speed.pan = Number(m[1]); state.speed.tilt = Number(m[2]); return `pTS${m[1]}${m[2]}`; }
@@ -316,6 +322,14 @@ export async function startFakePanasonic({
 
   const sockets = new Set();
   const server = http.createServer((req, res) => {
+    // A slow camera (a busy web server): every answer takes this long.
+    if (state.delayMs && !req.delayed) {
+      req.delayed = true;
+      setTimeout(() => server.emit('request', req, res), state.delayMs);
+      state.arrivals.push({ at: Date.now(), url: decodeURIComponent(req.url) });
+      return;
+    }
+    if (!req.delayed) state.arrivals.push({ at: Date.now(), url: decodeURIComponent(req.url) });
     state.requests.push({ url: req.url, connection: req.headers.connection });
     if (state.silent) return;   // hold the request open, never answer
     if (!authorised(req)) {

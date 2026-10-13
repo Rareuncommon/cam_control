@@ -184,6 +184,16 @@ export async function startFakeCanon({ port = 0, host = '127.0.0.1', username, p
     controlHeld: false,
     silent: false,
     requests: 0,
+    /** Keys whose `stop` this camera answers `==?` (not carried out). */
+    rejectStop: new Set(),
+    /** A head that answers `:=stop` and keeps moving (its flags stay 1). */
+    ignoreStop: false,
+    /** One-shot info.cgi answers take this long (a busy camera). */
+    infoDelayMs: 0,
+    /** The authentication the camera asks for: 'digest' or 'basic'. */
+    scheme: 'digest',
+    /** The scheme of every Authorization header received ('digest', 'basic'). */
+    authSeen: [],
     streams: new Set(),
     presets: new Map(),
     /** Direction moves in progress, in position units per second. */
@@ -305,6 +315,10 @@ export async function startFakeCanon({ port = 0, host = '127.0.0.1', username, p
   function authorised(req) {
     if (!username) return true;
     const h = req.headers.authorization ?? '';
+    if (h) state.authSeen.push(h.split(' ')[0].toLowerCase());
+    if (state.scheme === 'basic') {
+      return h === `Basic ${Buffer.from(`${username}:${password ?? ''}`).toString('base64')}`;
+    }
     const m = /^Digest\s+(.*)$/i.exec(h);
     if (!m) return false;
     const p = {};
@@ -316,6 +330,11 @@ export async function startFakeCanon({ port = 0, host = '127.0.0.1', username, p
   }
 
   function challenge(res) {
+    if (state.scheme === 'basic') {
+      res.writeHead(401, { 'WWW-Authenticate': `Basic realm="${realm}"`, Server: 'vb' });
+      res.end();
+      return;
+    }
     const nonce = randomBytes(8).toString('hex');
     nonces.add(nonce);
     res.writeHead(401, { 'WWW-Authenticate': `Digest realm="${realm}", qop="auth", nonce="${nonce}"`, Server: 'vb' });
@@ -326,7 +345,11 @@ export async function startFakeCanon({ port = 0, host = '127.0.0.1', username, p
   function info(req, res, url) {
     const selectors = selectorsOf(url);
     const keys = [...values.keys()].filter((k) => selected(selectors, k));
-    if (url.searchParams.get('type') !== 'stream') { reply(res, stamp() + lines(keys)); return; }
+    if (url.searchParams.get('type') !== 'stream') {
+      if (state.infoDelayMs) setTimeout(() => reply(res, stamp() + lines(keys)), state.infoDelayMs);
+      else reply(res, stamp() + lines(keys));
+      return;
+    }
     const t = url.searchParams.get('timeout');
     if (t !== null && !/^\d+$/.test(t)) { reply(res, '', 403); return; }
     res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace;boundary=boundary', 'Livescope-Status': '0', Server: 'vb' });
@@ -373,6 +396,8 @@ export async function startFakeCanon({ port = 0, host = '127.0.0.1', username, p
     const dirs = {};
     for (const [k, v] of pairs) {
       if (GATES[k] && !GATES[k](values)) { out.push(`${k}==?`); continue; }
+      if (v === 'stop' && state.rejectStop.has(k)) { out.push(`${k}==?`); continue; }
+      if (v === 'stop' && state.ignoreStop && k !== 'p.action') { out.push(`${k}:=${v}`); continue; }
       if (k === 'c.1.focus.action') {
         if ((v === 'near' || v === 'far') && values.get('c.1.focus') !== 'manual') { out.push(`${k}==?`); continue; }
         if (v === 'near' || v === 'far') dirs.focus = v === 'far' ? 1 : -1;

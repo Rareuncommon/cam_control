@@ -237,6 +237,8 @@ export async function startFakeSony({
     dropReplies: 0,
     /** When true, every command gets buffer full. */
     busy: false,
+    /** Answer every CGI request after this many ms. */
+    cgiDelayMs: 0,
     afr: false,
   };
   const nonce = randomBytes(8).toString('hex');
@@ -353,6 +355,11 @@ export async function startFakeSony({
         return ['press', 'release'].includes(value) ? 200 : 400;
       case 'ptzf:PanTiltReset':
         integrate(); Object.assign(h, { pan: 0, tilt: 0 }); return 200;
+      case 'ptzf:Cancel':
+        // "Cancels the running PTZ command" (C-EN p.17). Whether it stops a
+        // VISCA focus drive is not documented; the fake leaves focus alone.
+        if (value !== 'on') return 400;
+        integrate(); Object.assign(h.v, { pan: 0, tilt: 0, zoom: 0 }); return 200;
       case 'presetposition:HomePos':
         if (value !== 'recall') return 400;
         integrate(); Object.assign(h, { pan: 0, tilt: 0 }); return 200;
@@ -391,6 +398,12 @@ export async function startFakeSony({
   }
 
   const server = http.createServer((req, res) => {
+    // A slow web server: every CGI answer takes this long.
+    if (state.cgiDelayMs && !req.delayed) {
+      req.delayed = true;
+      setTimeout(() => server.emit('request', req, res), state.cgiDelayMs);
+      return;
+    }
     if (state.silent) { held.add(res); res.on('close', () => held.delete(res)); return; }
     if (!authorised(req)) {
       res.writeHead(401, { 'WWW-Authenticate': `Digest realm="${realm}", qop="auth", nonce="${nonce}", algorithm=MD5` });

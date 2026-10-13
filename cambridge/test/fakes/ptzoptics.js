@@ -123,6 +123,10 @@ export async function startFakePtzoptics({
     replyAddress,
     silent: false,
     busy: false,
+    /** VISCA alone goes quiet (the HTTP side still answers): bytes are read and ignored. */
+    viscaSilent: false,
+    /** VISCA inquiry replies take this long (a busy camera). */
+    inquiryDelayMs: 0,
     cgiLog: [],
     viscaLog: [],
   };
@@ -240,7 +244,7 @@ export async function startFakePtzoptics({
     sock.on('error', () => {});
     sock.on('close', () => sockets.delete(sock));
     sock.on('data', (chunk) => {
-      if (state.silent) return;
+      if (state.silent || state.viscaSilent) return;
       rx = Buffer.concat([rx, chunk]);
       for (;;) {
         const end = rx.indexOf(0xff);
@@ -251,6 +255,11 @@ export async function startFakePtzoptics({
         const r = viscaHandle(p);
         const a = state.replyAddress;
         try {
+          if (r.reply && state.inquiryDelayMs) {
+            const out = Buffer.from([a, 0x50, ...r.reply, 0xff]);
+            setTimeout(() => { try { sock.write(out); } catch { /* gone */ } }, state.inquiryDelayMs);
+            continue;
+          }
           if (r.reply) { sock.write(Buffer.from([a, 0x50, ...r.reply, 0xff])); continue; }
           socketNo = socketNo === 1 ? 2 : 1;
           if (r.error === 0x41) { sock.write(Buffer.from([a, 0x60 | socketNo, 0x41, 0xff])); continue; }

@@ -148,6 +148,29 @@ const STREAM_RETRY_MS = [1000, 2000, 5000, 10_000, 30_000];
 const STREAM_BUSY_RETRY_MS = 5 * 60_000;
 const STREAM_MAX_BUFFER = 1 << 20;
 
+/**
+ * The scheme each camera (`host:port`) has challenged the event stream with.
+ * The stream has its own HTTP code (http.js cannot hold a multipart response
+ * open), so it keeps its own memory, the same rule as http.js: a camera that
+ * has asked for Digest and later asks for Basic does not get the password —
+ * Basic sends it in the clear, and the likeliest reason for the change is
+ * that the address now belongs to something else, or is pretending.
+ * Module-wide, so it outlives one connection's driver; bounded like
+ * http.js's per-host caches.
+ */
+const streamSchemes = new Map();
+const STREAM_SCHEMES_MAX = 512;
+function rememberScheme(key, scheme) {
+  // Digest, once seen, is never downgraded.
+  if (streamSchemes.get(key) === 'digest' && scheme !== 'digest') return;
+  streamSchemes.delete(key);
+  streamSchemes.set(key, scheme);
+  while (streamSchemes.size > STREAM_SCHEMES_MAX) streamSchemes.delete(streamSchemes.keys().next().value);
+}
+
+/** For tests: forget what the event stream learned about a camera's authentication. */
+export function forgetStreamScheme(host, port = 80) { streamSchemes.delete(`${host}:${port}`); }
+
 /** Reads a multipart/x-mixed-replace body part by part, by Content-Length where given. */
 export class MultipartReader {
   constructor(boundary, onPart) {
@@ -262,6 +285,8 @@ export class CanonXcPtz extends PtzDriver {
     this.cache = new Map();
     this.trackingAddon = false;
     this.lastSent = 0;
+    /** The last caller's turn to wait out the gap (see #pace). */
+    this.paceTail = Promise.resolve();
     this.closed = false;
     this.stream = null;
 
@@ -301,11 +326,28 @@ export class CanonXcPtz extends PtzDriver {
 
   // --- transport ---------------------------------------------------------------
 
-  /** Keeps the spec's 30 ms between the requests one driver call makes in a row. */
-  async #pace() {
-    const wait = this.lastSent + GAP_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-    this.lastSent = Date.now();
+  /**
+   * Keeps the spec's 30 ms between requests (XC5 p.72). A move or stop may
+   * now run alongside a read (the lifecycle's motion lane), so two callers
+   * can pace at once. The waits take turns — each measures from the moment
+   * the previous one actually went — so two callers never pick the same
+   * slot. Only the wait is in turn, not the request: XC is plain HTTP, and a
+   * stop goes out at most one gap after a read's request, never after its
+   * reply.
+   */
+  #pace() {
+    const turn = this.paceTail.then(async () => {
+      const wait = this.lastSent + GAP_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+      this.lastSent = Date.now();
+    });
+    this.paceTail = turn;
+    return turn;
+  }
+
+  /** A move or stop is waiting for the camera: a read with more to ask hands back what it has. */
+  #shouldYield() {
+    try { return !!this.ctx?.shouldYield?.(); } catch { return false; }
   }
 
   /** One XC request; throws DriverError for anything but HTTP 200 + Livescope-Status 0. */
@@ -513,6 +555,8 @@ export class CanonXcPtz extends PtzDriver {
       }
       const got = await this.#info([...keys]);
       for (const e of xc) out[e.id] = this.#valueOf(e, got);
+      // A second request (the add-on's) gives way to a waiting move or stop.
+      if (this.#shouldYield()) return out;
     }
     if (addon.length) {
       const cfg = await this.#addonConfig();
@@ -619,12 +663,46 @@ export class CanonXcPtz extends PtzDriver {
       this.log('warn', 'pan/tilt speed mode rejected; moving in the camera\'s own mode from now on');
       this.speedMode = null;
     }
+    // An axis sent `stop` and answered `==?` did not stop: that is a failed
+    // stop, not a detail (XC5 p.48, p.74).
+    const stopping = [pan ? null : 'c.1.pan', tilt ? null : 'c.1.tilt'].filter(Boolean);
+    await this.#throwIfStopRefused(reply, stopping, 'Pan/tilt');
     this.#checkRejected(reply, moving, 'Pan/tilt');
+  }
+
+  /**
+   * Stop keys the camera answered `==?` to ("not valid in the current mode",
+   * XC5 p.48, p.56, p.74): those axes were not stopped. A focus stop refused
+   * while focus is on auto is the one exception — the manual focus drive it
+   * would stop cannot be running then (focus mode `c.1.focus`, XC5 p.145).
+   */
+  async #stopRefusals(reply, keys) {
+    const refused = keys.filter((k) => {
+      const r = reply.get(k);
+      return r && r.op === '==' && r.value === '?';
+    });
+    if (refused.includes('c.1.focus.action')) {
+      let mode = null;
+      try { mode = (await this.#info(['c.1.focus'])).get('c.1.focus'); } catch { /* unknown is not auto */ }
+      if (mode === 'auto') refused.splice(refused.indexOf('c.1.focus.action'), 1);
+    }
+    return refused;
+  }
+
+  async #throwIfStopRefused(reply, keys, what) {
+    const refused = await this.#stopRefusals(reply, keys);
+    if (refused.length) {
+      throw new DriverError(`${what}: the camera refused the stop (${refused.join(', ')} ==?) — it may still be moving`, { code: 'stopRejected', kind: 'refused' });
+    }
   }
 
   /** XC5 p.148-149: `c.1.zoom=tele|wide|stop`, speed 0…15 on CR-N500. Positive is tele. */
   async zoom(speed) {
-    if (!speed) { await this.#control([['c.1.zoom', 'stop']]); return; }
+    if (!speed) {
+      const reply = await this.#control([['c.1.zoom', 'stop']]);
+      await this.#throwIfStopRefused(reply, ['c.1.zoom'], 'Zoom');
+      return;
+    }
     const reply = await this.#control([['c.1.zoom', speed > 0 ? 'tele' : 'wide'], ['c.1.zoom.speed.dir', zoomSpeed(speed)]]);
     this.#checkRejected(reply, ['c.1.zoom'], 'Zoom');
   }
@@ -636,35 +714,64 @@ export class CanonXcPtz extends PtzDriver {
    * back: in AF the camera's `==?` comes back as a refusal saying so.
    */
   async focus(speed) {
-    if (!speed) { await this.#control([['c.1.focus.action', 'stop']]); return; }
+    if (!speed) {
+      const reply = await this.#control([['c.1.focus.action', 'stop']]);
+      await this.#throwIfStopRefused(reply, ['c.1.focus.action'], 'Focus');
+      return;
+    }
     const reply = await this.#control([['c.1.focus.speed', focusSpeed(speed)], ['c.1.focus.action', speed > 0 ? 'far' : 'near']]);
     this.#checkRejected(reply, ['c.1.focus.action'], 'Focus (switch focus to manual first)');
   }
 
   /**
    * XC has no single stop-all (notes §5.2, derived). The sequence:
-   *   1. one request stopping pan, tilt, zoom and focus (XC5 p.145-151);
+   *   1. one request stopping pan, tilt, zoom and focus (XC5 p.145-151); a
+   *      stop answered `==?` was not carried out (#stopRefusals);
    *   2. `p.action=stop`, which cancels a preset move in progress (XC5 p.153);
-   *   3. read the moving flags, and repeat 1 (and 2) once if anything still
-   *      reports moving — XC5 p.72 says a multi-item request may be only partly
-   *      carried out.
+   *   3. read the moving flags (`c.1.pan|tilt|zoom.status`, `p.status`: 0
+   *      stopped, 1 moving, XC5 p.148-152), and repeat 1 (and 2) once if
+   *      anything still reports moving — XC5 p.72 says a multi-item request
+   *      may be only partly carried out;
+   *   4. after that second stop, read the flags again (a few times over half a
+   *      second: a head decelerates), and if anything still reports moving,
+   *      that is a failed stop.
    * Every step is attempted even if an earlier one failed; the first failure
-   * is thrown at the end so the motion controller retries.
+   * is thrown at the end so the motion controller retries. A flag read that
+   * fails is not a failure in itself — the stops were taken — only a flag
+   * read that says "moving" after two stops is.
    */
   async stop() {
     const axes = [['c.1.pan', 'stop'], ['c.1.tilt', 'stop'], ['c.1.zoom', 'stop'], ['c.1.focus.action', 'stop']];
     let first = null;
     const attempt = async (pairs) => {
-      try { await this.#control(pairs); } catch (err) { first ??= err; }
+      try {
+        const reply = await this.#control(pairs);
+        // `p.action=stop` with no preset running may well be `==?`; p.status says whether one is.
+        await this.#throwIfStopRefused(reply, pairs.map(([k]) => k).filter((k) => k !== 'p.action'), 'Stop');
+      } catch (err) { first ??= err; }
+    };
+    const FLAGS = ['c.1.pan.status', 'c.1.tilt.status', 'c.1.zoom.status', 'p.status'];
+    const stillMoving = async () => {
+      try {
+        const got = await this.#info(FLAGS);
+        return FLAGS.filter((k) => got.get(k) === '1');
+      } catch { return null; }
     };
     await attempt(axes);
     await attempt([['p.action', 'stop']]);
-    try {
-      const got = await this.#info(['c.1.pan.status', 'c.1.tilt.status', 'c.1.zoom.status', 'p.status']);
-      const still = ['c.1.pan.status', 'c.1.tilt.status', 'c.1.zoom.status'].some((k) => got.get(k) === '1');
-      if (still) await attempt(axes);
-      if (got.get('p.status') === '1') await attempt([['p.action', 'stop']]);
-    } catch { /* the stops above are what matter; the check is a second chance */ }
+    let still = await stillMoving();
+    if (still?.length) {
+      if (still.some((k) => k !== 'p.status')) await attempt(axes);
+      if (still.includes('p.status')) await attempt([['p.action', 'stop']]);
+      for (let i = 0; i < 4; i++) {
+        if (i) await sleep(150);
+        still = await stillMoving();
+        if (!still?.length) break;
+      }
+      if (still?.length) {
+        first ??= new DriverError(`the head still reports moving (${still.join(', ')}) after two stops`, { code: 'stillMoving', kind: 'refused' });
+      }
+    }
     if (first) throw first;
   }
 
@@ -699,7 +806,7 @@ export class CanonXcPtz extends PtzDriver {
     const out = {};
     const p = Number(this.cache.get('p'));
     if (Number.isInteger(p)) out.preset = p > 0 ? p : null;
-    if (this.trackingAddon) {
+    if (this.trackingAddon && !this.#shouldYield()) {
       try {
         const cfg = await this.#addonConfig();
         if (cfg && cfg.trackingEnable !== undefined) out.tracking = String(cfg.trackingEnable) === '1';
@@ -814,10 +921,21 @@ export class CanonXcPtz extends PtzDriver {
         const c = parseChallenge(res.headers['www-authenticate']);
         const user = this.auth.username;
         const pass = this.auth.password ?? '';
-        const header = c?.scheme === 'digest'
-          ? digestHeader({ username: user, password: pass, method: 'GET', uri: path, challenge: c, nc: 1 })
-          : c?.scheme === 'basic' ? `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}` : null;
+        const key = `${this.host}:${this.port}`;
         clearTimeout(this.streamWatch);
+        let header = null;
+        if (c?.scheme === 'digest') {
+          rememberScheme(key, 'digest');
+          header = digestHeader({ username: user, password: pass, method: 'GET', uri: path, challenge: c, nc: 1 });
+        } else if (c?.scheme === 'basic') {
+          if (streamSchemes.get(key) === 'digest') {
+            this.log('warn', 'event stream: the camera asked for Basic after using Digest — the password was not sent');
+            fail(STREAM_BUSY_RETRY_MS, 'Basic asked for after Digest; password not sent');
+            return;
+          }
+          rememberScheme(key, 'basic');
+          header = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+        }
         if (header) { this.stream = null; req.destroy(); this.#openStream(header); } else fail(STREAM_BUSY_RETRY_MS, 'unknown authentication scheme');
         return;
       }

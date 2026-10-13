@@ -62,6 +62,11 @@ test('the Move SE table is sound, roles unique, conflicts flagged', () => {
     assert.equal(TABLE.find((e) => e.id === id).verify, true, id);
   }
   assert.ok(GAPS.length > 5);
+  // Recalibration (moves the whole range, clears limits), mounting/inversion,
+  // and turning stream or API authentication off: administrator's calls.
+  for (const id of ['panTiltReset', 'imageOrientation', 'autoInversion', 'rtspAuth', 'onvifAuth']) {
+    assert.equal(TABLE.find((e) => e.id === id).danger, 'admin', id);
+  }
   assert.equal(tableFor('Move SE'), TABLE);
   assert.ok(tableFor('Move 4K').every((e) => e.verify));
   assert.equal(modelName({ device_model: 'F16.HI' }), 'Move SE');
@@ -183,6 +188,112 @@ test('stop goes over HTTP when the VISCA port does not answer', async () => {
       'GET /cgi-bin/ptzctrl.cgi?ptzcmd&ptzstop', 'GET /cgi-bin/ptzctrl.cgi?ptzcmd&zoomstop', 'GET /cgi-bin/ptzctrl.cgi?ptzcmd&focusstop',
     ]);
   });
+});
+
+const PT_STOP = '81 01 06 01 01 01 03 03 ff';
+const CGI_STOPS = ['GET /cgi-bin/ptzctrl.cgi?ptzcmd&ptzstop', 'GET /cgi-bin/ptzctrl.cgi?ptzcmd&zoomstop', 'GET /cgi-bin/ptzctrl.cgi?ptzcmd&focusstop'];
+
+test('a VISCA stop refused twice with buffer full falls back to the CGI stops, then goes over VISCA too', async () => {
+  await withFake({}, async (fake, d) => {
+    await d.identify();
+    await d.panTilt(0.5, 0);
+    await d.zoom(0.5);
+    fake.state.busy = true;                       // both command buffers full, and staying full
+    const n = fake.state.cgiLog.length;
+    const v = fake.state.viscaLog.length;
+    await d.stop();
+    assert.deepEqual(since(fake, v).slice(0, 2), [PT_STOP, PT_STOP], 'the client tried once more, as for any buffer full');
+    assert.deepEqual(fake.state.cgiLog.slice(n), CGI_STOPS);
+    assert.equal(fake.state.head.v.pan, 0);
+    assert.equal(fake.state.head.v.zoom, 0);
+    // One axis on its own does the same, with only that axis's CGI stop.
+    fake.state.head.v.zoom = 0.5;
+    const m = fake.state.cgiLog.length;
+    await d.zoom(0);
+    assert.deepEqual(fake.state.cgiLog.slice(m), ['GET /cgi-bin/ptzctrl.cgi?ptzcmd&zoomstop']);
+    assert.equal(fake.state.head.v.zoom, 0);
+    // Once the camera takes commands again, the VISCA stops follow.
+    const k = fake.state.viscaLog.length;
+    fake.state.busy = false;
+    await until(() => since(fake, k).includes(PT_STOP) && since(fake, k).includes('81 01 04 07 00 ff'), { timeoutMs: 5000 });
+  });
+});
+
+test('a stop that went over CGI is sent over VISCA again once VISCA answers: a late move cannot outlast it', async () => {
+  await withFake({ driver: { timeoutMs: 400 } }, async (fake, d) => {
+    await d.identify();
+    await d.panTilt(0.5, 0);
+    fake.state.viscaSilent = true;                // VISCA goes quiet; HTTP still answers
+    await d.stop();
+    assert.equal(fake.state.head.v.pan, 0, 'stopped over CGI');
+    // The next stop does not wait out another VISCA timeout first.
+    const t0 = Date.now();
+    await d.panTilt(0, 0);
+    assert.ok(Date.now() - t0 < 250, `second stop took ${Date.now() - t0} ms`);
+    // The move sent before the stop arrives late: the head starts again.
+    fake.state.head.v.pan = 0.5;
+    const n = fake.state.viscaLog.length;
+    fake.state.viscaSilent = false;
+    await until(() => since(fake, n).includes(PT_STOP), { timeoutMs: 5000 });
+    assert.equal(fake.state.head.v.pan, 0, 'the VISCA stop caught the late move');
+  });
+});
+
+test('a new move cancels the pending VISCA re-stop', async () => {
+  await withFake({ driver: { timeoutMs: 300 } }, async (fake, d) => {
+    await d.identify();
+    await d.panTilt(0.5, 0);
+    fake.state.viscaSilent = true;
+    await d.stop();
+    fake.state.viscaSilent = false;
+    await d.panTilt(0.25, 0);                     // the operator moves again
+    const n = fake.state.viscaLog.length;
+    await sleep(1200);
+    assert.ok(!since(fake, n).includes(PT_STOP), 'no late stop cut across the new move');
+    assert.ok(fake.state.head.v.pan > 0);
+  });
+});
+
+test('a stop during a slow read waits for the one inquiry on the wire at most, and the read gives way', async () => {
+  const fake = await startFakePtzoptics({ password: AUTH.password });
+  let motionWaiting = false;
+  const d = new PtzOptics({
+    host: '127.0.0.1', port: fake.port, auth: AUTH, http: request, timeoutMs: 2000,
+    options: { viscaPort: fake.viscaPort }, shouldYield: () => motionWaiting,
+  });
+  try {
+    await d.identify();
+    d.schema();
+    await d.panTilt(0.5, 0);
+    const DELAY = 250;
+    fake.state.inquiryDelayMs = DELAY;
+    const ids = ['exposureMode', 'expCompMode', 'backlight', 'antiFlicker', 'iris', 'wbMode', 'blackWhite', 'focusMode'];
+    const reading = d.read(ids.map((id) => entry(d, id)));
+    await sleep(30);
+    motionWaiting = true;
+    const t0 = Date.now();
+    const n = fake.state.viscaLog.length;
+    await d.stop();
+    const took = Date.now() - t0;
+    assert.ok(took < DELAY + 150, `stop took ${took} ms behind ${DELAY} ms inquiries`);
+    assert.deepEqual(since(fake, n), [PT_STOP, '81 01 04 07 00 ff', '81 01 04 08 00 ff']);
+    assert.equal(fake.state.head.v.pan, 0);
+    const got = await reading;
+    motionWaiting = false;
+    const answered = ids.filter((id) => got[id]);
+    assert.ok(answered.length >= 1 && answered.length < ids.length, `the read handed back ${answered.length} of ${ids.length}`);
+    // position() gives way between its inquiries too: what it did not ask stays undefined.
+    fake.state.inquiryDelayMs = 0;
+    motionWaiting = true;
+    const p = await d.position();
+    motionWaiting = false;
+    assert.equal(p.zoom, undefined);
+    assert.ok(p.raw.pan !== undefined);
+    assert.ok((await d.position()).zoom !== undefined);
+  } finally {
+    d.close();
+    await fake.close();
+  }
 });
 
 // --- settings -----------------------------------------------------------------------
