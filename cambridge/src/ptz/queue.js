@@ -1,12 +1,18 @@
-// One command at a time to a camera, most important first.
+// One command at a time to a camera, most important first — and a stop never
+// waits behind a read.
 //
 // PTZ heads are small embedded computers. Several of them document a minimum
 // gap between commands, and all of them behave worse when a controller fires
 // requests in parallel. So every command to a camera goes through one of these.
 //
-// Priority exists because a stop must never wait behind a settings poll. A
-// joystick release that sits in a queue behind twenty "what is the knee point"
-// queries is a camera still panning across the set.
+// Motion has a lane of its own. Priority alone only reorders what is waiting;
+// it does nothing about a settings read already running, and a read on a slow
+// head can be several requests and several seconds. A stop that waits for it
+// is a camera still panning across the set — an independent review measured
+// six seconds. So a motion job starts as soon as no other motion job is
+// running, even while a read is in flight, and reads are asked to yield
+// between their requests (`motionWaiting`). Motion jobs still run one at a
+// time, in order, and still keep the camera's minimum gap.
 //
 // Keyed jobs replace each other: when a joystick produces ten velocity updates
 // while the camera is still answering the first, only the newest is worth
@@ -26,7 +32,10 @@ export class CommandQueue {
     this.jobTimeoutMs = jobTimeoutMs;
     /** @type {Array<{fn: Function, priority: number, key?: string, resolve: Function, reject: Function, seq: number}>} */
     this.pending = [];
+    /** A non-motion job is running. */
     this.running = false;
+    /** A motion job is running. */
+    this.motionRunning = false;
     this.lastStart = 0;
     this.seq = 0;
     this.closed = false;
@@ -34,6 +43,11 @@ export class CommandQueue {
   }
 
   get size() { return this.pending.length; }
+
+  /** True while a motion job waits or runs: a read should yield at its next request. */
+  get motionWaiting() {
+    return this.motionRunning || this.pending.some((j) => j.priority === PRIORITY.MOTION);
+  }
 
   /**
    * @template T
@@ -59,7 +73,7 @@ export class CommandQueue {
     });
   }
 
-  /** Drops pending jobs of a priority — polls, typically, when a camera drops. */
+  /** Drops pending jobs matching a predicate — polls, typically, when a camera drops. */
   drop(predicate, reason = 'dropped') {
     const keep = [];
     for (const j of this.pending) {
@@ -88,15 +102,30 @@ export class CommandQueue {
 
   reopen() { this.closed = false; }
 
+  /** The next job that may start now, given what is running. */
+  #next() {
+    // Motion: whenever no other motion job runs, read or no read.
+    if (!this.motionRunning) {
+      const i = this.pending.findIndex((j) => j.priority === PRIORITY.MOTION);
+      if (i >= 0) return i;
+    }
+    // Everything else: only when nothing at all is running.
+    if (!this.running && !this.motionRunning && this.pending.length) return 0;
+    return -1;
+  }
+
   #pump() {
-    if (this.running || this.timer || this.pending.length === 0 || this.closed) return;
+    if (this.timer || this.closed) return;
+    const i = this.#next();
+    if (i < 0) return;
     const wait = this.lastStart + this.minIntervalMs - Date.now();
     if (wait > 0) {
       this.timer = setTimeout(() => { this.timer = null; this.#pump(); }, wait);
       return;
     }
-    const job = this.pending.shift();
-    this.running = true;
+    const [job] = this.pending.splice(i, 1);
+    const motion = job.priority === PRIORITY.MOTION;
+    if (motion) this.motionRunning = true; else this.running = true;
     this.lastStart = Date.now();
 
     let finished = false;
@@ -104,7 +133,7 @@ export class CommandQueue {
       if (finished) return false;
       finished = true;
       clearTimeout(guard);
-      this.running = false;
+      if (motion) this.motionRunning = false; else this.running = false;
       queueMicrotask(() => this.#pump());
       return true;
     };
@@ -123,5 +152,7 @@ export class CommandQueue {
       (v) => { if (finish()) job.resolve(v); },
       (e) => { if (finish()) job.reject(e); },
     );
+    // A motion job started alongside a read may leave room for the next.
+    queueMicrotask(() => this.#pump());
   }
 }

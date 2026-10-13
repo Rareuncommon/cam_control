@@ -119,6 +119,11 @@ export class PtzCamera extends EventEmitter {
     this.inflight = new Set();
     this.snap = null;
     this.movingAtDrop = false;
+    /** Bumped by every connect attempt; an attempt that finds it changed is stale and stands down. */
+    this.gen = 0;
+    this.connecting = false;
+    /** Set while stopping: no new motion is accepted. */
+    this.stopping = false;
   }
 
   // --- lifecycle -------------------------------------------------------------
@@ -134,9 +139,11 @@ export class PtzCamera extends EventEmitter {
    */
   reconnect() {
     if (this.stopped) return;
+    // Already connected, or an attempt is under way: a second attempt would
+    // race the first, and whichever lost would tear down the one that won.
+    if (this.state === 'connected' || this.connecting) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    if (this.state === 'connected') return;
     this.reconnectAttempts = 0;
     this.#reconnectNow();
   }
@@ -150,13 +157,23 @@ export class PtzCamera extends EventEmitter {
   }
 
   async stop() {
+    // No new motion from here on: a move arriving while the stop is in flight
+    // would otherwise be accepted and then abandoned by the teardown.
+    this.stopping = true;
     this.stopped = true;
+    this.gen += 1;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    // Leaving a head moving because CamBridge quit is the one way to make
-    // stopping worse than not stopping.
+    // Leaving a head moving because CamBridge quit, or because the camera was
+    // re-addressed, is the one way to make stopping worse than not stopping.
+    // A stop not yet confirmed counts as moving. The motion lane means the
+    // stop does not wait behind a read; give it the time one command can take.
     if (this.motion?.moving && this.state === 'connected') {
-      await Promise.race([this.motion.stopAll('CamBridge stopping'), new Promise((r) => setTimeout(r, 1000))]);
+      const r = await Promise.race([
+        this.motion.stopAll('CamBridge stopping'),
+        new Promise((res) => setTimeout(() => res({ ok: false, error: 'timed out' }), this.t.commandTimeoutMs + 500)),
+      ]);
+      if (!r.ok) this.log('error', `stop not confirmed before disconnecting: ${r.error}`);
     }
     this.#teardown();
     // Quietly: a camera is stopped because CamBridge is shutting down or the
@@ -193,6 +210,17 @@ export class PtzCamera extends EventEmitter {
 
   async #connect() {
     if (this.stopped) return;
+    const gen = ++this.gen;
+    const stale = () => gen !== this.gen || this.stopped;
+    this.connecting = true;
+    try {
+      await this.#attempt(gen, stale);
+    } finally {
+      if (gen === this.gen) this.connecting = false;
+    }
+  }
+
+  async #attempt(gen, stale) {
     this.#teardown();
     this.queue = new CommandQueue({
       minIntervalMs: this.Driver.minIntervalMs ?? 0,
@@ -206,6 +234,9 @@ export class PtzCamera extends EventEmitter {
       log: this.log,
       timeoutMs: this.t.commandTimeoutMs,
       options: this.entry.options ?? {},
+      // Reads that make several requests check this between them and return
+      // what they have, so a stop is not kept waiting behind a long read.
+      shouldYield: () => !!this.queue?.motionWaiting,
     });
     this.motion = new MotionController({
       driver: this.driver,
@@ -220,6 +251,7 @@ export class PtzCamera extends EventEmitter {
     try {
       identity = await this.queue.run(() => this.driver.identify(), { priority: PRIORITY.WRITE });
     } catch (err) {
+      if (stale()) return;
       if (err?.kind === 'auth') {
         this.#setState('unauthorized', 'the camera refused the username or password');
       } else {
@@ -228,7 +260,7 @@ export class PtzCamera extends EventEmitter {
       this.#scheduleReconnect();
       return;
     }
-    if (this.stopped) return;
+    if (stale()) return;
 
     this.identity = identity;
     this.entries = this.driver.schema(identity) ?? [];
@@ -242,8 +274,11 @@ export class PtzCamera extends EventEmitter {
     // on every reconnect would cut across a move someone is making from
     // Reactor or the camera's own page at that moment.
     if (this.movingAtDrop) {
+      // The motion controller now owns the stop: it keeps sending it until the
+      // camera takes it, and counts as moving until then, so a second drop
+      // before it lands sets movingAtDrop again.
       this.movingAtDrop = false;
-      this.motion.stopAll('reconnected while a move was held').catch(() => {});
+      this.motion.stopAll('reconnected while a move was held or a stop was unconfirmed').catch(() => {});
     }
 
     this.reconnectAttempts = 0;
@@ -272,13 +307,14 @@ export class PtzCamera extends EventEmitter {
     try {
       await this.#readEntries(this.entries.filter((e) => e.type !== 'action' && e.poll !== 'never'), PRIORITY.POLL);
     } catch (err) {
-      if (this.stopped) return;
+      if (stale()) return;
       this.#drop(`lost during the first read: ${describe(err)}`);
       return;
     }
+    if (stale()) return;
     this.#poll('position');
     this.#poll('status');
-    if (this.stopped || this.state !== 'connected') return;
+    if (stale() || this.state !== 'connected') return;
     // Staggered, so forty cameras connecting together do not then poll on
     // the same tick for ever after.
     const jitter = () => Date.now() + Math.floor(Math.random() * 1000);
@@ -300,7 +336,9 @@ export class PtzCamera extends EventEmitter {
   #drop(reason) {
     if (this.state !== 'connected') return;
     this.log('warn', `connection lost (${reason})`);
-    this.movingAtDrop = !!this.motion?.moving;
+    // Moving includes a stop sent but not confirmed: either way, the head may
+    // be moving, and the reconnect must stop it.
+    this.movingAtDrop = this.movingAtDrop || !!this.motion?.moving;
     this.#teardown();
     this.reconnectAttempts = 1;
     this.#setState('reconnecting', reason);
@@ -548,6 +586,7 @@ export class PtzCamera extends EventEmitter {
    * it safe.
    */
   move(v, o) {
+    if (this.stopping) return { ok: false, status: 503, body: { error: `${this.entry.label ?? this.id} is being disconnected` } };
     const notReady = this.#ready();
     if (notReady) return notReady;
     this.motion.drive(v, o);
@@ -555,9 +594,15 @@ export class PtzCamera extends EventEmitter {
   }
 
   async stopMotion(reason = 'stop') {
-    if (!this.motion || this.state !== 'connected') return { ok: true, status: 200, body: {} };
+    if (!this.motion || this.state !== 'connected') {
+      // Nothing can be sent. Saying "stopped" here is how a panic button
+      // reports success on a head whose link dropped mid-move; say what is
+      // true instead, and make sure the reconnect sends the stop.
+      this.movingAtDrop = true;
+      return { ok: false, status: 503, body: { error: `${this.entry.label ?? this.id} is ${this.state} — the stop will be sent when it reconnects`, unconfirmed: true } };
+    }
     const r = await this.motion.stopAll(reason);
-    return r.ok ? { ok: true, status: 200, body: {} } : { ok: false, status: 502, body: { error: r.error } };
+    return r.ok ? { ok: true, status: 200, body: {} } : { ok: false, status: 502, body: { error: r.error, unconfirmed: true } };
   }
 
   releaseSource(source) { this.motion?.releaseSource(source); }
@@ -586,7 +631,9 @@ export class PtzCamera extends EventEmitter {
     if (!fn) return { ok: false, status: 400, body: { error: `unknown preset operation ${op}` } };
     try {
       // A recall replaces any held motion; a stick still held would fight it.
-      if (op === 'recall') this.motion.forget();
+      // Stopped, not forgotten: if the recall is refused (an empty slot, a busy
+      // head) a forgotten move would carry on with nobody owning it.
+      if (op === 'recall' && this.motion.moving) await this.motion.stopAll('preset recall');
       await this.queue.run(fn, { priority: PRIORITY.WRITE });
       this.lastOk = Date.now();
       if (op === 'recall') { this.#ptzStatus({ preset: n }); this.due.position = 0; }

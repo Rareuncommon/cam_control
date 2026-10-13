@@ -109,22 +109,32 @@ test('an unreachable camera is a network failure, not a throw', async () => {
 
 // --- queue ------------------------------------------------------------------
 
-test('queue runs one at a time, motion first, and keyed jobs supersede', async () => {
+test('motion overtakes a running read; motion runs one at a time; newer moves supersede', async () => {
   const q = new CommandQueue();
   const order = [];
-  let release;
-  const gate = new Promise((r) => { release = r; });
-  const first = q.run(async () => { order.push('first'); await gate; return 1; });
+  let releaseRead;
+  let releaseM1;
+  const readGate = new Promise((r) => { releaseRead = r; });
+  const m1Gate = new Promise((r) => { releaseM1 = r; });
+  const read = q.run(async () => { order.push('read'); await readGate; return 'r'; });
   const poll = q.run(async () => { order.push('poll'); return 'p'; }, { priority: PRIORITY.POLL });
-  const m1 = q.run(async () => { order.push('m1'); return 'm1'; }, { priority: PRIORITY.MOTION, key: 'move:panTilt' });
-  const m2 = q.run(async () => { order.push('m2'); return 'm2'; }, { priority: PRIORITY.MOTION, key: 'move:panTilt' });
-  release();
-  assert.equal(await first, 1);
-  assert.deepEqual(await m1, { superseded: true });
-  assert.equal(await m2, 'm2');
+  // A stop does not wait for the read already running — the reason the lane exists.
+  const m1 = q.run(async () => { order.push('m1'); await m1Gate; return 'm1'; }, { priority: PRIORITY.MOTION, key: 'move:a' });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(order, ['read', 'm1']);
+  assert.equal(q.motionWaiting, true, 'a read can see it should yield');
+  // While m1 runs, two more moves on the same key: only the newest goes out.
+  const m2 = q.run(async () => { order.push('m2'); return 'm2'; }, { priority: PRIORITY.MOTION, key: 'move:a' });
+  const m3 = q.run(async () => { order.push('m3'); return 'm3'; }, { priority: PRIORITY.MOTION, key: 'move:a' });
+  releaseM1();
+  assert.equal(await m1, 'm1');
+  assert.deepEqual(await m2, { superseded: true });
+  assert.equal(await m3, 'm3');
+  releaseRead();
+  assert.equal(await read, 'r');
   assert.equal(await poll, 'p');
-  // The newer move overtook the poll that was queued before it.
-  assert.deepEqual(order, ['first', 'm2', 'poll']);
+  assert.deepEqual(order, ['read', 'm1', 'm3', 'poll']);
+  assert.equal(q.motionWaiting, false);
 });
 
 test('queue honours the minimum gap between commands', async () => {
@@ -572,4 +582,134 @@ test('a camera can offer presets above its grid, around numbers it reserves', as
     // 12 is above the 10-preset grid but within presetMax; the simulated head refuses it as empty.
     assert.equal((await cam.preset('recall', 12)).status, 409);
   } finally { await cam.stop(); }
+});
+
+// --- review regressions: a head must never be left moving ---------------------
+
+test('a stop that fails keeps being retried, and a later stop is not swallowed as a duplicate', async () => {
+  const d = recordingDriver();
+  let failing = true;
+  d.panTilt = async (p, t) => {
+    d.calls.push(['panTilt', p, t]);
+    if (p === 0 && t === 0 && failing) throw new Error('timeout');
+  };
+  const m = new MotionController({ driver: d, queue: new CommandQueue(), deadmanMs: 5000 });
+  m.drive({ pan: 0.5, tilt: 0 });
+  m.drive({ pan: 0, tilt: 0 });
+  await sleep(30);
+  assert.equal(m.moving, true, 'an unconfirmed stop still counts as moving');
+  assert.equal(m.stopPending(), true);
+  // The operator lets go again, or the deadman fires: that stop goes out.
+  const before = d.calls.filter((c) => c[1] === 0).length;
+  m.drive({ pan: 0, tilt: 0 });
+  await sleep(20);
+  assert.ok(d.calls.filter((c) => c[1] === 0).length > before, 'a repeated stop is sent, not suppressed');
+  failing = false;
+  await until(() => !m.stopPending(), { timeoutMs: 3000 });
+  assert.equal(m.moving, false);
+});
+
+test('a link lost while a stop is unconfirmed stops the head on reconnect', async () => {
+  resetFakeHeads();
+  const { cam } = fakeCamera('fake-r1');
+  cam.start();
+  try {
+    await until(() => cam.state === 'connected');
+    const head = fakeHead('fake-r1');
+    cam.move({ pan: 0.5 }, { latch: true, source: 'test' });
+    await until(() => head.v.pan === 0.5);
+    // The switch port flaps exactly as the operator lets go.
+    head.down = true;
+    cam.move({ pan: 0, tilt: 0 }, { latch: true, source: 'test' });
+    await until(() => cam.state === 'reconnecting', { timeoutMs: 2000 });
+    head.down = false;
+    await until(() => cam.state === 'connected', { timeoutMs: 2000 });
+    await until(() => head.v.pan === 0, { timeoutMs: 2000 });
+  } finally { await cam.stop(); }
+});
+
+test('Reconnect pressed during an attempt does not start a second one', async () => {
+  resetFakeHeads();
+  const head = fakeHead('fake-r2');
+  let identifies = 0;
+  const realIdentify = FakePtz.prototype.identify;
+  FakePtz.prototype.identify = async function () {
+    identifies += 1;
+    await sleep(150);
+    return realIdentify.call(this);
+  };
+  const { cam, events } = fakeCamera('fake-r2');
+  try {
+    cam.start();
+    await sleep(20);
+    cam.reconnect();
+    cam.reconnect();
+    await until(() => cam.state === 'connected', { timeoutMs: 2000 });
+    await sleep(300);
+    assert.equal(identifies, 1);
+    assert.equal(cam.state, 'connected');
+    assert.ok(!events.state.includes('offline'), events.state.join(' > '));
+  } finally {
+    FakePtz.prototype.identify = realIdentify;
+    head.down = false;
+    await cam.stop();
+  }
+});
+
+test('shutting down during a slow read still stops the head, and refuses new moves', async () => {
+  resetFakeHeads();
+  const { cam } = fakeCamera('fake-r3');
+  cam.start();
+  const realRead = FakePtz.prototype.read;
+  try {
+    await until(() => cam.state === 'connected');
+    const head = fakeHead('fake-r3');
+    cam.move({ pan: 0.7 }, { latch: true, source: 'test' });
+    await until(() => head.v.pan === 0.7);
+    FakePtz.prototype.read = async function (e) { await sleep(1500); return realRead.call(this, e); };
+    cam.due.settings = 0;
+    await sleep(80);   // a slow read is now in flight
+    const stopping = cam.stop();
+    assert.equal(cam.move({ pan: 1 }).ok, false, 'no new motion while stopping');
+    const t0 = Date.now();
+    await stopping;
+    assert.equal(head.v.pan, 0, 'the stop reached the head');
+    assert.ok(Date.now() - t0 < 1000, 'and did not wait for the read');
+  } finally {
+    FakePtz.prototype.read = realRead;
+    await cam.stop();
+  }
+});
+
+test('a refused preset recall leaves the head stopped, not moving with nobody owning it', async () => {
+  resetFakeHeads();
+  const { cam } = fakeCamera('fake-r4');
+  cam.start();
+  try {
+    await until(() => cam.state === 'connected');
+    const head = fakeHead('fake-r4');
+    cam.move({ pan: 0.6 }, { latch: true, source: 'test' });
+    await until(() => head.v.pan === 0.6);
+    const r = await cam.preset('recall', 3);   // empty: refused
+    assert.equal(r.status, 409);
+    assert.equal(head.v.pan, 0);
+  } finally { await cam.stop(); }
+});
+
+test('STOP on a camera that is not connected says it is not confirmed', async () => {
+  resetFakeHeads();
+  const { cam } = fakeCamera('fake-r5');
+  cam.start();
+  try {
+    await until(() => cam.state === 'connected');
+    fakeHead('fake-r5').down = true;
+    await until(() => cam.state === 'reconnecting', { timeoutMs: 2000 });
+    const r = await cam.stopMotion('panic');
+    assert.equal(r.ok, false);
+    assert.equal(r.body.unconfirmed, true);
+    assert.equal(cam.movingAtDrop, true, 'and the reconnect will send it');
+  } finally {
+    fakeHead('fake-r5').down = false;
+    await cam.stop();
+  }
 });
