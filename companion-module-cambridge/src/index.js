@@ -16,7 +16,24 @@ import { buildFeedbacks } from './feedbacks.js';
 import { buildPresets } from './presets.js';
 import { buildVariableDefinitions, buildVariableValues } from './variables.js';
 import { STEPPABLE } from './step.js';
-import { PtzHolds, isPtz } from './ptz.js';
+import { PtzHolds, isPtz, SELECTED, SELECTED_TAG } from './ptz.js';
+import {
+  bankSizeOf, bankCount, bankOf, stepSelection, selectionVariableDefs, selectionVariableValues,
+} from './select.js';
+
+/** Runs `fn` over `items` with at most `limit` in flight: 48 heads must not mean 48 requests at once. */
+async function mapLimit(items, limit, fn) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+const SCHEMA_FETCH_CONCURRENCY = 6;
+
+/** "Label (group)" when the camera has a group. */
+const cameraLabel = (c) => (c.group ? `${c.label || c.id} (${c.group})` : (c.label || c.id));
 
 class CambridgeInstance extends InstanceBase {
   constructor(internal) {
@@ -46,7 +63,26 @@ class CambridgeInstance extends InstanceBase {
     });
     /** Signature of the last definition rebuild, so we only rebuild when it matters. */
     this.definitionSignature = '';
+    /** PTZ heads in the order the server sent them (the operator's order). */
+    this.ptzCams = [];
+    /**
+     * Which PTZ head "(selected camera)" means. Local to this module instance:
+     * another surface has its own. Null only while there is no PTZ head.
+     */
+    this.selectedPtz = null;
+    /** Which bank of camera-select keys is showing, 0-based. */
+    this.ptzBank = 0;
+    /** id -> { src, cam }: what we received and the record we built from it. */
+    this.mappedCameras = new Map();
+    this.signatureCache = new WeakMap();
+    this.lastAlarmsByCamera = {};
   }
+
+  /** Camera-select keys per bank. Part of the definitions, so changing it rebuilds them. */
+  get bankSize() { return bankSizeOf(this.config); }
+
+  /** Whether each PTZ head also gets its own button category (off for big venues). */
+  get ptzPerCameraPresets() { return this.config?.ptzPerCameraPresets !== false; }
 
   async init(config) {
     this.config = config;
@@ -56,6 +92,14 @@ class CambridgeInstance extends InstanceBase {
 
   async configUpdated(config) {
     this.config = config;
+    // Bank size and the per-camera button switch change the definitions.
+    const signature = this.#signature();
+    if (this.cameras.length && signature !== this.definitionSignature) {
+      this.definitionSignature = signature;
+      this.#reconcileSelection();
+      this.rebuildDefinitions();
+      this.#publishSelection();
+    }
     this.api?.stop();
     // A held key must not outlive the connection it was started on. The stop is
     // best effort; the head's own deadman covers it if this does not arrive.
@@ -88,6 +132,15 @@ class CambridgeInstance extends InstanceBase {
       {
         type: 'number', id: 'port', label: 'Port', width: 4,
         default: 8088, min: 1, max: 65535,
+      },
+      {
+        type: 'number', id: 'bankSize', label: 'Camera-select keys per bank', width: 6,
+        default: 8, min: 1, max: 32,
+      },
+      {
+        type: 'checkbox', id: 'ptzPerCameraPresets', width: 6, default: true,
+        label: 'Ready-made buttons for every PTZ camera',
+        tooltip: 'Turn off at a venue with many heads: the "PTZ controller" buttons drive any camera, and the long per-camera lists go away.',
       },
     ];
   }
@@ -139,34 +192,85 @@ class CambridgeInstance extends InstanceBase {
     // Tally is not part of the camera record CamBridge sends when the ATEM
     // listener is off, so carry forward anything we already know rather than
     // blanking the tally feedbacks on every state frame.
-    const previousTally = new Map(this.cameras.map((c) => [c.id, c.tally]));
-    this.cameras = incoming.map((c) => ({ ...c, tally: c.tally ?? previousTally.get(c.id) ?? null }));
+    //
+    // A patched frame reuses the objects of every camera that did not change,
+    // so those are recognised by identity and keep the record built for them.
+    // That is what lets one head panning among 48 cost one head's work.
+    const previous = this.mappedCameras;
+    const mapped = new Map();
+    const changedIds = new Set();
+    this.cameras = incoming.map((c) => {
+      const old = previous.get(c.id);
+      const tally = c.tally ?? old?.cam.tally ?? null;
+      if (old && old.src === c && old.cam.tally === tally) {
+        mapped.set(c.id, old);
+        return old.cam;
+      }
+      const cam = { ...c, tally };
+      mapped.set(c.id, { src: c, cam });
+      changedIds.add(c.id);
+      return cam;
+    });
+    this.mappedCameras = mapped;
+    this.ptzCams = this.cameras.filter(isPtz);
 
-    // Rebuild action/feedback dropdowns only when the camera set changes.
-    // Doing it on every property tick would make Companion's UI unusable —
-    // dropdowns would reset under the operator's cursor while editing a button.
-    // A PTZ head's capabilities decide which buttons exist, so they count too;
-    // its pan/tilt/zoom position, which changes constantly, does not.
-    const signature = this.cameras.map((c) =>
-      `${c.id}:${c.label}${isPtz(c) ? `:ptz:${JSON.stringify(c.capabilities ?? null)}` : ''}`).join('|');
-    if (signature !== this.definitionSignature) {
+    // Rebuild action/feedback dropdowns only when the camera set, a name, a
+    // group or what a head can do changes. Doing it on every property tick
+    // would make Companion's UI unusable — dropdowns would reset under the
+    // operator's cursor while editing a button. A PTZ head's pan/tilt/zoom
+    // position, which changes constantly, is not part of it.
+    const signature = this.#signature();
+    const rebuilt = signature !== this.definitionSignature;
+    this.#reconcileSelection();
+    if (rebuilt) {
       this.definitionSignature = signature;
       this.rebuildDefinitions();
     }
     this.#refreshPtzDefinitions();
 
-    this.setVariableValues(buildVariableValues(this.cameras, {
-      camdConnected: this.camdConnected,
-      camdUsed: this.camdUsed,
-      alarmsByCamera: this.alarmsByCamera,
-      alarms: this.alarms,
-      roll: this.roll,
-    }));
+    // Which cameras' variables need writing: the changed ones, anyone whose
+    // alarms changed, and anyone rolling (their elapsed time moves with the clock).
+    let only = null;
+    if (!rebuilt) {
+      only = changedIds;
+      for (const c of this.cameras) {
+        if (c.recordStartedAt || this.alarmsByCamera[c.id] !== this.lastAlarmsByCamera[c.id]) only.add(c.id);
+      }
+    }
+    this.lastAlarmsByCamera = this.alarmsByCamera;
+
+    this.setVariableValues({
+      ...buildVariableValues(this.cameras, {
+        camdConnected: this.camdConnected,
+        camdUsed: this.camdUsed,
+        alarmsByCamera: this.alarmsByCamera,
+        alarms: this.alarms,
+        roll: this.roll,
+        only,
+      }),
+      ...this.#selectionValues(),
+    });
     this.checkFeedbacks();
   }
 
+  #cameraSignature(c) {
+    let sig = this.signatureCache.get(c);
+    if (sig === undefined) {
+      sig = `${c.id}:${c.label}:${c.group ?? ''}${isPtz(c) ? `:ptz:${JSON.stringify(c.capabilities ?? null)}` : ''}`;
+      this.signatureCache.set(c, sig);
+    }
+    return sig;
+  }
+
+  #signature() {
+    return `${this.cameras.map((c) => this.#cameraSignature(c)).join('|')}#${this.bankSize}#${this.ptzPerCameraPresets}`;
+  }
+
   rebuildDefinitions() {
-    this.setVariableDefinitions(buildVariableDefinitions(this.cameras));
+    this.setVariableDefinitions([
+      ...buildVariableDefinitions(this.cameras),
+      ...(this.ptzCams.length ? selectionVariableDefs(this.bankSize) : []),
+    ]);
     this.setActionDefinitions(buildActions(this));
     this.setFeedbackDefinitions(buildFeedbacks(this));
     this.setPresetDefinitions(buildPresets(this));
@@ -193,10 +297,10 @@ class CambridgeInstance extends InstanceBase {
   }
 
   async #loadPtzDetails(cams) {
-    await Promise.all(cams.map(async (c) => {
+    await mapLimit(cams, SCHEMA_FETCH_CONCURRENCY, async (c) => {
       const r = await this.api.request('GET', `/api/cameras/${encodeURIComponent(c.id)}/schema`);
       if (r.ok && Array.isArray(r.body?.entries)) this.ptzSchemas[c.id] = r.body.entries;
-    }));
+    });
     await this.refreshPtzPresetNames({ rebuild: false });
     // Drop what belongs to a head that has gone.
     const ids = new Set(this.cameras.filter(isPtz).map((c) => c.id));
@@ -207,12 +311,12 @@ class CambridgeInstance extends InstanceBase {
   /** Saved preset names for every PTZ head, for the "by name" dropdowns. */
   async refreshPtzPresetNames({ rebuild = true } = {}) {
     if (!this.api) return;
-    await Promise.all(this.cameras.filter(isPtz).map(async (c) => {
+    await mapLimit(this.cameras.filter(isPtz), SCHEMA_FETCH_CONCURRENCY, async (c) => {
       const r = await this.api.request('GET', `/api/cameras/${encodeURIComponent(c.id)}/ptz/presets`);
       if (r.ok && Array.isArray(r.body?.presets)) {
         this.ptzPresetNames[c.id] = r.body.presets.filter((p) => p.name).map((p) => ({ n: p.n, name: p.name }));
       }
-    }));
+    });
     if (rebuild) this.rebuildDefinitions();
   }
 
@@ -241,6 +345,88 @@ class CambridgeInstance extends InstanceBase {
     this.rebuildDefinitions();
   }
 
+  // --- selected camera and banks ---------------------------------------------
+
+  /** The camera id an action's camera option means: "(selected camera)" becomes the selection (or null). */
+  resolvePtz(option) {
+    return option === SELECTED ? this.selectedPtz : option;
+  }
+
+  /** The camera in bank slot `n` (1-based) of the bank showing, or null. */
+  bankCamera(n) {
+    return this.ptzCams[this.ptzBank * this.bankSize + (n - 1)] ?? null;
+  }
+
+  /**
+   * Selects a head. A key still held on the previous selection is stopped first
+   * (the stop is queued before anything else can be sent), so moving the
+   * selection mid-press can never leave a head panning with nobody holding it.
+   */
+  selectPtz(id) {
+    if (!this.ptzCams.some((c) => c.id === id)) return Promise.resolve();
+    const stopped = this.selectedPtz !== id ? this.ptzHolds.releaseTagged(SELECTED_TAG) : Promise.resolve();
+    this.selectedPtz = id;
+    // The bank follows the selection, so a "next camera" key never selects
+    // something the bank row is not showing.
+    this.ptzBank = bankOf(this.ptzCams, id, this.bankSize);
+    this.#publishSelection();
+    return stopped;
+  }
+
+  selectBankSlot(n) {
+    const cam = this.bankCamera(n);
+    return cam ? this.selectPtz(cam.id) : Promise.resolve();
+  }
+
+  /** Next / previous head, optionally only within one group. */
+  stepPtz(direction, group = '') {
+    const list = group ? this.ptzCams.filter((c) => c.group === group) : this.ptzCams;
+    const id = stepSelection(list, this.selectedPtz, direction);
+    return id ? this.selectPtz(id) : Promise.resolve();
+  }
+
+  /** Changes which cameras the select keys show; the selection stays where it is. */
+  moveBank(mode, number = 1) {
+    const count = bankCount(this.ptzCams.length, this.bankSize);
+    if (mode === 'next') this.ptzBank = (this.ptzBank + 1) % count;
+    else if (mode === 'previous') this.ptzBank = (this.ptzBank - 1 + count) % count;
+    else this.ptzBank = Math.max(0, Math.min(count - 1, (Number.isFinite(number) ? number : 1) - 1));
+    this.#publishSelection();
+  }
+
+  /**
+   * Keeps the selection pointing at a head that exists. A selection survives
+   * every camera-list change that leaves its head in place; if the head has
+   * gone the first one is selected, and anything held on it is stopped.
+   */
+  #reconcileSelection() {
+    const had = this.selectedPtz;
+    if (!this.ptzCams.some((c) => c.id === had)) {
+      this.selectedPtz = this.ptzCams[0]?.id ?? null;
+      if (had !== null) this.ptzHolds.releaseTagged(SELECTED_TAG);
+      this.ptzBank = this.selectedPtz ? bankOf(this.ptzCams, this.selectedPtz, this.bankSize) : 0;
+    } else {
+      this.ptzBank = Math.min(this.ptzBank, bankCount(this.ptzCams.length, this.bankSize) - 1);
+    }
+  }
+
+  #selectionValues() {
+    return selectionVariableValues({
+      selected: this.camera(this.selectedPtz),
+      list: this.ptzCams,
+      bank: this.ptzBank,
+      bankSize: this.bankSize,
+    });
+  }
+
+  /** Selection or bank moved: refresh the variables and feedbacks that read them. */
+  #publishSelection() {
+    if (!this.ptzCams.length) return;
+    this.setVariableValues(this.#selectionValues());
+    this.checkFeedbacks('ptzSelected', 'ptzSlotSelected', 'ptzSlotTally', 'ptzSlotOffline',
+      'ptzTracking', 'ptzPresetCurrent', 'ptzMoving');
+  }
+
   // --- helpers used by actions/feedbacks -----------------------------------
 
   camera(id) {
@@ -258,7 +444,14 @@ class CambridgeInstance extends InstanceBase {
     if (!list.length) {
       return [{ id: '', label: kind === 'ptz' ? '(no PTZ cameras yet)' : '(no cameras yet)' }];
     }
-    return list.map((c) => ({ id: c.id, label: c.label || c.id }));
+    // Server order, not alphabetical: it is the operator's order. A group, when
+    // there is one, is shown so 48 names stay tellable apart.
+    return list.map((c) => ({ id: c.id, label: cameraLabel(c) }));
+  }
+
+  /** PTZ cameras for a dropdown, with "(selected camera)" first. */
+  ptzCameraChoices() {
+    return [{ id: SELECTED, label: '(selected camera)' }, ...this.cameraChoices('ptz')];
   }
 
   propChoices() {

@@ -33,6 +33,16 @@ export const HOLD_MAX_MS = 60_000;
 
 export const isPtz = (cam) => cam?.kind === 'ptz';
 
+/**
+ * The camera choice that means "whichever head this Stream Deck has selected",
+ * like the select keys on a hardware PTZ controller. It is the default for new
+ * buttons, so one page of keys can drive any of dozens of heads. The selection
+ * is module-local: another surface's selection is its own.
+ */
+export const SELECTED = '__selected__';
+/** Holds started on "(selected camera)" carry this tag, so changing selection can stop exactly them. */
+export const SELECTED_TAG = 'selected';
+
 const enc = encodeURIComponent;
 
 // --- press and hold -------------------------------------------------------
@@ -63,14 +73,17 @@ export class PtzHolds {
   /** Whether anything is being held — for tests and for the connection-drop path. */
   get active() { return this.cameras.size > 0; }
 
-  /** @param {string} key  identifies the pressed key, e.g. "<controlId>|ptzPanTilt" */
-  start(key, cameraId, axes) {
+  /**
+   * @param {string} key  identifies the pressed key, e.g. "<controlId>|ptzPanTilt"
+   * @param {string|null} [tag]  groups holds for releaseTagged()
+   */
+  start(key, cameraId, axes, tag = null) {
     let cam = this.cameras.get(cameraId);
     if (!cam) {
       cam = { holds: new Map(), timer: null, pending: Promise.resolve(), queued: false };
       this.cameras.set(cameraId, cam);
     }
-    cam.holds.set(key, { axes, since: Date.now() });
+    cam.holds.set(key, { axes, since: Date.now(), tag });
     this.#send(cameraId, cam);
     if (!cam.timer) cam.timer = setInterval(() => this.#tick(cameraId), this.refreshMs);
   }
@@ -81,15 +94,38 @@ export class PtzHolds {
    * whole head is told to stop.
    */
   release(controlPrefix, cameraId) {
+    return this.#drop(cameraId, (key) => key.startsWith(controlPrefix));
+  }
+
+  /**
+   * Button up for a key whose camera was "(selected camera)": the selection may
+   * have moved since the press, so release wherever this control is holding.
+   */
+  releaseControl(controlPrefix) {
+    return Promise.all([...this.cameras.keys()].map((id) => this.release(controlPrefix, id)));
+  }
+
+  /**
+   * Stops every hold that was started on the selected camera. Called when the
+   * selection changes, so a key still down stops the head it was driving rather
+   * than carrying on with a camera the operator has moved away from.
+   */
+  releaseTagged(tag) {
+    return Promise.all([...this.cameras.keys()].map((id) =>
+      this.#drop(id, (key, hold) => hold.tag === tag)));
+  }
+
+  #drop(cameraId, match) {
     const cam = this.cameras.get(cameraId);
     if (!cam) return Promise.resolve();
     const freed = new Set();
-    for (const [key, hold] of cam.holds) {
-      if (key.startsWith(controlPrefix)) {
+    for (const [key, hold] of [...cam.holds]) {
+      if (match(key, hold)) {
         for (const a of Object.keys(hold.axes)) freed.add(a);
         cam.holds.delete(key);
       }
     }
+    if (freed.size === 0) return Promise.resolve();
     if (cam.holds.size === 0) return this.#finish(cameraId, cam);
     // Another key is still down: zero only what this one drove.
     const still = this.#merged(cam);
@@ -169,7 +205,7 @@ export class PtzHolds {
 // --- directions -----------------------------------------------------------
 
 // Positive pan is right and positive tilt is up, as CamBridge defines them.
-const DIRECTIONS = [
+export const DIRECTIONS = [
   { id: 'up-left', label: 'Up-left', pan: -1, tilt: 1, glyph: '↖' },
   { id: 'up', label: 'Up', pan: 0, tilt: 1, glyph: '↑' },
   { id: 'up-right', label: 'Up-right', pan: 1, tilt: 1, glyph: '↗' },
@@ -227,12 +263,12 @@ export function trackingValue(entry, on) {
 const entryLabel = (e) => `${e.group ? `${e.group}: ` : ''}${e.label}`;
 
 /** The value field for one table entry, shown only when that camera + setting is picked. */
-function valueField(camId, entry) {
+function valueField(camId, entry, optionValue = camId) {
   const base = {
     id: `v_${varId(camId)}_${entry.id}`,
     label: 'Value',
     isVisibleExpression:
-      `$(options:camera) == ${JSON.stringify(camId)} && $(options:setting_${varId(camId)}) == ${JSON.stringify(entry.id)}`,
+      `$(options:camera) == ${JSON.stringify(optionValue)} && $(options:setting_${varId(camId)}) == ${JSON.stringify(entry.id)}`,
   };
   switch (entry.type) {
     case 'enum':
@@ -261,21 +297,67 @@ function presetNumber(options) {
   return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
+/**
+ * Entries from several cameras' lists as one list, first sighting of an id
+ * winning, and an enum's options merged. Used for "(selected camera)", which
+ * has to offer what any head might have.
+ */
+export function unionEntries(lists) {
+  const byId = new Map();
+  for (const list of lists) {
+    for (const e of list ?? []) {
+      const have = byId.get(e.id);
+      if (!have) {
+        byId.set(e.id, e.type === 'enum' ? { ...e, options: [...(e.options ?? [])] } : e);
+      } else if (have.type === 'enum' && e.type === 'enum') {
+        for (const o of e.options ?? []) if (!have.options.some((x) => x.value === o.value)) have.options.push(o);
+      }
+    }
+  }
+  return [...byId.values()];
+}
+
+/** The "set any setting" fields for the selected camera: the union of every head's settings. */
+function selectedSettingFields(self, cams) {
+  const entries = unionEntries(cams.map((c) => usableEntries(self.ptzSchemas[c.id])));
+  const visible = `$(options:camera) == ${JSON.stringify(SELECTED)}`;
+  if (!entries.length) {
+    return [{
+      type: 'static-text', id: 'none_selected', label: 'Settings',
+      value: 'Settings load once the cameras have connected.', isVisibleExpression: visible,
+    }];
+  }
+  return [
+    {
+      type: 'dropdown', id: 'setting_selected', label: 'Setting', default: entries[0].id,
+      choices: entries.map((e) => ({ id: e.id, label: entryLabel(e) })),
+      isVisibleExpression: visible,
+    },
+    ...entries.map((e) => valueField('selected', e, SELECTED)),
+  ];
+}
+
 // --- actions --------------------------------------------------------------
 
 export function buildPtzActions(self) {
   const cams = self.cameras.filter(isPtz);
   if (!cams.length) return {};
-  const camChoices = self.cameraChoices('ptz');
+  // "(selected camera)" first and the default: a new button drives whatever head
+  // the operator has selected, which is how one page covers dozens of heads.
+  const camChoices = self.ptzCameraChoices();
   const camField = () => ({
-    type: 'dropdown', id: 'camera', label: 'Camera', default: camChoices[0]?.id ?? '', choices: camChoices,
+    type: 'dropdown', id: 'camera', label: 'Camera', default: SELECTED, choices: camChoices,
   });
+  /** The camera an action means, or null (nothing selected yet). */
+  const target = (ev) => self.resolvePtz(ev.options.camera);
+  const holdTag = (ev) => (ev.options.camera === SELECTED ? SELECTED_TAG : null);
   const holdKey = (ev, actionId) => `${ev.controlId ?? 'anon'}|${actionId}`;
   const maxPreset = Math.max(1, ...cams.map((c) => c.capabilities?.presets ?? 0));
   const visibleFor = (c) => `$(options:camera) == ${JSON.stringify(c.id)}`;
 
   /** Runs the camera function tagged with `role`, or says why nothing happened. */
   const runRole = (camera, role) => {
+    if (!camera) return;
     const entry = roleEntry(self.ptzSchemas[camera], role);
     if (!entry) {
       self.log('debug', `${camera} has no "${role}" function`);
@@ -299,8 +381,10 @@ export function buildPtzActions(self) {
       callback: (ev) => {
         const d = DIRECTIONS.find((x) => x.id === ev.options.direction);
         if (!d) return;
+        const camera = target(ev);
+        if (!camera) return;
         const s = speedOf(ev.options);
-        self.ptzHolds.start(holdKey(ev, 'ptzPanTilt'), ev.options.camera, { pan: d.pan * s, tilt: d.tilt * s });
+        self.ptzHolds.start(holdKey(ev, 'ptzPanTilt'), camera, { pan: d.pan * s, tilt: d.tilt * s }, holdTag(ev));
       },
     },
 
@@ -315,9 +399,11 @@ export function buildPtzActions(self) {
         speedField,
       ],
       callback: (ev) => {
+        const camera = target(ev);
+        if (!camera) return;
         const s = speedOf(ev.options);
-        self.ptzHolds.start(holdKey(ev, 'ptzZoom'), ev.options.camera,
-          { zoom: ev.options.direction === 'out' ? -s : s });
+        self.ptzHolds.start(holdKey(ev, 'ptzZoom'), camera,
+          { zoom: ev.options.direction === 'out' ? -s : s }, holdTag(ev));
       },
     },
 
@@ -332,9 +418,11 @@ export function buildPtzActions(self) {
         speedField,
       ],
       callback: (ev) => {
+        const camera = target(ev);
+        if (!camera) return;
         const s = speedOf(ev.options);
-        self.ptzHolds.start(holdKey(ev, 'ptzFocus'), ev.options.camera,
-          { focus: ev.options.direction === 'near' ? -s : s });
+        self.ptzHolds.start(holdKey(ev, 'ptzFocus'), camera,
+          { focus: ev.options.direction === 'near' ? -s : s }, holdTag(ev));
       },
     },
 
@@ -342,7 +430,13 @@ export function buildPtzActions(self) {
       name: 'PTZ: release (stop held movement)',
       description: 'Use on the button\'s release. Stops what this button started and leaves other held keys alone.',
       options: [camField()],
-      callback: (ev) => self.ptzHolds.release(`${ev.controlId ?? 'anon'}|`, ev.options.camera),
+      callback: (ev) => {
+        const prefix = `${ev.controlId ?? 'anon'}|`;
+        // The selection may have moved while the key was down; release wherever it holds.
+        return ev.options.camera === SELECTED
+          ? self.ptzHolds.releaseControl(prefix)
+          : self.ptzHolds.release(prefix, ev.options.camera);
+      },
     },
 
     ptzStopAll: {
@@ -366,8 +460,9 @@ export function buildPtzActions(self) {
       ],
       callback: (ev) => {
         const n = presetNumber(ev.options);
-        if (n === null) return;
-        return self.api.request('POST', `/api/cameras/${enc(ev.options.camera)}/ptz/presets/${n}/recall`, {});
+        const camera = target(ev);
+        if (n === null || !camera) return;
+        return self.api.request('POST', `/api/cameras/${enc(camera)}/ptz/presets/${n}/recall`, {});
       },
     },
 
@@ -384,10 +479,11 @@ export function buildPtzActions(self) {
       ],
       callback: async (ev) => {
         const n = presetNumber(ev.options);
-        if (n === null) return;
+        const camera = target(ev);
+        if (n === null || !camera) return;
         const name = (await self.parseVariablesInString(String(ev.options.name ?? ''))).trim();
         const r = await self.api.request(
-          'POST', `/api/cameras/${enc(ev.options.camera)}/ptz/presets/${n}/store`, name ? { name } : {});
+          'POST', `/api/cameras/${enc(camera)}/ptz/presets/${n}/store`, name ? { name } : {});
         await self.refreshPtzPresetNames();
         return r;
       },
@@ -397,6 +493,17 @@ export function buildPtzActions(self) {
       name: 'PTZ: run a camera function (home, one-push AF ...)',
       options: [
         camField(),
+        // The selected camera could be any head, so it is offered every function
+        // any head has; one the selected head lacks does nothing.
+        (() => {
+          const fns = unionEntries(cams.map((c) => usableFunctions(self.ptzSchemas[c.id])));
+          return {
+            type: 'dropdown', id: 'fn_selected', label: 'Function',
+            default: fns[0]?.id ?? '',
+            choices: fns.length ? fns.map((e) => ({ id: e.id, label: entryLabel(e) })) : [{ id: '', label: '(none)' }],
+            isVisibleExpression: `$(options:camera) == ${JSON.stringify(SELECTED)}`,
+          };
+        })(),
         ...cams.map((c) => {
           const fns = usableFunctions(self.ptzSchemas[c.id]);
           return {
@@ -408,22 +515,28 @@ export function buildPtzActions(self) {
         }),
       ],
       callback: (ev) => {
-        const id = ev.options[`fn_${varId(ev.options.camera)}`];
+        const camera = target(ev);
+        if (!camera) return;
+        const id = ev.options[ev.options.camera === SELECTED ? 'fn_selected' : `fn_${varId(camera)}`];
         if (!id) return;
-        return self.api.request('POST', `/api/cameras/${enc(ev.options.camera)}/actions/${enc(id)}`);
+        if (ev.options.camera === SELECTED && !usableFunctions(self.ptzSchemas[camera]).some((e) => e.id === id)) {
+          self.log('debug', `${camera} has no "${id}" function`);
+          return;
+        }
+        return self.api.request('POST', `/api/cameras/${enc(camera)}/actions/${enc(id)}`);
       },
     },
 
     ptzHome: {
       name: 'PTZ: go to home position',
       options: [camField()],
-      callback: (ev) => runRole(ev.options.camera, 'home'),
+      callback: (ev) => runRole(target(ev), 'home'),
     },
 
     ptzOnePushAf: {
       name: 'PTZ: one-push autofocus',
       options: [camField()],
-      callback: (ev) => runRole(ev.options.camera, 'onePushAf'),
+      callback: (ev) => runRole(target(ev), 'onePushAf'),
     },
 
     ptzSetting: {
@@ -431,6 +544,7 @@ export function buildPtzActions(self) {
       description: 'Every ordinary setting the camera\'s own table offers. Network, users, firmware and reset are not listed.',
       options: [
         camField(),
+        ...selectedSettingFields(self, cams),
         ...cams.flatMap((c) => {
           const entries = usableEntries(self.ptzSchemas[c.id]);
           if (!entries.length) {
@@ -451,11 +565,15 @@ export function buildPtzActions(self) {
         }),
       ],
       callback: async (ev) => {
-        const camera = ev.options.camera;
+        const camera = target(ev);
+        if (!camera) return;
+        // For the selected camera the setting and value come from the shared
+        // "selected" fields, not the per-camera ones.
+        const key = ev.options.camera === SELECTED ? 'selected' : varId(camera);
         const entry = usableEntries(self.ptzSchemas[camera])
-          .find((e) => e.id === ev.options[`setting_${varId(camera)}`]);
+          .find((e) => e.id === ev.options[`setting_${key}`]);
         if (!entry) return;
-        let value = ev.options[`v_${varId(camera)}_${entry.id}`];
+        let value = ev.options[`v_${key}_${entry.id}`];
         if (entry.type === 'bool') value = value === true || value === 'true';
         else if (entry.type === 'range') value = Number(value);
         else if (entry.type === 'text') value = await self.parseVariablesInString(String(value ?? ''));
@@ -469,21 +587,25 @@ export function buildPtzActions(self) {
 
   const withTracking = cams.filter((c) => c.capabilities?.tracking);
   if (withTracking.length) {
-    const trackChoices = withTracking.map((c) => ({ id: c.id, label: c.label || c.id }));
+    const trackChoices = self.ptzCameraChoices()
+      .filter((ch) => ch.id === SELECTED || withTracking.some((c) => c.id === ch.id));
     actions.ptzTracking = {
       name: 'PTZ: tracking on / off / toggle',
       options: [
-        { type: 'dropdown', id: 'camera', label: 'Camera', default: trackChoices[0].id, choices: trackChoices },
+        { type: 'dropdown', id: 'camera', label: 'Camera', default: SELECTED, choices: trackChoices },
         {
           type: 'dropdown', id: 'mode', label: 'Action', default: 'toggle',
           choices: [{ id: 'toggle', label: 'Toggle' }, { id: 'on', label: 'On' }, { id: 'off', label: 'Off' }],
         },
       ],
       callback: (ev) => {
-        const cam = self.camera(ev.options.camera);
-        const on = ev.options.mode === 'on' ? true : ev.options.mode === 'off' ? false : !cam?.ptz?.tracking;
-        const entry = trackingEntry(self.ptzSchemas[ev.options.camera]);
-        return self.setProp(ev.options.camera, entry?.id ?? 'trackingEnabled', trackingValue(entry, on));
+        const camera = target(ev);
+        const cam = self.camera(camera);
+        // The selected head may be one with no tracking at all.
+        if (!cam || (ev.options.camera === SELECTED && !cam.capabilities?.tracking)) return;
+        const on = ev.options.mode === 'on' ? true : ev.options.mode === 'off' ? false : !cam.ptz?.tracking;
+        const entry = trackingEntry(self.ptzSchemas[camera]);
+        return self.setProp(camera, entry?.id ?? 'trackingEnabled', trackingValue(entry, on));
       },
     };
   }
@@ -496,10 +618,11 @@ export function buildPtzActions(self) {
 export function buildPtzFeedbacks(self) {
   const cams = self.cameras.filter(isPtz);
   if (!cams.length) return {};
-  const choices = self.cameraChoices('ptz');
+  const choices = self.ptzCameraChoices();
   const camField = () => ({
-    type: 'dropdown', id: 'camera', label: 'Camera', default: choices[0]?.id ?? '', choices,
+    type: 'dropdown', id: 'camera', label: 'Camera', default: SELECTED, choices,
   });
+  const cameraOf = (fb) => self.camera(self.resolvePtz(fb.options.camera));
 
   return {
     ptzTracking: {
@@ -507,7 +630,7 @@ export function buildPtzFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: GREEN, color: WHITE },
       options: [camField()],
-      callback: (fb) => !!self.camera(fb.options.camera)?.ptz?.tracking,
+      callback: (fb) => !!cameraOf(fb)?.ptz?.tracking,
     },
 
     ptzPresetCurrent: {
@@ -516,7 +639,7 @@ export function buildPtzFeedbacks(self) {
       defaultStyle: { bgcolor: BLUE, color: WHITE },
       options: [camField(), { type: 'number', id: 'preset', label: 'Preset number', default: 1, min: 0, max: 999 }],
       callback: (fb) => {
-        const cur = self.camera(fb.options.camera)?.ptz?.preset;
+        const cur = cameraOf(fb)?.ptz?.preset;
         return cur !== null && cur !== undefined && Number(cur) === Number(fb.options.preset);
       },
     },
@@ -526,7 +649,7 @@ export function buildPtzFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: AMBER, color: BLACK },
       options: [camField()],
-      callback: (fb) => !!self.camera(fb.options.camera)?.ptz?.moving,
+      callback: (fb) => !!cameraOf(fb)?.ptz?.moving,
     },
   };
 }
@@ -544,8 +667,9 @@ export const PTZ_VARIABLES = [
 
 const percent = (v) => (Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1, v)) * 100) : '');
 
-export function ptzVariableValues(cam) {
-  const v = varId(cam.id);
+/** Position, preset and tracking values for one head, under `prefix` (default: the camera's own id). */
+export function ptzVariableValues(cam, prefix = varId(cam.id)) {
+  const v = prefix;
   const p = cam.ptz ?? {};
   return {
     [`${v}_pan`]: percent(p.pan),
@@ -559,10 +683,10 @@ export function ptzVariableValues(cam) {
 
 // --- ready-made buttons ---------------------------------------------------
 
-const padStyle = (text, size = '18') => ({ text, size, color: WHITE, bgcolor: DARK });
+export const padStyle = (text, size = '18') => ({ text, size, color: WHITE, bgcolor: DARK });
 
 /** A press-and-hold button: motion on down, stop on up. */
-const holdButton = (category, name, text, size, start, release) => ({
+export const holdButton = (category, name, text, size, start, release) => ({
   type: 'button',
   category,
   name,
@@ -573,6 +697,9 @@ const holdButton = (category, name, text, size, start, release) => ({
 
 export function buildPtzPresets(self) {
   const presets = {};
+  // Big venues turn the per-camera categories off: they are hundreds of buttons
+  // to build and to scroll, and the controller page covers them.
+  if (!self.ptzPerCameraPresets) return presets;
 
   for (const cam of self.cameras.filter(isPtz)) {
     const v = varId(cam.id);

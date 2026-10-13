@@ -5,6 +5,7 @@
 import { combineRgb } from '@companion-module/base';
 import { varId } from './variables.js';
 import { buildPtzPresets } from './ptz.js';
+import { buildControllerPresets } from './select.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -62,6 +63,9 @@ export function buildPresets(self) {
         ],
       };
     }
+
+    // At a big venue the PTZ heads' own categories are off; tally lives on the controller page's keys.
+    if (cam.kind === 'ptz' && !self.ptzPerCameraPresets) continue;
 
     presets[`tally_${v}`] = {
       type: 'button',
@@ -171,5 +175,5 @@ export function buildPresets(self) {
     };
   }
 
-  return { ...presets, ...buildPtzPresets(self) };
+  return { ...presets, ...buildPtzPresets(self), ...buildControllerPresets(self) };
 }

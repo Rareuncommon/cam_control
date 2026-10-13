@@ -84,8 +84,13 @@ function clock(seconds) {
   return hh > 0 ? `${hh}:${pad(mm)}:${pad(s % 60)}` : `${mm}:${pad(s % 60)}`;
 }
 
+/**
+ * @param {Set<string>|null} [only]  per-camera values for just these ids; the
+ *        summary values (counts, daemon, alarms) are always included.
+ */
 export function buildVariableValues(cameras, {
   camdConnected = true, camdUsed = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(),
+  only = null,
 } = {}) {
   const connected = cameras.filter((c) => c.state === 'connected').length;
   const values = {
@@ -102,6 +107,9 @@ export function buildVariableValues(cameras, {
   };
 
   for (const cam of cameras) {
+    // `only` is the cameras that changed since the last call. With dozens of
+    // heads a position update touches one, and the rest need no rewriting.
+    if (only && !only.has(cam.id)) continue;
     const v = varId(cam.id);
     const t = cam.tally;
     values[`${v}_label`] = cam.label ?? cam.id;

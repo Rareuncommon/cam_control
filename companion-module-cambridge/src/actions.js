@@ -7,6 +7,7 @@
 
 import { STEPPABLE, nextValue, snap } from './step.js';
 import { buildPtzActions } from './ptz.js';
+import { buildSelectionActions } from './select.js';
 
 const RAMP_CHOICES = [
   { id: 0, label: 'Instant' },
@@ -342,5 +343,5 @@ export function buildActions(self) {
     },
   };
 
-  return { ...sony, ...buildPtzActions(self) };
+  return { ...sony, ...buildPtzActions(self), ...buildSelectionActions(self) };
 }
