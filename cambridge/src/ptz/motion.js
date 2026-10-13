@@ -59,7 +59,10 @@ export class MotionController {
    * @param {{source?: string, holdMs?: number, latch?: boolean}} [o]
    */
   drive(v, { source = 'panel', holdMs, latch = false } = {}) {
-    const hold = latch ? Infinity : Math.min(Math.max(holdMs ?? this.deadmanMs, 100), 5000);
+    // The ceiling is for in-process callers with a reason (a VISCA controller
+    // over UDP, which cannot be watched for disconnection). The HTTP route
+    // clamps its own callers far lower.
+    const hold = latch ? Infinity : Math.min(Math.max(holdMs ?? this.deadmanMs, 100), 60_000);
     const now = Date.now();
     for (const [group, axes] of Object.entries(GROUPS)) {
       if (!axes.some((a) => a in v)) continue;

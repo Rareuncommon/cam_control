@@ -938,7 +938,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           // deadman's own log line says when a move ended and why.
           const v = {};
           for (const a of ['pan', 'tilt', 'zoom', 'focus']) if (a in body) v[a] = Number(body[a]);
-          r = ptz.move(cameraId, v, { source: `http:${who.label}`, holdMs: Number(body.holdMs) || undefined });
+          // A client may ask for a little more slack than the default (Wi-Fi
+          // jitter), never enough to make the deadman meaningless.
+          const holdMs = Math.min(Number(body.holdMs) || 0, 2000) || undefined;
+          r = ptz.move(cameraId, v, { source: `http:${who.label}`, holdMs });
         } else if (op === 'stop') {
           r = await ptz.stopMotion(cameraId, `stop from ${who.label}`);
         } else if (op === 'point') {

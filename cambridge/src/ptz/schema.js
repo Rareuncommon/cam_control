@@ -73,12 +73,17 @@ export function validateTable(entries) {
         }
       }
     }
+    if (e.role !== undefined && !ROLES.includes(e.role)) problems.push(`${at}: unknown role "${e.role}"`);
     if (e.type === 'range') {
       const r = e.range;
       if (!r || !Number.isFinite(r.min) || !Number.isFinite(r.max) || r.min > r.max) {
         problems.push(`${at}: range needs finite min <= max`);
       }
     }
+  }
+  const roles = entries.filter((e) => e?.role).map((e) => e.role);
+  for (const r of new Set(roles)) {
+    if (roles.filter((x) => x === r).length > 1) problems.push(`role "${r}" is on more than one entry`);
   }
   return problems;
 }
@@ -156,6 +161,24 @@ export function labelFor(entry, value) {
 /** The table as the browser gets it: no wire details, nothing a driver uses privately. */
 export function publicSchema(entries) {
   return entries.map(({ wire, ...rest }) => rest);
+}
+
+/**
+ * Functions that exist on most heads under different names. Drivers tag the
+ * entry that is this function on their camera with `role`, so the VISCA
+ * server, the SKAARHOJ panel, Companion and the Operate card can find "one-push
+ * AF" on a Canon and a Panasonic alike without a table of vendor ids.
+ */
+export const ROLES = Object.freeze([
+  'home', 'onePushAf', 'focusMode', 'iris', 'irisMode', 'gain', 'shutter', 'nd',
+  'whiteBalanceMode', 'colorTemp', 'trackingEnabled', 'trackingTarget', 'tally',
+  'ipAddress', 'cameraName',
+]);
+
+/** The entry carrying a role, or null. */
+export function roleEntry(entries, role) {
+  for (const e of entries ?? []) if (e.role === role && e.available !== false) return e;
+  return null;
 }
 
 /** Whether an entry belongs behind the admin route. */
