@@ -6,8 +6,14 @@
 // be misidentified, so the most specific probes go first.
 
 import { FakePtz } from './fake.js';
+import { SonyBrc } from './sony-brc.js';
+import { PtzOptics } from './ptzoptics.js';
 
 export const DRIVERS = new Map([
+  // Sony first: one CGI inquiry with a Param=value reply nobody else sends.
+  [SonyBrc.vendor, SonyBrc],
+  // PTZOptics: JSON get_device_conf, or raw VISCA on TCP 5678.
+  [PtzOptics.vendor, PtzOptics],
   [FakePtz.vendor, FakePtz],
 ]);
 
