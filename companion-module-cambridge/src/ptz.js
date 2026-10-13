@@ -67,7 +67,7 @@ export class PtzHolds {
   start(key, cameraId, axes) {
     let cam = this.cameras.get(cameraId);
     if (!cam) {
-      cam = { holds: new Map(), timer: null, pending: Promise.resolve() };
+      cam = { holds: new Map(), timer: null, pending: Promise.resolve(), queued: false };
       this.cameras.set(cameraId, cam);
     }
     cam.holds.set(key, { axes, since: Date.now() });
@@ -126,8 +126,22 @@ export class PtzHolds {
     return cam.pending;
   }
 
+  /**
+   * At most one move waiting behind the one in flight. Without this a slow
+   * server builds a queue of stale moves, ticking in every 150 ms, and a
+   * release then waits behind all of them before its stop is sent. The waiting
+   * move reads the holds when it runs, so it is always the newest.
+   */
   #send(cameraId, cam) {
-    return this.#chain(cam, () => this.moveFn(cameraId, this.#merged(cam)));
+    if (cam.queued) return cam.pending;
+    cam.queued = true;
+    return this.#chain(cam, () => {
+      cam.queued = false;
+      const axes = this.#merged(cam);
+      // Released while waiting: the stop behind this says everything.
+      if (Object.keys(axes).length === 0) return undefined;
+      return this.moveFn(cameraId, axes);
+    });
   }
 
   #tick(cameraId) {

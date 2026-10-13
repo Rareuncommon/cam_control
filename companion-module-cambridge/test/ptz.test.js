@@ -475,8 +475,9 @@ test('a held key sends at once, refreshes while down, and stops on release', asy
     await flush();
     assert.deepEqual(calls, [['move', 'left', { pan: 0.5, tilt: 0 }]]);
 
-    mock.timers.tick(HOLD_REFRESH_MS * 3);
-    await flush();
+    // One interval at a time, as real time passes: ticks fired back to back
+    // with no gap are collapsed into one waiting move, deliberately.
+    for (let i = 0; i < 3; i++) { mock.timers.tick(HOLD_REFRESH_MS); await flush(); }
     assert.equal(calls.filter((c) => c[0] === 'move').length, 4);
     assert.ok(HOLD_REFRESH_MS < 500, 'must refresh inside the server deadman');
 
@@ -535,6 +536,30 @@ test('different cameras hold independently', async () => {
   }
 });
 
+test('a slow server gets one waiting move, not a backlog a release must wait behind', async () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  try {
+    const order = [];
+    let finish;
+    const holds = new PtzHolds({
+      move: () => new Promise((resolve) => { order.push('move'); finish = resolve; }),
+      stop: async () => { order.push('stop'); },
+      log: () => {},
+    });
+    holds.start('c|ptzPanTilt', 'left', { pan: 1 });
+    await flush();
+    // Ten refresh intervals pass while the first move is still in flight.
+    for (let i = 0; i < 10; i++) { mock.timers.tick(HOLD_REFRESH_MS); await flush(); }
+    const released = holds.release('c|', 'left');
+    finish();
+    await released;
+    // The waiting move found nothing held and stood down; the stop followed at once.
+    assert.deepEqual(order, ['move', 'stop']);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
 test('releasing something that is not held does nothing', async () => {
   const { holds, calls } = holdHarness();
   await holds.release('nope|', 'left');
@@ -568,6 +593,7 @@ test('a stop is queued behind a move in flight so a late move cannot restart the
     refreshMs: 10_000,
   });
   holds.start('c|ptzPanTilt', 'left', { pan: 1 });
+  await flush();   // the move is now in flight
   const released = holds.release('c|', 'left');
   await flush();
   assert.deepEqual(order, []);
@@ -593,8 +619,7 @@ test('the pad actions drive the hold timer, and release stops it, per control', 
     assert.deepEqual(api.sent.at(-1), {
       method: 'POST', path: '/api/cameras/left/ptz/move', body: { pan: -0.5, tilt: 0.5 },
     });
-    mock.timers.tick(HOLD_REFRESH_MS * 2);
-    await flush();
+    for (let i = 0; i < 2; i++) { mock.timers.tick(HOLD_REFRESH_MS); await flush(); }
     assert.equal(api.sent.filter((s) => s.path.endsWith('/ptz/move')).length, 3);
 
     await captured.actions.ptzRelease.callback({ controlId: 'ctl-1', options: { camera: 'left' } });
