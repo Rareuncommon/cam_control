@@ -481,3 +481,26 @@ test('a PTZ-only venue runs without camd and controls its heads', async () => {
     await app.stop();
   }
 });
+
+test('presets stored from CamBridge get a name and a picture', async () => {
+  const { app, call } = await ptzOnlyApp();
+  try {
+    await until(async () => (await call('GET', '/api/state')).body.view.cameras.every((c) => c.state === 'connected'));
+    await until(async () => (await call('GET', '/api/cameras/left/schema')).body.capabilities);
+    const stored = await call('POST', '/api/cameras/left/ptz/presets/4/store', { name: 'Lectern' });
+    assert.equal(stored.status, 200);
+    assert.equal(stored.body.saved.name, 'Lectern');
+    const list = await call('GET', '/api/cameras/left/ptz/presets');
+    assert.equal(list.body.count, 10);
+    assert.deepEqual(list.body.presets.map((p) => [p.n, p.name, p.thumb]), [[4, 'Lectern', true]]);
+    const thumb = await call('GET', '/api/cameras/left/ptz/presets/4/thumb');
+    assert.equal(thumb.status, 200);
+    assert.equal(thumb.type, 'image/png');
+    assert.equal((await call('PUT', '/api/cameras/left/ptz/presets/4', { name: 'Pulpit' })).body.name, 'Pulpit');
+    assert.equal((await call('DELETE', '/api/cameras/left/ptz/presets/4')).status, 200);
+    assert.equal((await call('GET', '/api/cameras/left/ptz/presets')).body.presets.length, 0);
+    assert.equal((await call('GET', '/api/cameras/left/ptz/presets/4/thumb')).status, 404);
+  } finally {
+    await app.stop();
+  }
+});

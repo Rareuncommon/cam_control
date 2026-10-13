@@ -28,6 +28,7 @@ import { PtzSource, isPtzEntry } from './ptz/source.js';
 import { detect as detectPtz } from './ptz/detect.js';
 import { supported as supportedPtz } from './ptz/drivers/index.js';
 import { needsAdmin } from './ptz/schema.js';
+import { PtzPresetBook } from './ptz/presets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -199,6 +200,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     (level, msg) => log.write(level, 'store', msg),
   );
   const presets = new Presets(store, state, log);
+  const ptzPresets = new PtzPresetBook({
+    store,
+    dir: join(dirname(resolve(configPath)), 'ptz-thumbs'),
+    log: (level, msg) => log.write(level, 'ptz', msg),
+  });
   const gangs = new Gangs(store, state, log);
   const adoption = new Adoption(configPath, camd, log, ptz);
 
@@ -960,18 +966,55 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
 
       // Camera-native presets: they live on the head, so Reactor, the vendor
-      // web page and CamBridge all recall the same ones.
+      // web page and CamBridge all recall the same ones. Names and pictures
+      // live here, because most heads cannot hold them.
+      m = path.match(/^\/api\/cameras\/([^/]+)\/ptz\/presets$/);
+      if (m && req.method === 'GET') {
+        const cameraId = decodeURIComponent(m[1]);
+        if (!isPtz(cameraId)) return sendJson(res, 404, { error: `${cameraId} is not a PTZ camera` });
+        const caps = state.ptzSchemas.get(cameraId)?.capabilities;
+        return sendJson(res, 200, {
+          cameraId,
+          base: caps?.presetBase ?? 1,
+          count: caps?.presets ?? 0,
+          presets: ptzPresets.list(cameraId),
+        });
+      }
+
+      m = path.match(/^\/api\/cameras\/([^/]+)\/ptz\/presets\/(\d+)\/thumb$/);
+      if (m && req.method === 'GET') {
+        const t = ptzPresets.thumb(decodeURIComponent(m[1]), Number(m[2]));
+        if (!t) return sendJson(res, 404, { error: 'no picture for that preset' });
+        res.writeHead(200, { 'Content-Type': t.contentType, 'Content-Length': t.body.length, 'Cache-Control': 'no-cache' });
+        return res.end(t.body);
+      }
+
       m = path.match(/^\/api\/cameras\/([^/]+)\/ptz\/presets\/(\d+)(?:\/(recall|store))?$/);
-      if (m && (req.method === 'POST' || req.method === 'DELETE')) {
+      if (m && (req.method === 'POST' || req.method === 'DELETE' || req.method === 'PUT')) {
         const cameraId = decodeURIComponent(m[1]);
         const n = Number(m[2]);
-        const op = req.method === 'DELETE' ? 'delete' : m[3];
-        if (!op) return sendJson(res, 404, { error: 'recall or store?' });
         if (!isPtz(cameraId)) return sendJson(res, 404, { error: `${cameraId} is not a PTZ camera` });
         const body = (await readBody(req)) ?? {};
-        log.info('ptz', `${actor()}${cameraId} preset ${n} ${op}`);
+        if (req.method === 'PUT' && !m[3]) {
+          const r = ptzPresets.rename(cameraId, n, body.name);
+          return sendJson(res, r.ok ? 200 : 400, r);
+        }
+        const op = req.method === 'DELETE' ? 'delete' : m[3];
+        if (!op) return sendJson(res, 404, { error: 'recall or store?' });
+        const label = ptzPresets.name(cameraId, n);
+        log.info('ptz', `${actor()}${cameraId} preset ${n}${label ? ` "${label}"` : ''} ${op}`);
         const r = await ptz.preset(cameraId, op, n, { speed: body.speed });
-        return sendJson(res, r.ok ? 200 : (r.status || 502), { ok: r.ok, cameraId, ...(r.body ?? {}) });
+        let saved = null;
+        if (r.ok && op === 'store') {
+          // The head is at the stored position right now, so this frame is
+          // the shot the preset recalls. A missing picture is not a failure.
+          const frame = await ptz.snapshot(cameraId).catch(() => null);
+          saved = ptzPresets.stored(cameraId, n, body.name, frame?.ok ? frame : null);
+        }
+        if (r.ok && op === 'delete') ptzPresets.forget(cameraId, n);
+        return sendJson(res, r.ok ? 200 : (r.status || 502), {
+          ok: r.ok, cameraId, ...(r.body ?? {}), ...(saved ? { saved } : {}),
+        });
       }
 
       // Admin settings and actions: network, users, firmware, reboot, reset.
