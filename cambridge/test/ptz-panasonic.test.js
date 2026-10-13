@@ -3,13 +3,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import net from 'node:net';
 
 import { request } from '../src/ptz/http.js';
 import { validateTable, coerce } from '../src/ptz/schema.js';
 import { PtzCamera } from '../src/ptz/lifecycle.js';
 import { DRIVERS } from '../src/ptz/drivers/index.js';
 import {
-  PanasonicAw, speedCode, commandUrl, parseNotifications, scanText, matchLine,
+  PanasonicAw, speedCode, commandUrl, parseNotifications, scanText, matchLine, tableFor, notificationListener,
 } from '../src/ptz/drivers/panasonic-aw.js';
 import { TABLE, GAPS } from '../src/ptz/tables/panasonic-aw-ue160.js';
 import { startFakePanasonic, frameNotification } from './fakes/panasonic-aw.js';
@@ -31,7 +32,7 @@ const byId = Object.fromEntries(TABLE.map((e) => [e.id, e]));
 
 function driverFor(fake, extra = {}) {
   return new PanasonicAw({
-    host: '127.0.0.1', port: fake.port, auth: { username: USER, password: PASS },
+    host: fake.host, port: fake.port, auth: { username: USER, password: PASS },
     http: request, timeoutMs: 600, log: () => {}, options: {}, ...extra,
   });
 }
@@ -132,8 +133,9 @@ test('identify reads model, firmware, title and tracking; every request closes i
     assert.equal(id.serial, 'FAKE00001');
     assert.deepEqual(d.capabilities().tracking, { kind: 'externalTracking', label: 'Auto tracking (status only)' });
     assert.equal(d.capabilities().presets, 100);
-    assert.ok(d.schema().some((e) => e.id === 'autoTrackingMode'));
-    assert.ok(!d.schema().some((e) => e.wire.via), 'motion rows are not offered as settings');
+    assert.ok(d.schema(id).some((e) => e.id === 'autoTrackingMode'));
+    assert.ok(!d.schema(id).every((e) => e.verify), 'the UE160 gets its own table');
+    assert.ok(!d.schema(id).some((e) => e.wire.via), 'motion rows are not offered as settings');
     // No keep-alive on this camera (IF p.8).
     assert.ok(fake.state.requests.filter((r) => r.url.startsWith('/cgi-bin/aw_')).every((r) => r.connection === 'close'));
   } finally { d.close(); await fake.close(); }
@@ -379,6 +381,77 @@ test('push failing to register does not throw, and polling is unaffected', async
     await until(() => logs.some(([lvl]) => lvl === 'warn'));
     await d.heartbeat();
   } finally { d.close(); await fake.close(); }
+});
+
+// --- sibling models ----------------------------------------------------------------
+
+test('another Panasonic model is accepted, reports its own model, and gets the table marked verify', async () => {
+  const fake = await startFakePanasonic({ model: 'AW-HE145' });
+  const d = driverFor(fake, { auth: {} });
+  try {
+    const p = await PanasonicAw.probe({ host: fake.host, port: fake.port, auth: {}, http: request, timeoutMs: 800 });
+    assert.deepEqual(p, { vendor: 'panasonic', model: 'AW-HE145' });
+    const id = await d.identify();
+    assert.equal(id.model, 'AW-HE145');
+    const schema = d.schema(id);
+    assert.ok(schema.length > 400);
+    assert.ok(schema.every((e) => e.verify === true), 'nothing is vouched for on an untested model');
+    assert.deepEqual(validateTable(tableFor('AW-HE145').table), []);
+    assert.equal(d.capabilities(id).presets, 100);
+    // The UE160 keeps its own table, unchanged.
+    assert.equal(tableFor('AW-UE160').table, TABLE);
+    assert.ok(!d.schema({ model: 'AW-UE160' }).every((e) => e.verify));
+    assert.deepEqual(PanasonicAw.models, ['AW-UE160']);
+  } finally { d.close(); await fake.close(); }
+});
+
+// --- one notification listener for every camera ------------------------------------------
+
+async function freePort() {
+  const s = net.createServer();
+  await new Promise((r) => s.listen(0, r));
+  const { port } = s.address();
+  await new Promise((r) => s.close(r));
+  return port;
+}
+
+test('two cameras share one notification listener on a fixed port, and are told apart by address', async () => {
+  const notifyPort = await freePort();
+  const a = await startFakePanasonic({ host: '127.0.0.1' });
+  const b = await startFakePanasonic({ host: '127.0.0.2', model: 'AW-UE100' });
+  const da = driverFor(a, { auth: {}, options: { notifyPort } });
+  const db = driverFor(b, { auth: {}, options: { notifyPort } });
+  const got = { a: [], b: [] };
+  try {
+    await da.identify();
+    await db.identify();
+    da.subscribe({ onValues: (v) => got.a.push(v), onPtz: () => {} });
+    db.subscribe({ onValues: (v) => got.b.push(v), onPtz: () => {} });
+    await until(() => a.state.receivers.size === 1 && b.state.receivers.size === 1);
+    // Both cameras were given the same port: the one shared listener.
+    assert.deepEqual([...a.state.receivers.values()].map((r) => r.port), [notifyPort]);
+    assert.deepEqual([...b.state.receivers.values()].map((r) => r.port), [notifyPort]);
+    assert.equal(notificationListener().port, notifyPort);
+    assert.equal(notificationListener().refs, 2);
+
+    b.changeLocally('OSL:2B:', '2');
+    await until(() => got.b.some((v) => v.whiteBalanceMode?.value === '2'));
+    a.changeLocally('OSL:2B:', '3');
+    await until(() => got.a.some((v) => v.whiteBalanceMode?.value === '3'));
+    await sleep(100);
+    assert.ok(!got.a.some((v) => v.whiteBalanceMode?.value === '2'), 'camera B\'s change did not reach camera A');
+    assert.ok(!got.b.some((v) => v.whiteBalanceMode?.value === '3'), 'camera A\'s change did not reach camera B');
+
+    // Closing one camera leaves the listener up for the other; the last one closes it.
+    da.close();
+    await until(() => a.state.receivers.size === 0);
+    assert.equal(notificationListener().refs, 1);
+    b.changeLocally('OSL:2B:', '1');
+    await until(() => got.b.some((v) => v.whiteBalanceMode?.value === '1'));
+    db.close();
+    await until(() => b.state.receivers.size === 0);
+    assert.deepEqual(notificationListener(), { port: null, refs: 0, cameras: [] });
+  } finally { da.close(); db.close(); await a.close(); await b.close(); }
 });
 
 // --- end to end --------------------------------------------------------------------

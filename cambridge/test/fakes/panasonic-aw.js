@@ -19,7 +19,8 @@
 // Auth: when a username is given every path wants HTTP Basic (the notes do
 // not say which scheme the camera uses; CamBridge's transport answers either).
 //
-//   node test/fakes/panasonic-aw.js --port 8080 [--user u --pass p] [--standby]
+//   node test/fakes/panasonic-aw.js --port 8080 [--host 127.0.0.2] [--model AW-HE145]
+//                                    [--user u --pass p] [--standby]
 
 import http from 'node:http';
 import net from 'node:net';
@@ -71,7 +72,7 @@ function seed(state) {
 }
 
 export async function startFakePanasonic({
-  port = 0, username, password, model = 'AW-UE160', tracking = true, camdata = true,
+  port = 0, host = '127.0.0.1', username, password, model = 'AW-UE160', tracking = true, camdata = true,
   camdataExclude = ['OSL:C5:', 'OSL:C6:', 'OSJ:3D:'],
 } = {}) {
   const state = {
@@ -111,7 +112,8 @@ export async function startFakePanasonic({
   function notify(text) {
     state.pushes.push(text);
     for (const r of state.receivers.values()) {
-      const s = net.connect(r.port, r.host, () => { s.end(frameNotification(text)); });
+      // From the camera's own address: that is how a receiver tells cameras apart.
+      const s = net.connect({ port: r.port, host: r.host, localAddress: host }, () => { s.end(frameNotification(text)); });
       s.on('error', () => {});
       s.setTimeout(2000, () => s.destroy());
     }
@@ -403,10 +405,11 @@ export async function startFakePanasonic({
     }
   });
   server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
-  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(port, host, resolve));
 
   return {
     port: server.address().port,
+    host,
     state,
     /** Silent: requests are accepted and never answered (the client's timeout ends them). */
     setSilent(on) { state.silent = !!on; },
@@ -432,8 +435,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     return i >= 0 ? process.argv[i + 1] : dflt;
   };
   const fake = await startFakePanasonic({
-    port: Number(arg('port', 0)), username: arg('user'), password: arg('pass'),
+    port: Number(arg('port', 0)), host: arg('host', '127.0.0.1'), model: arg('model', 'AW-UE160'),
+    username: arg('user'), password: arg('pass'),
   });
   if (process.argv.includes('--standby')) fake.state.power = '0';
-  console.log(`fake Panasonic AW-UE160 on 127.0.0.1:${fake.port}`);
+  console.log(`fake Panasonic ${fake.state.model} on ${fake.host}:${fake.port}`);
 }

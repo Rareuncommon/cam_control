@@ -9,11 +9,13 @@
 // Changes made elsewhere (the camera's menu, a Panasonic RP panel, its web
 // page) arrive through the update notification: CamBridge registers a TCP
 // port and the camera connects back to it with each change (IF p.9-12). That
-// is the one place this driver opens a listening socket.
+// is the one place this driver opens a listening socket, and it is shared by
+// every Panasonic camera in the process (see the end of this file).
 //
 // Spec notes: scratchpad specs/panasonic-aw-ue160.md (sections cited as §n).
 
 import net from 'node:net';
+import { lookup } from 'node:dns/promises';
 import { randomBytes } from 'node:crypto';
 import { PtzDriver, DriverError } from '../driver.js';
 import { TABLE } from '../tables/panasonic-aw-ue160.js';
@@ -247,12 +249,42 @@ function keyValues(text) {
   return out;
 }
 
+// --- tables by model ---------------------------------------------------------------
+
+/** Models with their own table. Adding a model is one line here. */
+const TABLES = new Map([
+  ['AW-UE160', { table: TABLE, presets: 100, verified: true }],   // PRESET001–100 (IF p.85)
+]);
+
+const SIBLING = {
+  table: TABLE.map((e) => ({
+    ...e,
+    verify: true,
+    help: `${e.help ? `${e.help} ` : ''}Documented for the AW-UE160; not confirmed on this model.`,
+  })),
+  presets: 100,
+  verified: false,
+};
+
+/**
+ * The table for a model QID reported. Another Panasonic integrated camera
+ * speaks the same protocol, so it gets the AW-UE160 table with every entry
+ * marked verify: what it does not have it answers ER1 to, and the lifecycle
+ * hides those, so an untested model degrades rather than fails.
+ */
+export function tableFor(model) {
+  return TABLES.get(String(model ?? '').trim().toUpperCase()) ?? SIBLING;
+}
+
 const STANDBY = 'the camera is in standby (or busy) — power it on, or wait, and try again';
 
 export class PanasonicAw extends PtzDriver {
   static vendor = 'panasonic';
   static label = 'Panasonic';
-  static models = ['AW-UE160'];
+  // Models with a table of their own. Any other camera answering QID with
+  // "OID:AW-…" (AW-UE, AW-HE, AW-UN…) is accepted too and gets the UE160 table
+  // marked verify — see tableFor().
+  static models = [...TABLES.keys()];
   static minIntervalMs = MIN_GAP_MS;
   // Most values come from one /live/camdata.html read; the rest are one
   // request each, so a batch stays small enough to keep moves responsive.
@@ -369,7 +401,7 @@ export class PanasonicAw extends PtzDriver {
       if (err.code !== 'ER2') throw err;
       standby = true;
     }
-    const identity = { vendor: 'panasonic', model: model ?? 'AW-UE160' };
+    const identity = { vendor: 'panasonic', model: model ?? 'AW (model not reported in standby)' };
     const soft = async (fn) => { try { return await fn(); } catch (err) { if (['timeout', 'network', 'auth'].includes(err.kind) && err.code !== 'HTTP403') throw err; return null; } };
     const fw = await soft(() => this.#cmd('cam', 'QSV'));          // OSV:Vxx.xx, IF p.92
     if (fw) identity.firmware = /^OSV:(.+)$/.exec(fw)?.[1];
@@ -412,16 +444,21 @@ export class PanasonicAw extends PtzDriver {
     }
   }
 
-  schema() {
+  schema(identity) {
     // Rows reached through the joystick, presets or push are not settings;
     // tracking rows only exist on a camera that reports tracking.
-    return TABLE.filter((e) => !e.wire.via && (e.requires !== 'tracking' || this.hasTracking));
+    return tableFor(identity?.model).table
+      .filter((e) => !e.wire.via && (e.requires !== 'tracking' || this.hasTracking));
   }
 
-  capabilities() {
+  /**
+   * The protocol has no "how many presets" query (#PE only marks which of
+   * 120 slots are stored), so the count comes from the model's table.
+   */
+  capabilities(identity) {
     return {
       panTilt: true, zoom: true, focus: true,
-      presets: 100, presetBase: 1,                                  // PRESET001–100 (IF p.85)
+      presets: tableFor(identity?.model).presets, presetBase: 1,
       tracking: this.hasTracking ? { kind: 'externalTracking', label: 'Auto tracking (status only)' } : null,
       tally: true, snapshot: true, pointToCentre: false, power: false,
     };
@@ -788,73 +825,44 @@ export class PanasonicAw extends PtzDriver {
   // --- push ------------------------------------------------------------------------
 
   /**
-   * Update notifications (IF p.9-12, §4). CamBridge listens on a TCP port and
-   * registers it with /cgi-bin/event?connect=start&my_port=P&uid=0; the camera
-   * then connects to that port for each change. The camera has to reach
-   * CamBridge, so the listener binds every interface — a firewall on the
-   * CamBridge machine must allow inbound TCP from the cameras to it. The port
-   * is ephemeral unless `options.notifyPort` fixes one (for such a firewall).
+   * Update notifications (IF p.9-12, §4). The camera connects to a TCP port
+   * on CamBridge for each change, once that port is registered with
+   * /cgi-bin/event?connect=start&my_port=P&uid=0.
    *
-   * One registration per camera: the camera serves at most five receivers at
+   * Every Panasonic camera in the process shares one listener (see
+   * acquireListener), so dozens of heads need one firewall rule, not dozens:
+   * set the same `options.notifyPort` on every Panasonic camera entry and open
+   * that TCP port inbound on the CamBridge machine. Without it the port is
+   * ephemeral, which works only where nothing filters inbound connections.
+   * Notifications are told apart by the address the camera connects from.
+   *
+   * One registration per camera: a camera serves at most five receivers at
    * once (IF p.12), and a Panasonic RP panel takes one of those. A failed
    * registration is logged and left: polling carries on regardless.
    */
   subscribe({ onValues, onPtz }) {
     if (this.options.push === false || this.push) return;
-    this.push = { server: null, port: null, registered: false, sockets: new Set() };
-    this.#startPush(onValues, onPtz).catch((err) => {
+    const push = { port: null, ip: null, registered: false, acquired: false, route: null };
+    this.push = push;
+    this.#startPush(push, onValues, onPtz).catch((err) => {
       this.log('warn', `change notifications unavailable: ${err.message}`);
-      this.#stopPush();
+      if (this.push === push) this.#stopPush();
     });
   }
 
-  async #startPush(onValues, onPtz) {
-    const push = this.push;
-    const server = net.createServer((sock) => this.#accept(sock, onValues, onPtz));
-    push.server = server;
-    server.on('error', (err) => this.log('warn', `notification listener: ${err.message}`));
-    await new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(Number(this.options.notifyPort) || 0, () => { server.off('error', reject); resolve(); });
-    });
-    push.port = server.address().port;
-    if (this.closed || this.push !== push) { server.close(); return; }
+  async #startPush(push, onValues, onPtz) {
+    // Route by the camera's address; a host name is resolved once, here.
+    push.ip = net.isIP(this.host) ? this.host : (await lookup(this.host)).address;
+    push.route = (line) => this.#notified(line, onValues, onPtz);
+    addRoute(push.ip, push.route);
+    push.port = await acquireListener(this.options.notifyPort, this.log);
+    push.acquired = true;
+    if (this.closed || this.push !== push) return;
     const r = await this.#get(`/cgi-bin/event?connect=start&my_port=${push.port}&uid=0`);   // IF p.11: 204 No Content
     if (!r.ok) throw PanasonicAw.#transportError(r);
     push.registered = true;
     if (this.closed || this.push !== push) { this.#deregister(push.port); return; }
-    this.log('debug', `change notifications on port ${push.port}`);
-  }
-
-  #accept(sock, onValues, onPtz) {
-    const from = String(sock.remoteAddress ?? '').replace(/^::ffff:/, '');
-    if (net.isIP(this.host) && from !== this.host) { sock.destroy(); return; }
-    const push = this.push;
-    if (!push) { sock.destroy(); return; }
-    push.sockets.add(sock);
-    let buf = Buffer.alloc(0);
-    const deliver = (lines) => { for (const l of lines) this.#notified(l, onValues, onPtz); };
-    sock.setTimeout(30_000, () => sock.destroy());
-    sock.on('data', (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      // A stream that never frames is kept only as far as scanText needs it.
-      if (buf.length > 64 * 1024) buf = buf.subarray(buf.length - 4096);
-      const { messages, rest } = parseNotifications(buf);
-      deliver(messages);
-      buf = rest;
-    });
-    const finish = () => {
-      if (buf.length) {
-        const { messages, rest, stuck } = parseNotifications(buf, { final: true });
-        deliver(messages);
-        if (stuck) deliver(scanText(rest));
-      }
-      buf = Buffer.alloc(0);
-      push.sockets.delete(sock);
-    };
-    sock.on('end', finish);
-    sock.on('error', () => push.sockets.delete(sock));
-    sock.on('close', () => push.sockets.delete(sock));
+    this.log('debug', `change notifications on shared port ${push.port}`);
   }
 
   /** One notification line: same text as a query reply (IF p.10), plus q[nn] and a few status forms. */
@@ -913,14 +921,122 @@ export class PanasonicAw extends PtzDriver {
     this.push = null;
     if (!push) return;
     if (push.registered) this.#deregister(push.port);
-    for (const s of push.sockets) s.destroy();
-    try { push.server?.close(); } catch { /* not listening */ }
+    if (push.route) removeRoute(push.ip, push.route);
+    if (push.acquired) releaseListener();
   }
 
   close() {
     this.closed = true;
     this.#stopPush();
   }
+}
+
+// --- the shared notification listener ------------------------------------------------
+
+/**
+ * One TCP listener for every Panasonic camera in the process: started by the
+ * first subscribe, counted, closed when the last camera closes. It binds every
+ * interface, because the cameras connect in from the studio network.
+ *
+ * The port is the first camera's `options.notifyPort` (0 = ephemeral). Every
+ * Panasonic entry should carry the same value; a camera asking for another
+ * port while the listener is up is told which one it got. A fixed port is
+ * what a firewall rule on the CamBridge machine needs.
+ */
+const listener = { server: null, port: null, starting: null, refs: 0, sockets: new Set() };
+/** camera IP → the drivers' line handlers for that camera */
+const routes = new Map();
+
+const plainIp = (a) => String(a ?? '').replace(/^::ffff:/, '');
+
+function addRoute(ip, fn) {
+  if (!routes.has(ip)) routes.set(ip, new Set());
+  routes.get(ip).add(fn);
+}
+
+function removeRoute(ip, fn) {
+  const set = routes.get(ip);
+  if (!set) return;
+  set.delete(fn);
+  if (!set.size) routes.delete(ip);
+}
+
+/** @returns {Promise<number>} the shared port */
+async function acquireListener(wantPort, log = () => {}) {
+  listener.refs += 1;
+  try {
+    if (!listener.server && !listener.starting) listener.starting = startListener(Number(wantPort) || 0);
+    if (listener.starting) await listener.starting;
+  } catch (err) {
+    listener.refs -= 1;
+    throw err;
+  }
+  if (Number(wantPort) && Number(wantPort) !== listener.port) {
+    log('warn', `notification port ${wantPort} asked for, but the shared listener is on ${listener.port}; give every Panasonic camera the same notifyPort`);
+  }
+  return listener.port;
+}
+
+async function startListener(port) {
+  const server = net.createServer(acceptNotification);
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, () => { server.off('error', reject); resolve(); });
+    });
+  } catch (err) {
+    listener.starting = null;
+    throw err;
+  }
+  server.on('error', () => {});
+  listener.server = server;
+  listener.port = server.address().port;
+  listener.starting = null;
+}
+
+function releaseListener() {
+  listener.refs = Math.max(0, listener.refs - 1);
+  if (listener.refs > 0 || !listener.server) return;
+  for (const s of listener.sockets) s.destroy();
+  listener.sockets.clear();
+  listener.server.close();
+  listener.server = null;
+  listener.port = null;
+}
+
+/** For tests: the shared listener's port and how many cameras hold it. */
+export function notificationListener() {
+  return { port: listener.port, refs: listener.refs, cameras: [...routes.keys()] };
+}
+
+/** A camera connecting in: frames are parsed per connection, lines go to that camera's drivers. */
+function acceptNotification(sock) {
+  const ip = plainIp(sock.remoteAddress);
+  if (!routes.has(ip)) { sock.destroy(); return; }   // not a camera we registered with
+  listener.sockets.add(sock);
+  let buf = Buffer.alloc(0);
+  const deliver = (lines) => {
+    for (const fn of routes.get(ip) ?? []) for (const l of lines) fn(l);
+  };
+  sock.setTimeout(30_000, () => sock.destroy());
+  sock.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    // A stream that never frames is kept only as far as scanText needs it.
+    if (buf.length > 64 * 1024) buf = buf.subarray(buf.length - 4096);
+    const { messages, rest } = parseNotifications(buf);
+    deliver(messages);
+    buf = rest;
+  });
+  sock.on('end', () => {
+    if (buf.length) {
+      const { messages, rest, stuck } = parseNotifications(buf, { final: true });
+      deliver(messages);
+      if (stuck) deliver(scanText(rest));
+    }
+    buf = Buffer.alloc(0);
+  });
+  sock.on('error', () => {});
+  sock.on('close', () => listener.sockets.delete(sock));
 }
 
 export default PanasonicAw;
