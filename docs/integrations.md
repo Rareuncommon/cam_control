@@ -32,6 +32,13 @@ module appears as **cambridge** when you add a connection.
 Configure it with the address you open the CamBridge panel on, and its port
 (8088). If Companion runs on the same Mac as CamBridge, `127.0.0.1` is right.
 
+If CamBridge has a PIN set, Companion needs a token (see `docs/running-the-app.md`):
+paste it into the module's **Access token** field. It is a password-type field,
+sent as `Authorization: Bearer <token>` on every request and the event stream,
+and never logged. Without it CamBridge answers 401 and the module shows
+"CamBridge needs a token — set one in the module config". The **Held-key safety
+limit** option (default 15 s, 5-120 s) stops a PTZ head whose key release was lost.
+
 ### What it gives you
 
 **Ready-made buttons** under Record, Tally, Status, Scenes, and one category per
