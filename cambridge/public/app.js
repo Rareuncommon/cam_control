@@ -1,4 +1,5 @@
 import { createGamepadControl } from './gamepad.js';
+import { createPtz } from './ptz.js';
 import {
   histogram, clipStats, applyFalseColour, markClipping, buildFalseColourLut,
   drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
@@ -583,20 +584,71 @@ function openPicker(cam, propName, title) {
 
 // --- views ------------------------------------------------------------------
 
+/**
+ * The PTZ side of the panel: Operate cards, the settings sheet, presets,
+ * add-by-IP and the SKAARHOJ card. Kept in its own module because none of it
+ * applies to a Sony body, and handed this file's helpers rather than
+ * importing them so app.js stays the one place that owns the page.
+ */
+const ptzUi = createPtz({
+  el, add, api, toast, stateBadge, tallyBadge,
+  controlActive: () => currentView === 'control',
+  switchView: (name) => switchView(name),
+  refreshSetup: () => refreshSetup(),
+  undo: (id) => undoState[id] ?? null,
+  padDrives: (id) => !!gamepad?.enabled && padTarget()?.id === id,
+});
+
+/** Last-built Sony card per camera, with what it was built from. */
+const cineCards = new Map();
+
+/**
+ * What a Sony card shows, as one string. A card is rebuilt only when this
+ * changes: PTZ heads push position several times a second while they move,
+ * and rebuilding every card on each push would drop a slider mid-drag and
+ * close an open "More controls" on every camera in the room.
+ */
+function cineSig(cam) {
+  return JSON.stringify([cam, undoState[cam.id] ?? null, alarmsByCamera[cam.id] ?? null,
+    advanced, meta.presets?.[cam.id] ?? null, padCamera, !!gamepad?.enabled]);
+}
+
 function renderControl() {
   const grid = $('#grid');
-  grid.textContent = '';
+  const nodes = [];
   if (!view.cameras.length) {
-    grid.append(el('section', { class: 'cam' }, el('div', { class: 'body' },
-      el('div', { class: 'note', text: view.camdConnected
-        ? 'No cameras added yet.'
-        : 'The camera daemon is not running, so there is nothing to control yet.' }),
-      view.camdConnected
-        ? el('button', { class: 'primary', onclick: () => switchView('setup') },
-            document.createTextNode('Add a camera'))
-        : el('div', { class: 'mono', text: './scripts/start.sh' }))));
+    const noDaemon = view.camdUsed !== false && !view.camdConnected;
+    nodes.push(el('section', { class: 'cam' }, el('div', { class: 'body' },
+      el('div', { class: 'note', text: noDaemon
+        ? 'The camera daemon is not running, so there is nothing to control yet.'
+        : 'No cameras added yet.' }),
+      noDaemon
+        ? el('div', { class: 'mono', text: './scripts/start.sh' })
+        : el('button', { class: 'primary', onclick: () => switchView('setup') },
+            document.createTextNode('Add a camera')))));
   }
-  for (const cam of view.cameras) grid.append(cameraCard(cam));
+  for (const cam of view.cameras) {
+    if (cam.kind === 'ptz') { nodes.push(ptzUi.card(cam)); continue; }
+    const sig = cineSig(cam);
+    let c = cineCards.get(cam.id);
+    if (!c || c.sig !== sig) {
+      // Keep whichever disclosure the operator opened or closed by hand.
+      const wasOpen = c?.node.querySelector('details.more')?.open;
+      c = { sig, node: cameraCard(cam) };
+      const more = c.node.querySelector('details.more');
+      if (more && wasOpen !== undefined) more.open = wasOpen;
+      cineCards.set(cam.id, c);
+    }
+    nodes.push(c.node);
+  }
+  for (const id of [...cineCards.keys()]) {
+    if (!view.cameras.some((cam) => cam.id === id && cam.kind !== 'ptz')) cineCards.delete(id);
+  }
+  // In place, never by clearing the grid: a PTZ card being held must not be
+  // detached even for a moment, because detaching it ends the pointer capture
+  // — which stops the head under the operator's thumb.
+  nodes.forEach((n, i) => { if (grid.children[i] !== n) grid.insertBefore(n, grid.children[i] ?? null); });
+  while (grid.children.length > nodes.length) grid.lastElementChild.remove();
 }
 
 // Live feeds, one polling loop per tile.
@@ -722,8 +774,10 @@ function feedTile(cam) {
   const tallyClass = cam.tally?.program ? ' pgm' : cam.tally?.preview ? ' pvw' : '';
   const tile = el('div', { class: `feed${rec ? ' recording' : ''}${tallyClass}` });
 
+  const isPtz = cam.kind === 'ptz';
   if (cam.state === 'connected') {
-    const img = el('canvas', { class: 'feedcanvas', title: 'Click to focus here',
+    const img = el('canvas', { class: 'feedcanvas',
+      title: isPtz ? (cam.capabilities?.pointToCentre ? 'Tap to aim the camera here' : '') : 'Click to focus here',
       role: 'img', 'aria-label': `${cam.label} live view` });
     const reason = el('div', { class: 'note', text: 'Waiting for the first frame…' });
     const fallback = el('div', { class: 'placeholder' },
@@ -770,7 +824,10 @@ function feedTile(cam) {
       mark.style.top = `${box.y + point.y * box.h}px`;
       tile.append(mark);
       setTimeout(() => mark.remove(), 1100);
-      await tapFocus(cam, point);
+      // A PTZ head has no focus point to set; the useful thing a tap can mean
+      // is "put this in the middle of the shot".
+      if (isPtz) await ptzUi.aim(view.cameras.find((c) => c.id === cam.id) ?? cam, point);
+      else await tapFocus(cam, point);
     });
     tile.append(img, fallback);
   } else {
@@ -783,7 +840,20 @@ function feedTile(cam) {
     el('span', { text: cam.label || cam.id }),
     tallyBadge(cam),
     el('span', { class: 'spacer' }),
-    el('span', { class: 'note', text: cam.properties?.fNumber?.label ?? '' })));
+    el('span', { class: 'note', text: isPtz ? (cam.model ?? '') : (cam.properties?.fNumber?.label ?? '') })));
+
+  const enlarge = el('button', {
+    class: 'small',
+    onclick: () => { soloFeed = soloFeed === cam.id ? null : cam.id; renderMultiview(); },
+  }, document.createTextNode(soloFeed === cam.id ? 'Show all' : 'Enlarge'));
+  if (isPtz) {
+    // Not a recorder and no AF point: the useful extras live on its Operate card.
+    tile.append(el('div', { class: 'tools' },
+      el('button', { class: 'small', onclick: () => ptzUi.openSettings(cam.id) },
+        document.createTextNode('Settings')),
+      enlarge));
+    return tile;
+  }
 
   tile.append(el('div', { class: 'tools' },
     el('button', { class: 'small', onclick: () => doAction(cam.id, 'autofocus') },
@@ -815,7 +885,19 @@ function renderMultiview() {
   for (const cam of cams) grid.append(feedTile(cam));
 }
 
+let setupSig = null;
+
 function renderSetup() {
+  // Only when something Setup shows has changed. A moving PTZ head pushes
+  // state several times a second, and rebuilding the tables each time can
+  // swallow a tap on Edit or Remove between press and release.
+  const sig = JSON.stringify([discovery, health.configPath, view.camdUsed,
+    view.cameras.map((c) => [c.id, c.kind, c.label, c.model, c.vendor, c.ip, c.state, c.detail, c.reconnectAttempts])]);
+  if (sig === setupSig) return;
+  setupSig = sig;
+  // A venue with only PTZ heads runs no daemon and has no Sony bodies to
+  // discover; a section that can only ever say "nothing found" is noise.
+  $('#discover-card').hidden = view.camdUsed === false || discovery.camdUsed === false;
   $('#discover-hint').textContent = discovery.credentialHint ?? '';
   // Where this instance actually reads and writes. Invisible paths turned a
   // wrong config file into "the app forgot my cameras".
@@ -863,7 +945,9 @@ function renderSetup() {
   for (const cam of view.cameras) {
     at.append(el('tr', {},
       el('td', { text: cam.label }),
-      el('td', { class: 'note', text: cam.model || '—' }),
+      el('td', { class: 'note', text: cam.kind === 'ptz'
+        ? `${cam.model || cam.vendor || 'PTZ'} · ${cam.ip || '—'}`
+        : (cam.model || '—') }),
       el('td', {}, stateBadge(cam)),
       el('td', {}, el('div', { class: 'line' },
         el('button', { class: 'small', onclick: () => openEdit(cam) }, document.createTextNode('Edit')),
@@ -903,6 +987,7 @@ function needsAuthFor(mac) {
 
 function openAdopt(cam) {
   adoptTarget = cam; editTarget = null;
+  setDialogKind(false);
   $('#adopt-title').textContent = `Add ${cam.model || 'camera'}`;
   $('#adopt-sub').textContent = `${cam.ip || 'unknown address'} · ${cam.mac}`;
   $('#adopt-label').value = ''; $('#adopt-user').value = ''; $('#adopt-pass').value = '';
@@ -914,16 +999,27 @@ function openAdopt(cam) {
   $('#adopt-label').focus();
 }
 
+/** The dialog serves both kinds; a PTZ head is reached by address and has no Sony menus. */
+function setDialogKind(ptz) {
+  for (const n of document.querySelectorAll('#adopt-dialog .ptz-only')) n.hidden = !ptz;
+  for (const n of document.querySelectorAll('#adopt-dialog .sony-only')) n.hidden = ptz;
+}
+
 function openEdit(cam) {
   editTarget = cam; adoptTarget = null;
+  const ptz = cam.kind === 'ptz';
+  setDialogKind(ptz);
   $('#adopt-title').textContent = `Edit ${cam.label}`;
-  $('#adopt-sub').textContent = `${cam.ip || 'unknown address'} · ${cam.mac}`;
+  $('#adopt-sub').textContent = ptz
+    ? `${cam.model || cam.vendor || 'PTZ camera'} · ${cam.ip || 'unknown address'}`
+    : `${cam.ip || 'unknown address'} · ${cam.mac}`;
   $('#adopt-label').value = cam.label ?? '';
+  $('#adopt-ip').value = ptz ? (cam.ip ?? '') : '';
   $('#adopt-user').value = ''; $('#adopt-pass').value = '';
   // Credentials are never sent to the browser, so blank means "leave alone".
   $('#adopt-user').placeholder = 'leave blank to keep current';
   $('#adopt-pass').placeholder = 'leave blank to keep current';
-  setAuthVisible(needsAuthFor(cam.mac));
+  setAuthVisible(ptz || needsAuthFor(cam.mac));
   $('#adopt-confirm').textContent = 'Save';
   $('#adopt-dialog').showModal();
   $('#adopt-label').focus();
@@ -932,14 +1028,28 @@ function openEdit(cam) {
 async function refreshSetup() {
   discovery = await api('GET', '/api/discovered');
   renderSetup();
+  ptzUi.refreshSkaarhoj($);
 }
 
 // --- shared -----------------------------------------------------------------
 
 function render() {
   const pill = $('#camd-pill');
+  // A PTZ-only venue runs no daemon on purpose. A permanent "daemon offline"
+  // there would be the panel crying wolf, so the pill is simply not shown.
+  pill.style.display = view.camdUsed === false ? 'none' : '';
   pill.textContent = view.camdConnected ? 'connected' : 'daemon offline';
   pill.className = `pill ${view.camdConnected ? 'ok' : 'bad'}`;
+
+  // STOP ALL whenever there is a head to stop. Record all / Stop all only
+  // when there is something that records: PTZ heads are not recorders, and a
+  // record button that does nothing at a PTZ-only venue invites the wrong press.
+  const anyPtz = view.cameras.some((c) => c.kind === 'ptz');
+  const allPtz = anyPtz && view.cameras.every((c) => c.kind === 'ptz');
+  $('#ptz-stop-all').style.display = anyPtz ? '' : 'none';
+  $('#rec-all').style.display = allPtz ? 'none' : '';
+  $('#stop-all').style.display = allPtz ? 'none' : '';
+  $('#advanced-toggle').style.display = allPtz ? 'none' : '';
 
   renderBanner();
   renderRollPill();
@@ -972,7 +1082,9 @@ function renderBanner() {
   banner.textContent = '';
   banner.classList.remove('warn');
 
-  if (!view.camdConnected) {
+  // Never at a venue that runs without camd: there is no daemon to be missing.
+  const camdUsed = view.camdUsed ?? health.camdUsed;
+  if (camdUsed !== false && !view.camdConnected) {
     // Name the log. The panel being up means cambridge and the config are fine,
     // so the daemon either failed to start or died — and its own log is the only
     // place that says which.
@@ -1036,7 +1148,15 @@ function renderRollPill() {
     : `Not rolling: ${roll.notRolling.map((c) => c.label).join(', ')}`;
 }
 
+let toolsSig = null;
+
 function renderTools() {
+  // Rebuilt only when what it lists changes. PTZ position arrives several
+  // times a second, and replacing a <select>'s options closes it on an iPad.
+  const sig = JSON.stringify([view.cameras.map((c) => [c.id, c.label, c.state]),
+    meta.scenes, meta.focusNote, [...gangSelection], padCamera]);
+  if (sig === toolsSig) return;
+  toolsSig = sig;
   const refSel = $('#match-ref');
   const prev = refSel.value;
   refSel.textContent = '';
@@ -1168,6 +1288,10 @@ $('#stop-all').addEventListener('click', async () => {
   if (bad.length) toast(`Stop FAILED on: ${bad.map((b) => b.cameraId).join(', ')}`, 'bad', 12000);
   else toast('All cameras stopped');
 });
+// The PTZ panic button. Separate from "Stop all", which stops recording: one
+// is about cards and one is about heads, and they must never be confused.
+$('#ptz-stop-all').addEventListener('click', () => ptzUi.stopAll());
+ptzUi.wireSetup($);
 
 $('#scene-save').addEventListener('click', async () => {
   const name = $('#scene-name').value.trim();
@@ -1305,8 +1429,11 @@ $('#adopt-confirm').addEventListener('click', async () => {
     return;
   }
   if (editTarget) {
-    const r = await api('PATCH', `/api/cameras/${encodeURIComponent(editTarget.id)}/adoption`,
-      { label, username, password });
+    const body = { label, username, password };
+    // A PTZ head is reached by address, so its address is editable here.
+    const ip = $('#adopt-ip').value.trim();
+    if (editTarget.kind === 'ptz' && ip && ip !== editTarget.ip) body.ip = ip;
+    const r = await api('PATCH', `/api/cameras/${encodeURIComponent(editTarget.id)}/adoption`, body);
     if (r.ok) { toast(`Updated ${label || editTarget.label}`); $('#adopt-dialog').close(); refreshSetup(); }
   }
 });
@@ -1375,10 +1502,13 @@ async function padAction(action) {
     return;
   }
   if (!cam) return;
+  const ptz = cam.kind === 'ptz';
   if (action === 'recordToggle') {
+    if (ptz) return;   // a PTZ head is not a recorder
     await doAction(cam.id, cam.status?.recording ? 'recordStop' : 'recordStart');
   } else if (action === 'autofocus') {
-    await doAction(cam.id, 'autofocus');
+    if (ptz) ptzUi.padAutofocus(cam);
+    else await doAction(cam.id, 'autofocus');
   } else if (action === 'nextCamera' || action === 'prevCamera') {
     const live = view.cameras.filter((c) => c.state === 'connected');
     if (live.length < 2) return;
@@ -1391,6 +1521,8 @@ async function padAction(action) {
 }
 
 function setPadCamera(id) {
+  // Whatever the sticks were doing belonged to the previous camera.
+  ptzUi.padRelease();
   padCamera = id;
   localStorage.setItem('cb.padCamera', id ?? '');
   const sel = $('#pad-camera');
@@ -1400,6 +1532,16 @@ function setPadCamera(id) {
 
 const gamepad = createGamepadControl({
   onStep: (prop, direction, coarse) => padStep(prop, direction, coarse),
+  // A PTZ target takes the sticks as velocity — left stick pan/tilt, right
+  // stick zoom and focus — through the same refresh-or-stop holds the
+  // on-screen joystick uses. `null` means the pad went away or was switched
+  // off, which must stop the head.
+  onSticks: (axes) => {
+    const cam = axes ? padTarget() : null;
+    if (!cam || cam.kind !== 'ptz') { ptzUi.padRelease(); return false; }
+    ptzUi.padSticks(cam, axes);
+    return true;
+  },
   onButton: (action) => padAction(action),
   onStatus: ({ connected, name }) => {
     $('#pad-status').textContent = connected ? name : 'No gamepad detected';
@@ -1468,11 +1610,14 @@ function connectEvents() {
       alarmSummary = msg.alarmSummary ?? null;
       roll = msg.roll ?? null;
       undoState = msg.undo ?? {};
+      ptzUi.onView(view);
       render();
       if (currentView === 'multiview' && changed) renderMultiview();
     } catch { /* ignore malformed frame */ }
   };
   es.onerror = () => {
+    // About CamBridge itself, not the daemon, so shown at every venue.
+    $('#camd-pill').style.display = '';
     $('#camd-pill').textContent = 'reconnecting…';
     $('#camd-pill').className = 'pill warn';
   };

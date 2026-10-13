@@ -24,7 +24,7 @@ const DEADZONE = 0.22;
 const FAST_MS = 190;
 const SLOW_MS = 700;
 
-export function createGamepadControl({ onStep, onButton, onStatus }) {
+export function createGamepadControl({ onStep, onButton, onStatus, onSticks }) {
   let enabled = false;
   let rafHandle = null;
   const nextDue = new Map();      // axis key -> timestamp
@@ -70,7 +70,11 @@ export function createGamepadControl({ onStep, onButton, onStatus }) {
     rafHandle = requestAnimationFrame(poll);
     const p = pad();
     if (!p) {
-      if (lastPadName) { lastPadName = ''; onStatus({ connected: false, name: '' }); }
+      if (lastPadName) {
+        lastPadName = '';
+        onSticks?.(null);   // unplugged mid-move: whatever it was driving stops
+        onStatus({ connected: false, name: '' });
+      }
       return;
     }
     if (p.id !== lastPadName) {
@@ -79,7 +83,13 @@ export function createGamepadControl({ onStep, onButton, onStatus }) {
     }
     if (!enabled) return;
 
+    // A PTZ head wants the sticks as continuous velocity, not as steps. When
+    // the panel takes them that way, the stepping below is skipped so one
+    // stick never does two jobs at once.
+    const sticksTaken = onSticks?.(p.axes) === true;
+
     for (const spec of AXES) {
+      if (sticksTaken) break;
       const raw = p.axes[spec.axis] ?? 0;
       const magnitude = Math.abs(raw);
       if (magnitude < DEADZONE) { nextDue.delete(spec.axis); continue; }
@@ -111,7 +121,7 @@ export function createGamepadControl({ onStep, onButton, onStatus }) {
     get enabled() { return enabled; },
     setEnabled(value) {
       enabled = !!value;
-      if (!enabled) nextDue.clear();
+      if (!enabled) { nextDue.clear(); onSticks?.(null); }
     },
     start() {
       if (rafHandle === null) rafHandle = requestAnimationFrame(poll);
@@ -119,6 +129,7 @@ export function createGamepadControl({ onStep, onButton, onStatus }) {
     stop() {
       if (rafHandle !== null) cancelAnimationFrame(rafHandle);
       rafHandle = null;
+      onSticks?.(null);
     },
     mapping: { AXES, BUTTONS },
   };

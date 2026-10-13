@@ -30,6 +30,10 @@
   <button id="advanced-toggle" class="small ghost" title="Keep every camera's extra controls open">More controls</button>
   <button id="rec-all" class="danger">● Record all</button>
   <button id="stop-all">■ Stop all</button>
+  <!-- Stops every PTZ head's motion, now. Shown whenever a PTZ head exists,
+       and worded so it is never mistaken for "Stop all", which stops recording. -->
+  <button id="ptz-stop-all" class="danger stopptz" style="display:none"
+          title="Stop pan, tilt, zoom and focus on every PTZ head (Esc stops this panel's own moves)">✋ STOP ALL PTZ</button>
   <button id="quit" class="small ghost" title="Stop CamBridge completely">Quit</button>
 </header>
 
@@ -144,7 +148,7 @@
     </span>
 
     <button class="small ghost" id="scope-key" title="What the false-colour bands mean">Key</button>
-    <span class="note">Tap a picture to focus there. Live view must be enabled on the camera.</span>
+    <span class="note">Tap a picture to focus there — or, on a PTZ head, to aim it there. Live view must be enabled on the camera.</span>
   </div>
 
   <dialog id="scope-key-dialog">
@@ -164,11 +168,79 @@
 
 <!-- ================= SETUP ================= -->
 <section class="view" id="view-setup">
-  <div class="card">
+  <div class="card" id="discover-card">
     <h3>Cameras on the network</h3>
     <div class="sub" id="discover-hint"></div>
     <table class="list" id="discovered-table"></table>
   </div>
+
+  <!-- PTZ heads do not announce themselves the way the Sony bodies do, so they
+       are added by address. Detect only reads from the camera. -->
+  <div class="card" id="ptz-add-card">
+    <h3>Add a PTZ camera</h3>
+    <div class="sub">
+      Panasonic, Sony, Canon and PTZOptics heads are added by IP address. CamBridge asks the
+      camera what it is first; nothing on the camera is changed.
+    </div>
+    <div class="formgrid">
+      <label for="ptz-ip">IP address</label>
+      <input type="text" id="ptz-ip" inputmode="decimal" autocomplete="off" placeholder="e.g. 192.168.0.21">
+      <label for="ptz-user">Username</label>
+      <input type="text" id="ptz-user" autocomplete="off" autocapitalize="off" placeholder="the camera’s web login">
+      <label for="ptz-pass">Password</label>
+      <input type="password" id="ptz-pass" autocomplete="new-password">
+      <label for="ptz-vendor">Make</label>
+      <select id="ptz-vendor"><option value="">Work it out</option></select>
+    </div>
+    <div class="line" style="margin-top:12px">
+      <button class="small primary" id="ptz-detect">Find camera</button>
+      <span class="note" id="ptz-detect-msg" role="status"></span>
+    </div>
+    <div id="ptz-found" hidden style="margin-top:12px">
+      <div class="note" id="ptz-found-text" style="color:var(--ok);margin-bottom:9px"></div>
+      <div class="formgrid">
+        <label for="ptz-name">Name</label>
+        <input type="text" id="ptz-name" placeholder="e.g. Wide, Centre, Lectern">
+      </div>
+      <div class="line" style="margin-top:12px">
+        <button class="small primary" id="ptz-add">Add camera</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Added cameras</h3>
+    <div class="sub">These are saved and reconnect on their own. Removing one does not change the camera itself.</div>
+    <table class="list" id="adopted-table"></table>
+    <div class="note mono" id="paths" style="margin-top:12px"></div>
+  </div>
+
+  <!-- Hidden until the server answers /api/skaarhoj. -->
+  <div class="card" id="skaarhoj-card" hidden>
+    <h3>SKAARHOJ panel</h3>
+    <div class="sub">
+      Only one thing can own the panel at a time: either SKAARHOJ Reactor drives the cameras
+      itself, or CamBridge drives them through the panel’s raw panel mode. The switch is made on
+      the panel too — in its web page, <strong>System Manager → Settings → Raw Panel Mode</strong> —
+      so set it there to match what you choose here.
+    </div>
+    <div class="seg" id="sk-mode" role="group" aria-label="Who drives the panel" style="max-width:520px">
+      <button class="small" data-mode="reactor">Reactor owns the panel</button>
+      <button class="small" data-mode="drive">CamBridge drives it</button>
+    </div>
+    <div class="formgrid" style="margin-top:12px">
+      <label for="sk-host">Panel address</label>
+      <input type="text" id="sk-host" inputmode="decimal" autocomplete="off" placeholder="e.g. 192.168.0.40">
+      <label for="sk-port">Port</label>
+      <input type="number" id="sk-port" min="1" max="65535" placeholder="9923">
+    </div>
+    <div class="line" style="margin-top:12px">
+      <button class="small primary" id="sk-save">Save</button>
+      <span class="note" id="sk-msg" role="status"></span>
+    </div>
+    <div class="status" id="sk-status" style="margin-top:12px"></div>
+  </div>
+
   <div class="card">
     <h3>Who can control the cameras</h3>
     <div class="sub" id="auth-state"></div>
@@ -197,13 +269,6 @@
       file instead of a PIN, because they cannot answer a prompt.
     </p>
   </div>
-
-  <div class="card">
-    <h3>Added cameras</h3>
-    <div class="sub">These are saved and reconnect on their own. Removing one does not change the camera itself.</div>
-    <table class="list" id="adopted-table"></table>
-    <div class="note mono" id="paths" style="margin-top:12px"></div>
-  </div>
 </section>
 
 <!-- Full value list behind a stepper's readout, for a big jump. -->
@@ -221,6 +286,9 @@
   <div class="formgrid" style="margin-top:12px">
     <label for="adopt-label">Name</label>
     <input type="text" id="adopt-label" placeholder="e.g. Wide, Centre, Tight">
+    <!-- PTZ only: a head is reached by its address, so the address is editable. -->
+    <label for="adopt-ip" class="ptz-only" hidden>IP address</label>
+    <input type="text" id="adopt-ip" class="ptz-only" hidden inputmode="decimal" autocomplete="off">
   </div>
 
   <!-- Only shown when the camera itself says it wants credentials. Asking for a
@@ -233,12 +301,15 @@
       <label for="adopt-pass">Password</label>
       <input type="password" id="adopt-pass" autocomplete="off" placeholder="from the camera screen">
     </div>
-    <p class="note" style="margin:12px 0 0">
+    <p class="note ptz-only" hidden style="margin:12px 0 0">
+      The login for the camera’s own web page. Leave both blank to keep what is stored.
+    </p>
+    <p class="note sony-only" style="margin:12px 0 0">
       On the camera: <strong>MENU → Network → Network Option → [Access Authen. Info]</strong>.
       Each body has its own username and password — they are not shared, and they
       cannot be read over the network.
     </p>
-    <p class="note" style="margin:6px 0 0">
+    <p class="note sony-only" style="margin:6px 0 0">
       You only enter these once. CamBridge stores them against the camera's MAC
       address and reconnects on its own from then on.
     </p>
@@ -283,6 +354,14 @@
     <tr><td>B / ○</td><td>Autofocus</td></tr>
     <tr><td>Shoulders</td><td>Previous / next camera</td></tr>
     <tr><td>Start</td><td>Record all / stop all</td></tr>
+  </table>
+
+  <table class="list" style="margin-top:14px">
+    <tr><th>On a PTZ head</th><th>Does</th></tr>
+    <tr><td>Left stick</td><td>Pan and tilt — further is faster</td></tr>
+    <tr><td>Right stick ↕</td><td>Zoom — up is tele</td></tr>
+    <tr><td>Right stick ↔</td><td>Focus — right is far</td></tr>
+    <tr><td>B / ○</td><td>One-push autofocus</td></tr>
   </table>
 
   <p class="note" style="margin:12px 0 0">
