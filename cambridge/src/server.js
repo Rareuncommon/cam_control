@@ -9,6 +9,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
+import { isIP } from 'node:net';
 import { dirname, join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,6 +31,8 @@ import { detect as detectPtz } from './ptz/detect.js';
 import { supported as supportedPtz } from './ptz/drivers/index.js';
 import { needsAdmin, roleEntry } from './ptz/schema.js';
 import { PtzPresetBook } from './ptz/presets.js';
+import { RawPanelClient, DEFAULT_PORT as SKAARHOJ_PORT } from './skaarhoj/rawpanel.js';
+import { PanelController } from './skaarhoj/mapping.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -59,6 +62,11 @@ function loadConfig(path) {
     // PTZ connection tuning. Empty means the lifecycle defaults, which are
     // the same heartbeat and backoff numbers camd uses for the Sony bodies.
     ptz: { tallyFromAtem: false },
+    // Who drives a SKAARHOJ panel. 'reactor' (the default) leaves the panel's
+    // own Reactor in charge of the cameras; CamBridge only sees its moves by
+    // polling. 'drive' makes CamBridge the panel's Raw Panel host, which needs
+    // Raw Panel Mode switched on at the panel — see docs/skaarhoj.md.
+    skaarhoj: { mode: 'reactor', host: '', port: SKAARHOJ_PORT, mapping: {} },
   };
   if (!existsSync(path)) {
     process.stderr.write(`cambridge: no config at ${path}, using defaults\n`);
@@ -76,6 +84,7 @@ function loadConfig(path) {
       alarms: { ...defaults.alarms, ...(parsed.alarms ?? {}) },
       auth: { ...defaults.auth, ...(parsed.auth ?? {}) },
       ptz: { ...defaults.ptz, ...(parsed.ptz ?? {}) },
+      skaarhoj: { ...defaults.skaarhoj, ...(parsed.skaarhoj ?? {}) },
     };
   } catch (err) {
     process.stderr.write(`cambridge: config ${path} is not valid JSON: ${err.message}\n`);
@@ -382,6 +391,115 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     });
   }
 
+  /**
+   * A camera-native preset operation, with the bookkeeping CamBridge adds:
+   * a picture and a name on store, forgetting both on delete. Shared by the
+   * HTTP route and the SKAARHOJ panel so a preset stored from either looks
+   * the same in the browser.
+   */
+  async function ptzPreset(cameraId, op, n, { speed, name } = {}) {
+    const r = await ptz.preset(cameraId, op, n, { speed });
+    let saved = null;
+    if (r.ok && op === 'store') {
+      // The head is at the stored position right now, so this frame is
+      // the shot the preset recalls. A missing picture is not a failure.
+      const frame = await ptz.snapshot(cameraId).catch(() => null);
+      saved = ptzPresets.stored(cameraId, n, name, frame?.ok ? frame : null);
+    }
+    if (r.ok && op === 'delete') ptzPresets.forget(cameraId, n);
+    // Names live here, not on the head, so no camera event will say one
+    // changed: tell the panel directly.
+    if (r.ok && op !== 'recall') skaarhoj?.controller.refresh();
+    return { r, saved };
+  }
+
+  // --- SKAARHOJ panel, driven by CamBridge -----------------------------------
+  // Off unless an admin switches it on. In the default 'reactor' mode the
+  // panel's own Reactor drives the cameras and nothing here runs: the PTZ
+  // lifecycle's polling is what keeps CamBridge in step with it.
+  let skaarhoj = null;   // { client, controller } while driving a panel
+
+  /** PTZ cameras in config order: the order of the panel's camera buttons. */
+  function panelCameras() {
+    return ptz.ids().map((id) => state.get(id)).filter(Boolean).map((c) => ({
+      id: c.id, label: c.label, state: c.state, tally: c.tally ?? null, ptz: c.ptz ?? null,
+    }));
+  }
+
+  function startSkaarhoj() {
+    const sc = cfg.skaarhoj;
+    if (skaarhoj || sc.mode !== 'drive') return;
+    if (!sc.host) {
+      log.warn('skaarhoj', 'mode is "drive" but no panel address is set; the panel is not being driven');
+      return;
+    }
+    const slog = (level, msg) => log.write(level, 'skaarhoj', msg);
+    const client = new RawPanelClient({
+      host: sc.host,
+      port: Number(sc.port) || SKAARHOJ_PORT,
+      // Tuning, for tests and odd networks; the defaults follow the notes.
+      ...(Number.isFinite(sc.heartbeatMs) ? { heartbeatMs: sc.heartbeatMs } : {}),
+      ...(Number.isFinite(sc.lostAfterMs) ? { lostAfterMs: sc.lostAfterMs } : {}),
+      ...(Array.isArray(sc.backoffMs) ? { backoffMs: sc.backoffMs } : {}),
+      log: slog,
+    });
+    const controller = new PanelController({
+      client,
+      ptz,
+      cameras: panelCameras,
+      schema: (id) => { const r = ptz.schema(id); return r.ok ? r.body : null; },
+      value: (id, prop) => state.get(id)?.properties?.[prop]?.value,
+      // Through applyFn, like every other surface: logged, undoable, and
+      // never an admin-level setting.
+      setProperty: (id, prop, v) => applyFn(id, prop, v),
+      preset: async (id, op, n) => (await ptzPreset(id, op, n)).r,
+      presetName: (id, n) => ptzPresets.name(id, n),
+      mapping: sc.mapping,
+      log: slog,
+    });
+    controller.attach();
+    const push = () => pushToClients(buildPush());
+    client.on('status', push);
+    controller.on('selected', push);
+    controller.on('layout', push);
+    skaarhoj = { client, controller };
+    log.info('skaarhoj', `driving the panel at ${sc.host}:${client.port}`);
+    client.start();
+  }
+
+  async function stopSkaarhoj() {
+    if (!skaarhoj) return;
+    const { client, controller } = skaarhoj;
+    skaarhoj = null;
+    // Motion first: whatever the stick was holding stops before the link goes.
+    controller.detach();
+    await client.stop();
+    pushToClients(buildPush());
+  }
+
+  function skaarhojStatus() {
+    const sc = cfg.skaarhoj;
+    const st = skaarhoj?.client.status() ?? null;
+    const cs = skaarhoj?.controller.status() ?? null;
+    let detail = st?.detail ?? null;
+    if (!skaarhoj) {
+      detail = sc.mode === 'drive'
+        ? 'no panel address set'
+        : 'Reactor drives the cameras; CamBridge follows by polling';
+    }
+    return {
+      mode: sc.mode,
+      host: sc.host,
+      port: Number(sc.port) || SKAARHOJ_PORT,
+      connected: !!st?.connected,
+      state: st?.state ?? 'off',
+      panel: st?.panel ?? null,
+      detail,
+      selectedCameraId: cs?.selectedCameraId ?? null,
+      topologySummary: st?.connected ? (cs?.topologySummary ?? null) : null,
+    };
+  }
+
   // --- SSE fanout -----------------------------------------------------------
   const sseClients = new Set();
 
@@ -417,6 +535,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       alarmSummary: summarise(alarms),
       roll: rollState(view.cameras),
       undo: undo.summary(),
+      skaarhoj: skaarhojStatus(),
     };
   }
 
@@ -446,6 +565,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   // and repainting per event would swamp an iPad over Wi-Fi.
   let pushTimer = null;
   state.on('change', (change) => {
+    // Tally, labels, values and presets all show on the panel; it repaints
+    // only what changed, on its own short coalescing timer.
+    skaarhoj?.controller.refresh();
     if (change.type === 'connectionState' || change.type === 'camdConnection'
         || change.type === 'tally') {
       // Connection transitions are the one thing that must never be delayed —
@@ -901,6 +1023,51 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         }
       }
 
+      // --- SKAARHOJ panel mode ---
+      if (path === '/api/skaarhoj' && req.method === 'GET') {
+        return sendJson(res, 200, skaarhojStatus());
+      }
+
+      // Admin (ADMIN_ROUTES): it decides which system drives the cameras from
+      // the panel, and it outlasts the shoot in the config file.
+      if (path === '/api/skaarhoj' && req.method === 'PUT') {
+        const body = (await readBody(req)) ?? {};
+        const before = cfg.skaarhoj;
+        const mode = body.mode ?? before.mode;
+        if (mode !== 'reactor' && mode !== 'drive') {
+          return sendJson(res, 400, { error: 'mode is "reactor" or "drive"' });
+        }
+        const host = body.host === undefined ? before.host : String(body.host ?? '').trim();
+        if (host && !(isIP(host) || (host.length <= 253
+            && /^[A-Za-z0-9]([A-Za-z0-9-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}))*$/.test(host)))) {
+          return sendJson(res, 400, { error: `"${host}" is not an address` });
+        }
+        const port = body.port === undefined ? (Number(before.port) || SKAARHOJ_PORT) : Number(body.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          return sendJson(res, 400, { error: 'port runs 1–65535' });
+        }
+        if (mode === 'drive' && !host) {
+          return sendJson(res, 400, { error: "CamBridge needs the panel's address to drive it" });
+        }
+        const saved = adoption.saveSection('skaarhoj', { mode, host, port });
+        if (!saved.ok) return sendJson(res, 500, { error: saved.error });
+        // The file's block, so a mapping edited there by hand comes in too.
+        cfg.skaarhoj = { ...cfg.skaarhoj, ...saved.block };
+        const changed = mode !== before.mode || host !== before.host || port !== Number(before.port);
+        if (mode !== before.mode) {
+          log.info('skaarhoj', `${actor()}panel mode ${before.mode} -> ${mode}`
+            + (mode === 'drive' ? ` (CamBridge drives the panel at ${host}:${port})` : ' (Reactor drives the cameras)'));
+        } else if (changed) {
+          log.info('skaarhoj', `${actor()}panel address ${before.host}:${before.port} -> ${host}:${port}`);
+        }
+        // Applied live: stop the old link (releasing any held motion) and
+        // start the new one. Re-applied even when nothing changed, so a PUT
+        // also picks up a mapping edited in the file.
+        await stopSkaarhoj();
+        startSkaarhoj();
+        return sendJson(res, 200, skaarhojStatus());
+      }
+
       // --- PTZ ---------------------------------------------------------------
       if (path === '/api/ptz/supported' && req.method === 'GET') {
         return sendJson(res, 200, { vendors: supportedPtz() });
@@ -1007,15 +1174,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (!op) return sendJson(res, 404, { error: 'recall or store?' });
         const label = ptzPresets.name(cameraId, n);
         log.info('ptz', `${actor()}${cameraId} preset ${n}${label ? ` "${label}"` : ''} ${op}`);
-        const r = await ptz.preset(cameraId, op, n, { speed: body.speed });
-        let saved = null;
-        if (r.ok && op === 'store') {
-          // The head is at the stored position right now, so this frame is
-          // the shot the preset recalls. A missing picture is not a failure.
-          const frame = await ptz.snapshot(cameraId).catch(() => null);
-          saved = ptzPresets.stored(cameraId, n, body.name, frame?.ok ? frame : null);
-        }
-        if (r.ok && op === 'delete') ptzPresets.forget(cameraId, n);
+        const { r, saved } = await ptzPreset(cameraId, op, n, { speed: body.speed, name: body.name });
         return sendJson(res, r.ok ? 200 : (r.status || 502), {
           ok: r.ok, cameraId, ...(r.body ?? {}), ...(saved ? { saved } : {}),
         });
@@ -1147,6 +1306,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           // our own side cleanly; a camd started separately keeps running, which
           // is correct — we did not start it and must not assume we own it.
           camd.stop();
+          await stopSkaarhoj();
           await ptz.stop();
           atem?.stop();
           atemWrites?.stop();
@@ -1315,12 +1475,15 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     atem,
     visca,
     ptz,
+    /** The live panel link while driving one, else null. */
+    get skaarhoj() { return skaarhoj; },
     start() {
       if (camdUsed) camd.start();
       // Cameras into the state model before their first event can arrive, so
       // a connection state never lands on a camera the model does not know.
       state.replaceAll(ptz.snapshots(), null, 'ptz');
       ptz.start();
+      startSkaarhoj();
       if (atem) {
         log.info('atem', `watching switcher at ${cfg.atem.host}:${cfg.atem.port} for tally`);
         atem.start();
@@ -1359,6 +1522,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     },
     async stop() {
       camd.stop();
+      await stopSkaarhoj();
       await ptz.stop();
       atem?.stop();
       atemWrites?.stop();

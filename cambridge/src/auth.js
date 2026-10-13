@@ -68,6 +68,9 @@ export const ADMIN_ROUTES = [
   /^POST \/api\/shutdown$/,            // stops the app for everyone
   /^POST \/api\/auth\/pin$/,           // changes who can get in
   /^POST \/api\/ptz\/(detect|cameras)$/, // probes with, and stores, PTZ credentials
+  // Hands the SKAARHOJ panel to CamBridge or back to Reactor, and stores it:
+  // decides which system moves the cameras from the panel, beyond this shoot.
+  /^PUT \/api\/skaarhoj$/,
   // Settings that outlast a shoot on the camera itself: network, users,
   // firmware, reboot, factory reset. The table marks which ones they are; the
   // route is separate so the check is here, not remembered per setting.
