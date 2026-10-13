@@ -1050,6 +1050,10 @@ function render() {
   $('#rec-all').style.display = allPtz ? 'none' : '';
   $('#stop-all').style.display = allPtz ? 'none' : '';
   $('#advanced-toggle').style.display = allPtz ? 'none' : '';
+  // Scenes, match and link capture Sony exposure and colour; with no Sony
+  // body there is nothing for them to capture, and a drawer of controls that
+  // cannot do anything is a drawer someone opens mid-shoot to find out.
+  document.querySelector('details.tools').style.display = allPtz ? 'none' : '';
 
   renderBanner();
   renderRollPill();

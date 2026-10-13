@@ -158,6 +158,13 @@ export class PtzSource extends EventEmitter {
     return cam ? cam.snapshot() : this.#missing(id);
   }
 
+  reconnect(id) {
+    const cam = this.camera(id);
+    if (!cam) return this.#missing(id);
+    cam.reconnect();
+    return { ok: true, status: 200, body: { state: cam.state } };
+  }
+
   watch(id, ms) { this.camera(id)?.watch(ms); }
 
   /** A control surface disconnected: stop whatever it held, on every camera. */

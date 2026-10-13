@@ -737,8 +737,12 @@ export function createPtz(ctx) {
         el('div', { class: 'note', text: cam.detail || 'No live values while disconnected.' }),
         el('div', { class: 'note', text: cam.state === 'unauthorized'
           ? 'Check the username and password in Setup.'
-          : 'CamBridge keeps trying on its own. If the address changed, edit it in Setup.' }),
+          : 'CamBridge keeps trying on its own; Reconnect tries now. If the address changed, edit it in Setup.' }),
         el('div', { class: 'btnrow' },
+          // Cuts the backoff short — for someone who has just plugged the
+          // camera back in and does not want to wait out the next retry.
+          el('button', { class: 'small', onclick: () => api('POST', `/api/cameras/${encodeURIComponent(id)}/actions/reconnect`) },
+            document.createTextNode('Reconnect')),
           el('button', { class: 'small', onclick: () => ctx.switchView('setup') },
             document.createTextNode('Setup')),
           el('button', { class: 'small', onclick: () => openSettings(id) },

@@ -109,6 +109,19 @@ export class PtzCamera extends EventEmitter {
     this.#reconnectNow();
   }
 
+  /**
+   * Try again now, rather than at the end of the backoff. For the operator who
+   * has just plugged the camera back in and does not want to wait 15 s.
+   */
+  reconnect() {
+    if (this.stopped) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    if (this.state === 'connected') return;
+    this.reconnectAttempts = 0;
+    this.#reconnectNow();
+  }
+
   /** #connect never rejects by design; this makes sure a bug in it is a log line, not a crash. */
   #reconnectNow() {
     this.#connect().catch((err) => {

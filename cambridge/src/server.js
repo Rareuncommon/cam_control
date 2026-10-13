@@ -265,6 +265,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    */
   const runAction = async (cameraId, action, body) => {
     if (isPtz(cameraId)) {
+      // The same Reconnect button the Sony cards have; for a PTZ head it cuts
+      // the backoff short.
+      if (action === 'reconnect') return ptz.reconnect(cameraId);
       if (needsAdmin(ptzEntry(cameraId, action))) {
         return { ok: false, status: 403, body: { error: `${ptzEntry(cameraId, action).label} needs the admin settings` } };
       }

@@ -534,3 +534,25 @@ test('a camera that drops during its first full read reconnects instead of crash
     await cam.stop();
   }
 });
+
+test('PTZ heads can be added by host name, and reconnected on demand', async () => {
+  const { app, call } = await ptzOnlyApp();
+  try {
+    const bad = await call('POST', '/api/ptz/cameras', { ip: 'not a host!', vendor: 'fake' });
+    assert.equal(bad.status, 409);
+    const added = await call('POST', '/api/ptz/cameras', { ip: 'fake-new', vendor: 'fake', label: 'New' });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    const id = added.body.camera.id;
+    await until(async () => (await call('GET', '/api/state')).body.view.cameras.find((c) => c.id === id)?.state === 'connected');
+
+    fakeHead('fake-new').down = true;
+    await until(async () => (await call('GET', '/api/state')).body.view.cameras.find((c) => c.id === id)?.state === 'reconnecting');
+    fakeHead('fake-new').down = false;
+    const r = await call('POST', `/api/cameras/${id}/actions/reconnect`);
+    assert.equal(r.status, 200);
+    await until(async () => (await call('GET', '/api/state')).body.view.cameras.find((c) => c.id === id)?.state === 'connected',
+      { timeoutMs: 1000 });
+  } finally {
+    await app.stop();
+  }
+});

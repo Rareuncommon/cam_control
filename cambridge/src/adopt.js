@@ -11,6 +11,19 @@ import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, mkdi
 import { dirname } from 'node:path';
 import { isIP } from 'node:net';
 
+/**
+ * An address a PTZ head can be reached at: an IP, or a host name. Host names
+ * are allowed because some venues name their cameras in DNS, and because a
+ * name that resolves only on the venue's network is still the right thing to
+ * store — it is the venue's network the camera lives on.
+ */
+export function isHostAddress(s) {
+  const v = String(s ?? '').trim();
+  if (isIP(v)) return true;
+  return v.length <= 253
+    && /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/.test(v);
+}
+
 /** Turns a model and MAC into a stable, readable, filesystem-safe id. */
 export function suggestId(model, mac, taken = new Set()) {
   const base = (model || 'camera')
@@ -216,7 +229,7 @@ export class Adoption {
     // A PTZ head is reached by address, not discovered by MAC, so its address
     // is something an operator edits. A Sony body's is whatever camd finds.
     if (entry.kind === 'ptz' && typeof changes.ip === 'string' && changes.ip.trim()) {
-      if (!isIP(changes.ip.trim())) return { ok: false, error: `"${changes.ip}" is not an IP address` };
+      if (!isHostAddress(changes.ip)) return { ok: false, error: `"${changes.ip}" is not an IP address or host name` };
       entry.ip = changes.ip.trim();
     }
 
@@ -258,7 +271,7 @@ export class Adoption {
    */
   async addPtz(input) {
     const ip = String(input.ip ?? '').trim();
-    if (!isIP(ip)) return { ok: false, error: 'a valid IP address is required' };
+    if (!isHostAddress(ip)) return { ok: false, error: 'an IP address or host name is required' };
     if (!input.vendor) return { ok: false, error: 'which kind of camera is it?' };
     if (!this.ptz) return { ok: false, error: 'PTZ control is not running' };
 
@@ -268,7 +281,7 @@ export class Adoption {
       return { ok: false, error: `a camera at ${ip} is already added` };
     }
     const taken = new Set(cfg.cameras.map((c) => c.id));
-    const id = input.id?.trim() || suggestId(input.model || input.vendor, ip.replace(/\./g, ''), taken);
+    const id = input.id?.trim() || suggestId(input.model || input.vendor, ip.replace(/[^0-9A-Fa-f]/g, ''), taken);
     if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
 
     const entry = {
