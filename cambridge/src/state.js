@@ -65,6 +65,12 @@ export class StateModel extends EventEmitter {
     this.backend = 'unknown';
     /** cameraId -> { capabilities, byId: Map } for PTZ cameras. */
     this.ptzSchemas = new Map();
+    /**
+     * cameraId -> { group, order } from the config. Groups and order are the
+     * operator's, not the camera's or the daemon's, so they live beside the
+     * mirror rather than in it and survive a camd hello rebuilding the Sony side.
+     */
+    this.meta = new Map();
     /** Completed and in-flight takes, oldest first. @type {object[]} */
     this.takes = [];
     /** cameraId -> { wanted: 'start'|'stop', at: number } */
@@ -321,7 +327,19 @@ export class StateModel extends EventEmitter {
   mergeProperties(cameraId, values) {
     const cam = this.ensure(cameraId);
     cam.properties = { ...cam.properties, ...values };
-    this.emit('change', { type: 'properties', cameraId });
+    this.emit('change', { type: 'properties', cameraId, props: Object.keys(values) });
+  }
+
+  /**
+   * Group and display order for every configured camera, in config order.
+   * @param {Array<{id: string, group?: string}>} entries
+   */
+  setCameraMeta(entries) {
+    this.meta = new Map((entries ?? []).map((e, order) => [e.id, {
+      group: typeof e.group === 'string' && e.group.trim() ? e.group.trim() : null,
+      order,
+    }]));
+    this.emit('change', { type: 'all' });
   }
 
   /** Position, motion, tracking: the fast-changing part of a PTZ head. */
@@ -346,42 +364,75 @@ export class StateModel extends EventEmitter {
     return out;
   }
 
-  /** The shape the browser consumes: raw values plus labels and options. */
-  view() {
+  /**
+   * One camera as the browser sees it.
+   *
+   * @param {object} cam
+   * @param {{props?: string[] | null | false}} [o]  which properties: all (null),
+   *   just these names, or none (false) — a patch carries only what changed.
+   */
+  #cameraView(cam, { props = null } = {}) {
+    const meta = this.meta.get(cam.id);
+    const names = props === false ? [] : props ?? Object.keys(cam.properties);
+    const properties = {};
+    for (const name of names) {
+      const p = cam.properties[name];
+      if (!p) continue;
+      properties[name] = cam.kind === 'ptz' ? this.#decoratePtz(cam.id, name, p) : decorate(name, p);
+    }
+    return {
+      id: cam.id,
+      kind: cam.kind ?? 'cine',
+      vendor: cam.vendor ?? 'sony',
+      label: cam.label,
+      model: cam.model,
+      ip: cam.ip,
+      mac: cam.mac,
+      group: meta?.group ?? null,
+      state: cam.state,
+      detail: cam.detail,
+      reconnectAttempts: cam.reconnectAttempts,
+      tally: cam.tally ?? null,
+      // Sent as a start timestamp rather than an elapsed count, so the browser
+      // can tick the timer itself instead of the server pushing once a second.
+      recordStartedAt: cam.recordStartedAt ?? null,
+      status: {
+        ...cam.status,
+        recordingLabel:
+          cam.status.recordingState === RECORDING_STATE.FAILED ? 'FAILED'
+            : cam.status.recording ? 'REC' : 'idle',
+      },
+      ...(cam.kind === 'ptz' ? {
+        ptz: cam.ptz ?? null,
+        capabilities: this.ptzSchemas.get(cam.id)?.capabilities ?? null,
+      } : {}),
+      properties,
+    };
+  }
+
+  /** One camera's view, or null. */
+  cameraView(id, o) {
+    const cam = this.cameras.get(id);
+    return cam ? this.#cameraView(cam, o) : null;
+  }
+
+  /** Cameras in the operator's order: config order, anything unconfigured last. */
+  ordered() {
+    const at = (c) => this.meta.get(c.id)?.order ?? Number.MAX_SAFE_INTEGER;
+    return this.list().sort((a, b) => at(a) - at(b));
+  }
+
+  /**
+   * The shape the browser consumes: raw values plus labels and options.
+   * `properties: false` leaves them out — what alarms and the roll count need,
+   * at a fraction of the cost with dozens of cameras.
+   */
+  view({ properties = true } = {}) {
     return {
       camdConnected: this.camdConnected,
       camdUsed: this.camdUsed,
       backend: this.backend,
-      cameras: this.list().map((cam) => ({
-        id: cam.id,
-        kind: cam.kind ?? 'cine',
-        vendor: cam.vendor ?? 'sony',
-        label: cam.label,
-        model: cam.model,
-        ip: cam.ip,
-        mac: cam.mac,
-        state: cam.state,
-        detail: cam.detail,
-        reconnectAttempts: cam.reconnectAttempts,
-        tally: cam.tally ?? null,
-        // Sent as a start timestamp rather than an elapsed count, so the browser
-        // can tick the timer itself instead of the server pushing once a second.
-        recordStartedAt: cam.recordStartedAt ?? null,
-        status: {
-          ...cam.status,
-          recordingLabel:
-            cam.status.recordingState === RECORDING_STATE.FAILED ? 'FAILED'
-              : cam.status.recording ? 'REC' : 'idle',
-        },
-        ...(cam.kind === 'ptz' ? {
-          ptz: cam.ptz ?? null,
-          capabilities: this.ptzSchemas.get(cam.id)?.capabilities ?? null,
-        } : {}),
-        properties: Object.fromEntries(
-          Object.entries(cam.properties).map(([name, p]) => [name,
-            cam.kind === 'ptz' ? this.#decoratePtz(cam.id, name, p) : decorate(name, p)]),
-        ),
-      })),
+      cameras: this.ordered().map((cam) => this.#cameraView(cam, { props: properties ? null : false })),
     };
   }
 }

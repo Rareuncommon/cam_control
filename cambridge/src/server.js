@@ -461,7 +461,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       log: slog,
     });
     controller.attach();
-    const push = () => pushToClients(buildPush());
+    // Panel status rides in the envelope every push carries, so any push will
+    // do; a patch with no camera changes is a few hundred bytes.
+    const push = () => flushPush();
     client.on('status', push);
     controller.on('selected', push);
     controller.on('layout', push);
@@ -477,7 +479,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     // Motion first: whatever the stick was holding stops before the link goes.
     controller.detach();
     await client.stop();
-    pushToClients(buildPush());
+    flushPush();
   }
 
   function skaarhojStatus() {
@@ -504,14 +506,35 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   }
 
   // --- SSE fanout -----------------------------------------------------------
-  const sseClients = new Set();
+  /**
+   * Open event streams, each with the protocol it asked for.
+   *
+   * `patch` clients get the full state once and then only what changed. Older
+   * clients — a Companion module installed on another machine before this
+   * existed — get a full state frame on every change, as they always did.
+   * With dozens of cameras a full frame is most of a megabyte, so it is only
+   * built while a client that needs it is actually connected.
+   *
+   * @type {Map<import('node:http').ServerResponse, {patch: boolean}>}
+   */
+  const sseClients = new Map();
 
-  function pushToClients(payload) {
-    const frame = `data: ${JSON.stringify(payload)}\n\n`;
-    for (const res of sseClients) {
-      // A slow or dead browser tab must not block the others or throw.
-      try { res.write(frame); } catch { sseClients.delete(res); }
-    }
+  function send(res, payload) {
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { sseClients.delete(res); }
+  }
+
+  /** Writes whatever has changed to every client, in the form each one asked for. */
+  function flushPush() {
+    // Alarms are evaluated, and logged on their edges, whether or not anyone
+    // is watching: the log is read the morning after, when nobody was.
+    const env = envelope();
+    if (sseClients.size === 0) { dirty.clear(); return; }
+    const wantsFull = [...sseClients.values()].some((c) => !c.patch);
+    const wantsPatch = [...sseClients.values()].some((c) => c.patch);
+    const full = wantsFull || dirty.full ? { type: 'state', view: state.view(), ...env } : null;
+    const patch = wantsPatch && !dirty.full ? buildPatch(env) : null;
+    dirty.clear();
+    for (const [res, c] of sseClients) send(res, c.patch && patch ? patch : full);
   }
 
   const thresholds = resolveThresholds(cfg.alarms);
@@ -539,6 +562,79 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       roll: rollState(view.cameras),
       undo: undo.summary(),
       skaarhoj: skaarhojStatus(),
+    };
+  }
+
+  /**
+   * What has changed since the last push, per camera, so a pan updates one
+   * camera's position on the wire rather than resending every camera's every
+   * setting. A camera whose identity or connection changed is resent whole.
+   */
+  const dirty = {
+    full: false,
+    cams: new Map(),
+    clear() { this.full = false; this.cams.clear(); },
+    cam(id) {
+      if (!this.cams.has(id)) this.cams.set(id, { whole: false, props: null, ptz: false, status: false, tally: false });
+      return this.cams.get(id);
+    },
+    mark(change) {
+      const id = change.cameraId;
+      switch (change.type) {
+        case 'all': case 'camdConnection': this.full = true; break;
+        case 'tally': for (const c of state.list()) this.cam(c.id).tally = true; break;
+        case 'connectionState': case 'ptzSchema': this.cam(id).whole = true; break;
+        case 'statusUpdate': this.cam(id).status = true; break;
+        case 'ptz': this.cam(id).ptz = true; break;
+        case 'propertyChanged': this.addProps(id, [change.prop]); break;
+        case 'properties': this.addProps(id, change.props ?? true); break;
+        default: this.full = true;
+      }
+    },
+    addProps(id, names) {
+      const d = this.cam(id);
+      if (names === true || d.props === true) { d.props = true; return; }
+      d.props ??= new Set();
+      for (const n of names) d.props.add(n);
+    },
+  };
+
+  /** Everything but the camera list, which a patch carries only in part. */
+  function envelope() {
+    const lite = state.view({ properties: false });
+    const alarms = evaluateAlarms(lite.cameras, thresholds);
+    logNewAlarms(alarms);
+    return {
+      alarms,
+      alarmsByCamera: byCamera(alarms),
+      alarmSummary: summarise(alarms),
+      roll: rollState(lite.cameras),
+      undo: undo.summary(),
+      skaarhoj: skaarhojStatus(),
+    };
+  }
+
+  function buildPatch(env = envelope()) {
+    const cameras = {};
+    for (const [id, d] of dirty.cams) {
+      if (!state.get(id)) continue;
+      if (d.whole) { cameras[id] = { ...state.cameraView(id), replace: true }; continue; }
+      const p = {};
+      if (d.props) {
+        p.properties = state.cameraView(id, { props: d.props === true ? null : [...d.props] }).properties;
+        if (d.props === true) p.replaceProperties = true;
+      }
+      const v = (d.status || d.ptz || d.tally) ? state.cameraView(id, { props: false }) : null;
+      if (d.status) { p.status = v.status; p.recordStartedAt = v.recordStartedAt; }
+      if (d.ptz) p.ptz = v.ptz;
+      if (d.tally) p.tally = v.tally;
+      cameras[id] = p;
+    }
+    return {
+      type: 'patch',
+      view: { camdConnected: state.camdConnected, camdUsed: state.camdUsed, backend: state.backend },
+      cameras,
+      ...env,
     };
   }
 
@@ -571,18 +667,21 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     // Tally, labels, values and presets all show on the panel; it repaints
     // only what changed, on its own short coalescing timer.
     skaarhoj?.controller.refresh();
+    dirty.mark(change);
     if (change.type === 'connectionState' || change.type === 'camdConnection'
         || change.type === 'tally') {
       // Connection transitions are the one thing that must never be delayed —
       // "camera offline" is the message the operator needs instantly. Tally is
       // the same: it has to track the cut, not trail it by a coalescing window.
-      pushToClients(buildPush());
+      clearTimeout(pushTimer);
+      pushTimer = null;
+      flushPush();
       return;
     }
     if (pushTimer) return;
     pushTimer = setTimeout(() => {
       pushTimer = null;
-      pushToClients(buildPush());
+      flushPush();
     }, 60);
   });
 
@@ -806,7 +905,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           Connection: 'keep-alive',
         });
         res.write(`data: ${JSON.stringify(buildPush())}\n\n`);
-        sseClients.add(res);
+        sseClients.set(res, { patch: url.searchParams.get('patch') === '1' });
         // Comment frames keep proxies and sleeping iPads from dropping the stream.
         const keepAlive = setInterval(() => {
           try { res.write(': keepalive\n\n'); } catch { /* closed */ }
@@ -1530,7 +1629,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       atem?.stop();
       atemWrites?.stop();
       await visca?.stop();
-      for (const c of sseClients) { try { c.end(); } catch { /* closed */ } }
+      for (const c of sseClients.keys()) { try { c.end(); } catch { /* closed */ } }
       sseClients.clear();
       await new Promise((r) => server.close(r));
     },
