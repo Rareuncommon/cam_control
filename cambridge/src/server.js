@@ -24,7 +24,8 @@ import { ViscaServer } from './visca.js';
 import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEFAULT_THRESHOLDS } from './alarms.js';
 import { report as takeReport, rollState } from './takelog.js';
 import { Auth, hashPin } from './auth.js';
-import { PtzSource, isPtzEntry } from './ptz/source.js';
+import { PtzSource } from './ptz/source.js';
+import { camdNeeded, isPtzEntry } from './venue.js';
 import { detect as detectPtz } from './ptz/detect.js';
 import { supported as supportedPtz } from './ptz/drivers/index.js';
 import { needsAdmin } from './ptz/schema.js';
@@ -82,20 +83,7 @@ function loadConfig(path) {
   }
 }
 
-/**
- * Whether this installation needs camd at all.
- *
- * camd wraps Sony's SDK and exists for the FX3/FX30 bodies. A venue with only
- * PTZ heads has no SDK and no daemon, and must not spend its life reporting
- * one missing. An explicit `camd.enabled` wins; otherwise camd is used unless
- * every configured camera is a PTZ head. An empty config still starts camd,
- * because that is how a fresh studio install discovers its Sony bodies.
- */
-export function camdNeeded(cfg) {
-  if (typeof cfg.camd?.enabled === 'boolean') return cfg.camd.enabled;
-  const cams = cfg.cameras ?? [];
-  return !(cams.length > 0 && cams.every(isPtzEntry));
-}
+export { camdNeeded };
 
 // --- helpers ----------------------------------------------------------------
 

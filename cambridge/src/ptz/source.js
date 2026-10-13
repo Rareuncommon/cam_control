@@ -12,10 +12,7 @@ import { PtzCamera } from './lifecycle.js';
 import { DRIVERS } from './drivers/index.js';
 import { request } from './http.js';
 
-/** A config entry is a PTZ camera when it says so. Everything else is camd's. */
-export function isPtzEntry(entry) {
-  return entry?.kind === 'ptz';
-}
+export { isPtzEntry } from '../venue.js';
 
 export class PtzSource extends EventEmitter {
   /**
