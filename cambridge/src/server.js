@@ -219,8 +219,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const camdWs = cfg.cambridge.camdUrl
     ?? `ws://127.0.0.1:${cfg.camd.restPort}${cfg.camd.wsPath}`;
 
-  const camdUsed = camdNeeded(cfg);
-  if (!camdUsed) log.info('cambridge', 'no Sony bodies configured — running without camd');
+  const camdUsed = camdNeeded(cfg, process.env);
+  if (!camdUsed) {
+    log.info('cambridge', process.env.CAMBRIDGE_CAMD === 'off'
+      ? 'camd not started (not built, and no Sony bodies configured) — running without it'
+      : 'no Sony bodies configured — running without camd');
+  }
 
   const camdToken = resolveCamdToken(cfg.camd);
   if (camdUsed && !camdToken) {

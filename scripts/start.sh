@@ -26,24 +26,28 @@ for arg in "$@"; do
 done
 
 if [[ ! -f "${CONFIG}" ]]; then
-  cat >&2 <<EOF
-No config at ${CONFIG}.
-
-  cp config/cambridge.example.json config/cambridge.json
-
-then fill in each camera's MAC and its own access-authentication username and
-password (MENU -> Network -> Network Option -> [Access Authen. Info]).
-Credentials are per-body — the three cameras do not share them.
-EOF
-  exit 1
+  # First run: a config with the example's settings and no cameras. Cameras are
+  # added in Setup — PTZ heads, stills and cinema cameras by address, Sony
+  # bodies as camd discovers them.
+  node "${REPO_ROOT}/cambridge/src/venue.js" --init "${CONFIG}" ./config/cambridge.example.json || exit 1
+  echo "Created ${CONFIG} with no cameras — add them in the Setup tab."
 fi
 
-# PTZ-only venues have no Sony bodies and so no daemon; the server decides
-# (camdNeeded in venue.js) and this asks it rather than keeping a copy of the rule.
-NEED_CAMD="$(node "${REPO_ROOT}/cambridge/src/venue.js" "${CONFIG}" 2>/dev/null || echo yes)"
+# Whether camd is needed is the server's rule (camdMode in venue.js); this asks
+# it rather than keeping a copy. 'optional' — no cameras yet — starts camd if it
+# is built and goes without it if not, so a Mac set up for PTZ heads alone
+# starts without a daemon it does not need.
+CAMD_MODE="$(node "${REPO_ROOT}/cambridge/src/venue.js" "${CONFIG}" 2>/dev/null || echo yes)"
+case "${CAMD_MODE}" in
+  no) NEED_CAMD=no ;;
+  optional)
+    if [[ -x ./camd/build/camd ]]; then NEED_CAMD=yes; else NEED_CAMD=no; export CAMBRIDGE_CAMD=off; fi ;;
+  *) NEED_CAMD=yes ;;
+esac
 
 if [[ "${NEED_CAMD}" == yes && ! -x ./camd/build/camd ]]; then
-  echo "camd is not built. Run: cmake -S camd -B camd/build && cmake --build camd/build" >&2
+  echo "camd is not built, and the Sony bodies in ${CONFIG} need it." >&2
+  echo "Run: cmake -S camd -B camd/build && cmake --build camd/build   (see docs/install.md)" >&2
   exit 1
 fi
 
@@ -113,8 +117,11 @@ if [[ "${NEED_CAMD}" == yes ]]; then
     exit 1
   fi
   echo "camd is up on 127.0.0.1:${CAMD_PORT}"
+elif [[ "${CAMD_MODE}" == optional ]]; then
+  echo "No Sony bodies configured and camd is not built — starting without it."
+  echo "PTZ, stills and cinema cameras need nothing more; Sony bodies need camd (docs/install.md)."
 else
-  echo "PTZ cameras only — camd is not needed and not started."
+  echo "No Sony bodies — camd is not needed and not started."
 fi
 
 node cambridge/src/server.js --config "${CONFIG}" &

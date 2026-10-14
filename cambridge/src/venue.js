@@ -3,33 +3,73 @@
 // Its own module, with no side effects, because the launch scripts ask it too:
 // importing server.js to ask a question would start a server.
 
+import { pathToFileURL } from 'node:url';
+
 /** A config entry is a PTZ camera when it says so. Everything else is camd's. */
 export function isPtzEntry(entry) {
   return entry?.kind === 'ptz';
 }
 
 /**
- * Whether this installation needs camd at all.
+ * Whether this installation needs camd: 'yes', 'no' or 'optional'.
  *
- * camd wraps Sony's SDK and exists for the FX3/FX30 bodies. A venue with only
- * PTZ heads has no SDK and no daemon, and must not spend its life reporting
- * one missing. An explicit `camd.enabled` wins; otherwise camd is used unless
- * every configured camera is a PTZ head. An empty config still starts camd,
- * because that is how a fresh studio install discovers its Sony bodies.
+ * camd wraps Sony's SDK and exists for the Sony bodies. Stills and cinema
+ * cameras (`external.cameras`) and PTZ heads are driven from Node and need
+ * neither the SDK nor the daemon, so a venue without Sony bodies must not
+ * spend its life reporting one missing.
+ *
+ * - An explicit `camd.enabled` wins.
+ * - Any Sony body in `cameras`: 'yes'.
+ * - Cameras, all of them PTZ heads: 'no'.
+ * - No cameras yet: 'optional'. A fresh install with camd built starts it,
+ *   because that is how its Sony bodies are discovered; one without it —
+ *   a Mac set up for PTZ heads alone — starts without, rather than refusing
+ *   to start until someone builds a daemon it does not need.
  */
-export function camdNeeded(cfg) {
-  if (typeof cfg.camd?.enabled === 'boolean') return cfg.camd.enabled;
-  const cams = cfg.cameras ?? [];
-  return !(cams.length > 0 && cams.every(isPtzEntry));
+export function camdMode(cfg) {
+  if (typeof cfg?.camd?.enabled === 'boolean') return cfg.camd.enabled ? 'yes' : 'no';
+  const cams = cfg?.cameras ?? [];
+  if (cams.some((c) => !isPtzEntry(c))) return 'yes';
+  return cams.length > 0 ? 'no' : 'optional';
 }
 
-// `node cambridge/src/venue.js <config>` prints yes or no, for the launchers.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  const { readFileSync } = await import('node:fs');
-  let answer = 'yes';
-  try {
-    const c = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-    answer = camdNeeded({ camd: c.camd ?? {}, cameras: c.cameras ?? [] }) ? 'yes' : 'no';
-  } catch { /* unreadable config: start camd, as before */ }
-  process.stdout.write(answer);
+/**
+ * Whether the server should expect camd. 'optional' counts as yes here: the
+ * launchers resolve it (they know whether camd is built) and tell the server
+ * with CAMBRIDGE_CAMD=off when they did not start it.
+ */
+export function camdNeeded(cfg, env = {}) {
+  if (env.CAMBRIDGE_CAMD === 'off') return false;
+  return camdMode(cfg) !== 'no';
+}
+
+/**
+ * A first config, made from the example: its settings, none of its cameras.
+ * The example's cameras are placeholders, and copying them would start a
+ * fresh install with cards for bodies that do not exist — and, being Sony
+ * entries, would make camd required at a venue that may have none.
+ */
+export function starterConfig(exampleText) {
+  const cfg = JSON.parse(exampleText);
+  for (const key of Object.keys(cfg)) if (key.startsWith('$')) delete cfg[key];
+  cfg.cameras = [];
+  return `${JSON.stringify(cfg, null, 2)}\n`;
+}
+
+// For the launchers:
+//   node cambridge/src/venue.js <config>                    prints yes, no or optional
+//   node cambridge/src/venue.js --init <config> <example>   writes a starter config
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const fs = await import('node:fs');
+  if (process.argv[2] === '--init') {
+    const [, , , target, example] = process.argv;
+    // 0600 from the first byte: this file is where camera passwords will go.
+    fs.writeFileSync(target, starterConfig(fs.readFileSync(example, 'utf8')), { mode: 0o600, flag: 'wx' });
+  } else {
+    let answer = 'yes';
+    try {
+      answer = camdMode(JSON.parse(fs.readFileSync(process.argv[2], 'utf8')));
+    } catch { /* unreadable config: start camd, as before */ }
+    process.stdout.write(answer);
+  }
 }
