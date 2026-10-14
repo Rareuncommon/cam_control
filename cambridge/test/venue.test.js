@@ -77,3 +77,20 @@ test('started without camd on a fresh config, the panel is told camd is not in u
   const state = await (await fetch(`http://127.0.0.1:${port}/api/state`)).json();
   assert.equal(state.view.camdUsed, false, 'no "daemon unreachable" for a daemon nobody started');
 });
+
+test('the camd event socket follows camd.restPort unless camdUrl is set', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cambridge-camdurl-'));
+  try {
+    const configPath = join(dir, 'cambridge.json');
+    const base = { logging: { dir: join(dir, 'logs'), level: 'error' }, cameras: [] };
+    writeFileSync(configPath, JSON.stringify({ ...base, camd: { restPort: 18888, wsPath: '/ws' } }));
+    let app = createApp({ configPath });
+    assert.equal(app.camd.wsUrl, 'ws://127.0.0.1:18888/ws', 'REST and events on the same port');
+    assert.equal(app.camd.baseUrl, 'http://127.0.0.1:18888');
+    writeFileSync(configPath, JSON.stringify({ ...base, cambridge: { camdUrl: 'ws://127.0.0.1:19999/events' } }));
+    app = createApp({ configPath });
+    assert.equal(app.camd.wsUrl, 'ws://127.0.0.1:19999/events');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

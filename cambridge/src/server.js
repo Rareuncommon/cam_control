@@ -45,7 +45,10 @@ const PUBLIC_DIR = join(__dirname, '..', 'public');
 
 function loadConfig(path) {
   const defaults = {
-    cambridge: { bind: '0.0.0.0', port: 8088, camdUrl: 'ws://127.0.0.1:8787/ws' },
+    // No camdUrl default: unset, it follows camd.restPort and camd.wsPath, so
+    // moving camd to another port moves its event socket with it. A default
+    // here pinned the socket to 8787 while REST went to the new port.
+    cambridge: { bind: '0.0.0.0', port: 8088 },
     camd: { bind: '127.0.0.1', restPort: 8787, wsPath: '/ws' },
     logging: { dir: './logs', level: 'info' },
     cameras: [],

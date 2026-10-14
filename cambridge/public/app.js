@@ -726,7 +726,6 @@ function cineNode(cam) {
  * press on them, stops their picture and lets their watch lease lapse.
  */
 function renderControl() {
-  if (ptzUi.active) return;
   const grid = $('#grid');
   const nodes = [];
   const ptzCams = view.cameras.filter((c) => c.kind === 'ptz');
@@ -1571,7 +1570,8 @@ function renderTools() {
 }
 
 function switchView(name) {
-  ptzUi.stop();
+  // A head held from the joystick is let go when the operator leaves the tab.
+  ptzUi.endAllHolds();
   // Leaving Multiview must stop the feeds; nothing is displaying them.
   if (currentView === 'multiview' && name !== 'multiview') stopAllFeeds();
   currentView = name;
