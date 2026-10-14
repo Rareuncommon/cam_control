@@ -127,8 +127,10 @@ export function report(takes, { now = Date.now(), windowMs = 10_000 } = {}) {
  */
 export function rollState(cameras) {
   // PTZ heads do not record, so they are neither rolling nor "not rolling" —
-  // counting them would make "all rolling" unreachable at a mixed venue.
-  const connected = (cameras ?? []).filter((c) => c.state === 'connected' && c.kind !== 'ptz');
+  // counting them would make "all rolling" unreachable at a mixed venue. The
+  // same goes for any camera that says it cannot record (a stills body).
+  const connected = (cameras ?? []).filter((c) => c.state === 'connected' && c.kind !== 'ptz'
+    && c.capabilities?.record?.available !== false);
   const rolling = connected.filter((c) => c.status?.recording);
   return {
     total: connected.length,

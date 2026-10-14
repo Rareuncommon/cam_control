@@ -7,6 +7,46 @@ Works on a MacBook or a Mac Studio, Apple Silicon, macOS 12.1 or later.
 
 ---
 
+## PTZ heads only? The short path
+
+A Mac that controls only PTZ heads (Panasonic, Sony BRC, Canon, PTZOptics) —
+or Blackmagic cinema cameras — needs no Sony SDK, no CMake and no build.
+About fifteen minutes:
+
+1. `xcode-select --install` (this gives you `git`), and Node 22 or later from
+   <https://nodejs.org> (the Apple Silicon LTS `.pkg`).
+2. Get the code:
+
+   ```sh
+   cd ~
+   git clone https://github.com/Rareuncommon/cam_control.git
+   cd ~/cam_control
+   ```
+
+   If git asks for a password, GitHub wants a personal access token, not
+   your account password. Cloning with GitHub Desktop avoids that.
+3. Start it:
+
+   ```sh
+   ./scripts/start.sh
+   ```
+
+   The first run creates `config/cambridge.json` with no cameras, and starts
+   without the Sony daemon because none is built and nothing needs it.
+4. Open the address it prints, then **Setup → Add a PTZ camera** (or **Add
+   many PTZ cameras** for a list or range of addresses).
+5. Optional: `./scripts/make-app.sh /Applications` for a double-clickable app
+   (step 10 below).
+
+Before relying on the heads, run the on-site checks in
+[`ptz.md`](ptz.md#camera-notes--what-to-check-on-site).
+
+USB stills cameras also need gphoto2 and a small helper built on the Mac — see
+[`stills-cinema-control.md`](stills-cinema-control.md). Sony bodies need the
+full install below.
+
+---
+
 ## Before you start
 
 Three things you need that this guide cannot get for you:
@@ -201,7 +241,7 @@ Then prove it works, with no cameras and no hardware involved:
 ./camd/build/camd_tests
 ```
 
-You want `55 passed, 0 failed`.
+You want `85 passed, 0 failed`.
 
 And the Node side:
 
@@ -252,22 +292,16 @@ otherwise drop a camera mid-take:
 
 ## Step 9 — First run, and adding the cameras
 
-Start with the config template:
-
-```sh
-cd ~/cam_control
-cp config/cambridge.example.json config/cambridge.json
-```
-
-Open `config/cambridge.json` and **delete the three example entries in the
-`cameras` array**, leaving `"cameras": []`. You will add the real ones from the
-browser, which is easier and less error-prone than editing JSON.
-
 Start it:
 
 ```sh
+cd ~/cam_control
 ./scripts/start.sh
 ```
+
+The first run creates `config/cambridge.json` from the example's settings with
+no cameras in it. You add the real ones from the browser, which is easier and
+less error-prone than editing JSON.
 
 Open the URL it prints, go to the **Setup** tab, and every camera on the network
 appears. Press **Add** on each one and give it a name and the username and
@@ -334,6 +368,8 @@ cd ~/cam_control
 git pull
 cmake --build camd/build -j8
 ```
+
+(The last line only on a Mac that builds camd for Sony bodies.)
 
 The SDK in `vendor/CrSDK/` and your `config/cambridge.json` are both git-ignored,
 so neither is touched by a pull. You do not need to redo steps 5 or 9.

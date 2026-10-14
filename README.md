@@ -1,13 +1,34 @@
 # CamBridge
 
-Multi-camera control for Sony cinema bodies over wired Ethernet. Built in-house
-at a media production company for one studio, one operator, three cameras.
-Internal use only — not for redistribution.
+Multi-camera control for a studio, from one web panel — on a laptop, an iPad,
+a Stream Deck or a hardware camera panel. Built in-house; internal use only,
+not for redistribution, and Sony's SDK redistribution terms still apply.
 
-**Cameras:** 1× ILME-FX3, 2× ILME-FX30
-**Transport:** USB-C → gigabit Ethernet adapters (RTL8153 / AX88179), dedicated
-production VLAN, static IPs
-**Control machine:** Apple Silicon Mac, macOS 26
+- **Sony bodies** through Sony's Camera Remote SDK. The catalog covers the 32
+  models listed for SDK 2.02 — Alpha, Cinema Line, camcorders, PTZ, ZV and
+  RX — over Ethernet or USB, and the controls shown come from what each
+  connected body, lens and mode reports.
+  See [camera support](docs/camera-support.md).
+- **PTZ heads** — Panasonic AW-UE160, Sony BRC-AM7, Canon CR-N500 and
+  PTZOptics Move SE, plus other models from those makes — driven over their
+  own protocols, with everything their web pages offer, their presets, and
+  motion that stops when its controller goes away. Built for dozens of heads,
+  with SKAARHOJ and Companion. They need no Sony SDK and no daemon.
+  See [PTZ cameras](docs/ptz.md).
+- **Stills and cinema cameras**: 416 libgphoto2 USB profiles (including
+  regional aliases) and 12 Blackmagic REST profiles, with native exposure
+  controls, guarded still capture and Blackmagic recording.
+  See [stills and cinema](docs/stills-cinema-control.md).
+
+**Hardware baseline:** 1× ILME-FX3 and 2× ILME-FX30, wired Ethernet, Apple
+Silicon Mac. Everything beyond those three bodies — the other Sony profiles,
+the PTZ drivers, the stills and cinema adapters — is tested against
+simulators built from the makers' documents and still needs real-camera
+acceptance. Adding a profile is not a claim that every feature works on that
+model.
+
+**Compatibility and future Wordtandem integration:**
+[`docs/camera-support.md`](docs/camera-support.md).
 
 ---
 
@@ -16,15 +37,18 @@ production VLAN, static IPs
 **Phases 1–5 are built. Phases 2, 4 and 5 await their hardware acceptance runs.**
 
 Phase 0 passed on hardware. Phases 1–5 are implemented and verified as far as is
-possible without the studio rig: 51 C++ tests and 27 Node tests pass, and the
-whole stack has been run end to end against a simulated three-camera setup.
+possible without the studio rig. Automated tests cover the daemon, application
+server and Companion module; the broader USB/network portfolio has its own
+simulated acceptance checks. See the compatibility document for current limits.
 What only real cameras can settle is listed in
 [`docs/phases-1-5.md`](docs/phases-1-5.md).
 
 **Setting up a Mac?** Start at [`docs/setup.md`](docs/setup.md) — it points you
 at the DMG (five minutes, nothing to install) or the full source build
-([`docs/install.md`](docs/install.md)), and covers turning the camera passwords
-off so there is nothing to type.
+([`docs/install.md`](docs/install.md)), and covers camera setup. A Mac for PTZ
+heads alone needs only Node and a clone: see the short path at the top of
+[`docs/install.md`](docs/install.md). Use access credentials when the camera requires them;
+keep Access Authentication enabled for the existing FX3/FX30 network rig.
 
 ```sh
 ./scripts/make-dmg.sh
@@ -48,6 +72,8 @@ To try it without hardware, or to run it from a terminal:
 
 ```sh
 ./scripts/start.sh --fake
+# Six mixed USB/network bodies, including two identical USB Alpha cameras:
+./scripts/start.sh --fake-portfolio
 ```
 
 ### What the panel does
@@ -98,6 +124,8 @@ hardware to confirm: [`docs/integrations.md`](docs/integrations.md).
 | 6+ | Bitfocus Companion module | ✅ built and verified end to end |
 | 6+ | ATEM tally, VISCA server, gamepad | built; **tally and VISCA need your hardware to confirm** |
 | 6+ | Q-SYS | backlog, not built |
+| — | PTZ heads (four makes), SKAARHOJ drive mode, scale to dozens of heads | built; tested against protocol simulators; **on-site checks outstanding** ([ptz.md](docs/ptz.md)) |
+| — | Sony portfolio and USB adoption, stills and cinema cameras, 2026-09-23 audit fixes | built; **Sony adapter changes need compiling against the SDK, and hardware acceptance** |
 
 Phases 1–5 were built in one pass at your request, rather than gated one at a
 time. The hardware acceptance tests still gate calling them *done* — see

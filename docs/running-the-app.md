@@ -44,6 +44,14 @@ address, one at a time or a whole list at once, and need no daemon or SDK. A
 venue with only PTZ heads runs without camd entirely. Everything about them is in
 [ptz.md](ptz.md).
 
+## Stills and cinema cameras
+
+Blackmagic cinema cameras (by address) and non-Sony USB stills bodies (found
+with **Find USB cameras**) are added on Setup's **Stills and cinema cameras**
+card, and get a card of their own on Control. USB bodies need gphoto2 and a
+helper built on the Mac. Details and limits:
+[stills-cinema-control.md](stills-cinema-control.md).
+
 ## Adding cameras — the Setup tab
 
 No config editing. Open **Setup** and you get every camera CamBridge can see on
@@ -262,7 +270,7 @@ or for rehearsing a shoot without the rig.
 You can also rehearse a camera dropping out:
 
 ```sh
-curl -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
 ```
 
 ## Handing the project to someone else

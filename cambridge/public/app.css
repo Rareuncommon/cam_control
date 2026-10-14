@@ -67,7 +67,7 @@ button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 
 #banner {
   display: none; padding: 11px 16px; background: var(--bad); color: #fff; font-weight: 700;
-  align-items: center; gap: 12px;
+  align-items: center; gap: 12px; overflow-wrap: anywhere; flex-wrap: wrap;
 }
 #banner.show { display: flex; }
 /* A warning is not an emergency. Using the same red for a card with twelve
@@ -93,7 +93,8 @@ button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 .view { display: none; }
 .view.active { display: block; }
 
-#grid { display: grid; gap: 12px; padding: 12px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+/* min(…, 100%) so a single column fits a 320px phone instead of overflowing it. */
+#grid { display: grid; gap: 12px; padding: 12px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
 @media (min-width: 1180px) { #grid { grid-template-columns: repeat(3, 1fr); } }
 
 .cam {
@@ -158,7 +159,7 @@ button.big     { min-height: 52px; font-size: 16px; font-weight: 700; }
 .row .slide { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 8px; }
 
 select, input[type=range] { width: 100%; }
-select, input[type=text], input[type=password], input[type=number] {
+select, input[type=text], input[type=password], input[type=number], input[type=search] {
   font: inherit; font-size: 14px; background: var(--panel-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 9px; padding: 8px 9px; min-height: 42px;
 }
@@ -197,7 +198,7 @@ details.more .inner { display: flex; flex-direction: column; gap: 9px; padding-b
 .dpad .blank { visibility: hidden; }
 
 /* --- multiview --- */
-#mvgrid { display: grid; gap: 10px; padding: 10px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+#mvgrid { display: grid; gap: 10px; padding: 10px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
 #mvgrid.solo { grid-template-columns: 1fr; }
 .feed {
   position: relative; background: #000; border: 1px solid var(--line);
@@ -254,6 +255,7 @@ table.list td > .pill { margin: 2px 4px 2px 0; display: inline-block; }
   display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; min-height: 40px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
   cursor: pointer; font-size: 13px; font-weight: 600; user-select: none;
+  color: inherit; font-family: inherit;
 }
 .chip.on { background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: var(--accent); }
 
@@ -630,3 +632,21 @@ table.list .ordercol button { min-width: 38px; padding: 4px 8px; }
 @media (max-width: 560px) {
   #adopted-table .col-model { display: none; }
 }
+
+/* The portfolio can contain long model names and connection details. */
+#portfolio-search { display: block; width: min(100%, 32rem); margin: 8px 0 12px; }
+#view-setup .card { min-width: 0; }
+#view-setup table.list { table-layout: fixed; overflow-wrap: anywhere; }
+#paths { overflow-wrap: anywhere; }
+#view-setup table.list .pill { white-space: normal; max-width: 100%; }
+@media (max-width: 600px) {
+  #view-setup table.list { font-size: 12px; }
+  #view-setup table.list td, #view-setup table.list th { padding: 8px 4px; }
+  #view-setup .formgrid { grid-template-columns: 1fr; }
+  #view-setup .formgrid > * { min-width: 0; max-width: 100%; }
+}
+
+
+.external-control { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; margin-top: 10px; }
+.external-control > * { min-width: 0; max-width: 100%; }
+.external-card .note { overflow-wrap: anywhere; }

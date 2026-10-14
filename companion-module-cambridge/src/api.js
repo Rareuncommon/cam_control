@@ -40,10 +40,15 @@ export class CambridgeApi {
     this.controller = null;
     this.retryTimer = null;
     this.pollTimer = null;
+    // Aborted by stop(): every REST call in flight, not only the event stream
+    // (audit CS8), so a stopped client's late responses never arrive.
+    this.lifetime = new AbortController();
+    this.polling = false;
   }
 
   start() {
     this.stopped = false;
+    if (this.lifetime.signal.aborted) this.lifetime = new AbortController();
     this.#openStream();
     // Slow backstop. If SSE is healthy this only ever confirms what we know.
     this.pollTimer = setInterval(() => { this.#poll(); }, 10_000);
@@ -57,6 +62,7 @@ export class CambridgeApi {
     this.pollTimer = null;
     try { this.controller?.abort(); } catch { /* already gone */ }
     this.controller = null;
+    this.lifetime.abort(new Error('client stopped'));
   }
 
   #headers(extra) {
@@ -66,12 +72,17 @@ export class CambridgeApi {
   }
 
   /** REST call. Never throws — a dead server must not take Companion down. */
-  async request(method, path, body) {
+  async request(method, path, body, { timeoutMs = 10_000 } = {}) {
+    if (this.stopped && this.lifetime.signal.aborted) {
+      return { ok: false, status: 0, body: { error: 'client stopped' } };
+    }
     try {
       const res = await this.fetch(`${this.base}${path}`, {
         method,
         headers: this.#headers(body ? { 'Content-Type': 'application/json' } : {}),
         body: body ? JSON.stringify(body) : undefined,
+        // Bounded, and cancelled with the client.
+        signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(timeoutMs)]),
       });
       let parsed = null;
       try { parsed = await res.json(); } catch { /* empty body */ }
@@ -87,15 +98,21 @@ export class CambridgeApi {
   }
 
   async #poll() {
-    if (this.stopped) return;
-    const r = await this.request('GET', '/api/state');
-    // /api/state returns the same envelope the stream pushes, so both paths
-    // hand the instance an identical frame.
-    if (r.ok && r.body) {
-      // The poll is a full state too, so later patches build on it.
-      this.frame = { type: 'state', ...r.body };
-      this.onState(r.body);
-    }
+    // One poll at a time: a slow server must not accumulate overlapping polls
+    // whose answers then arrive out of order.
+    if (this.stopped || this.polling) return;
+    this.polling = true;
+    try {
+      const r = await this.request('GET', '/api/state');
+      if (this.stopped) return;
+      // /api/state returns the same envelope the stream pushes, so both paths
+      // hand the instance an identical frame.
+      if (r.ok && r.body) {
+        // The poll is a full state too, so later patches build on it.
+        this.frame = { type: 'state', ...r.body };
+        this.onState(r.body);
+      }
+    } finally { this.polling = false; }
   }
 
   async #openStream() {
@@ -126,7 +143,7 @@ export class CambridgeApi {
         if (this.stopped) break;
         buffer += decoder.decode(chunk, { stream: true });
         let split;
-        while ((split = buffer.indexOf('\n\n')) !== -1) {
+        while (!this.stopped && (split = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, split);
           buffer = buffer.slice(split + 2);
           this.#handleFrame(frame);

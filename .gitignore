@@ -75,3 +75,6 @@ session-export/
 
 # Python bytecode from running the export tests.
 __pycache__/
+
+# Local optional libgphoto2 helper (dynamic library paths are host-specific)
+cambridge/native/gphoto-control

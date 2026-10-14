@@ -46,32 +46,6 @@ OSA
 
 say "--- launch ---"
 
-# First run: create a config from the example so adoption has somewhere to write.
-if [[ ! -f "${CONFIG}" ]]; then
-    if [[ -f ./config/cambridge.example.json ]]; then
-        # Start with no cameras at all — they get adopted through the UI. Copying
-        # the example's placeholder entries would produce three permanently
-        # offline cards on first run.
-        /usr/bin/python3 - "${CONFIG}" <<'PY' 2>>"${LAUNCH_LOG}"
-import json, sys
-with open('config/cambridge.example.json') as f:
-    text = f.read()
-cfg = json.loads('\n'.join(l for l in text.splitlines()))
-cfg['cameras'] = []
-for key in list(cfg):
-    if key.startswith('$'):
-        del cfg[key]
-with open(sys.argv[1], 'w') as f:
-    json.dump(cfg, f, indent=2)
-    f.write('\n')
-PY
-        say "created ${CONFIG} with no cameras (adopt them in the UI)"
-    else
-        alert "CamBridge" "No configuration found and no example to copy from. Is the CamBridge folder intact?"
-        exit 1
-    fi
-fi
-
 if ! command -v node >/dev/null 2>&1; then
     # Double-clicked apps do not inherit a login shell's PATH, so a Node installed
     # under Homebrew or nvm is invisible here. Look where it actually lives before
@@ -91,11 +65,29 @@ Install the macOS LTS package from nodejs.org, then launch CamBridge again."
     exit 1
 fi
 
-# A venue with only PTZ heads has no Sony bodies, so no SDK and no daemon. The
-# rule is the server's own (camdNeeded in venue.js), asked rather than copied
-# so the launcher and the server can never disagree about it.
-NEED_CAMD="$(node "${REPO_ROOT}/cambridge/src/venue.js" "${CONFIG}" 2>>"${LAUNCH_LOG}" || echo yes)"
-say "camd needed: ${NEED_CAMD}"
+# First run: a config with the example's settings and no cameras, so adoption
+# has somewhere to write. Cameras are added in Setup; copying the example's
+# placeholder entries would produce permanently offline cards on first run.
+if [[ ! -f "${CONFIG}" ]]; then
+    if ! node cambridge/src/venue.js --init "${CONFIG}" ./config/cambridge.example.json 2>>"${LAUNCH_LOG}"; then
+        alert "CamBridge" "No configuration found and none could be created. Is the CamBridge folder intact?"
+        exit 1
+    fi
+    say "created ${CONFIG} with no cameras (add them in Setup)"
+fi
+
+# Whether camd is needed is the server's rule (camdMode in venue.js), asked
+# rather than copied so the launcher and the server can never disagree.
+# 'optional' — no cameras yet — starts camd if it is built and goes without it
+# if not: a Mac set up for PTZ heads alone has no SDK and needs no daemon.
+CAMD_MODE="$(node "${REPO_ROOT}/cambridge/src/venue.js" "${CONFIG}" 2>>"${LAUNCH_LOG}" || echo yes)"
+case "${CAMD_MODE}" in
+    no) NEED_CAMD=no ;;
+    optional)
+        if [[ -x ./camd/build/camd ]]; then NEED_CAMD=yes; else NEED_CAMD=no; export CAMBRIDGE_CAMD=off; fi ;;
+    *) NEED_CAMD=yes ;;
+esac
+say "camd: ${CAMD_MODE} -> starting: ${NEED_CAMD}"
 
 if [[ "${NEED_CAMD}" == yes && ! -x ./camd/build/camd ]]; then
     alert "CamBridge" "The camera daemon has not been built yet.
@@ -140,6 +132,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# camd requires a per-launch access token on every request (audit DC-1). One
+# fresh secret per launch, exported so camd and the Node service share it; it is
+# never written to the config file.
+export CAMD_AUTH_TOKEN="$(LC_ALL=C od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+camd_health() {
+  curl -fsS -H @<(printf 'Authorization: Bearer %s\n' "${CAMD_AUTH_TOKEN}") \
+    "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1
+}
+
 if [[ "${NEED_CAMD}" == yes ]]; then
     say "starting camd"
     ./camd/build/camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
@@ -147,7 +148,7 @@ if [[ "${NEED_CAMD}" == yes ]]; then
 
     healthy=false
     for _ in $(seq 1 50); do
-        if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
+        if camd_health; then
             healthy=true
             break
         fi
@@ -164,7 +165,7 @@ This is usually the Sony SDK missing from vendor/CrSDK, or a configuration error
     fi
     say "camd healthy on ${CAMD_PORT}"
 else
-    say "PTZ only — not starting camd"
+    say "no Sony bodies — not starting camd"
 fi
 
 CAMBRIDGE_LAUNCHER_PID=$$ \

@@ -27,6 +27,10 @@ enum class ConnState {
     Connected,     // usable
     Reconnecting,  // was connected, lost it, backing off
     Unauthorized,  // found and reachable, but credentials rejected
+    // The camera's SSH host key no longer matches the one pinned for it.
+    // Credentials were NOT sent. Not retried: only a deliberate re-pair
+    // (CameraWorker::repin) leaves this state.
+    IdentityChanged,
 };
 
 const char* connStateName(ConnState s);
@@ -108,6 +112,11 @@ struct DiscoveredCamera {
     std::string name;
     std::string guid;
     bool sshRequired = false;  // GetSSHsupport(): body expects access auth
+    std::string deviceId;       // opaque SDK identity; never a model-name fallback
+    std::string transport;      // SDK connection type, e.g. USB or network
+    // Fake backend only: the host-key fingerprint this simulated body presents.
+    // The Sony backend reads the real one with GetFingerprint() at connect time.
+    std::string fakeHostKey;
 };
 
 // Callbacks arrive on SDK-owned threads. Implementations must be thread-safe and
@@ -165,6 +174,10 @@ public:
     virtual bool ping(std::string& err) = 0;
 
     virtual void disconnect() = 0;
+
+    // The SSH host-key fingerprint this session was opened against, empty when
+    // the body does not use access authentication.
+    virtual std::string hostFingerprint() const { return {}; }
 };
 
 // Process-wide SDK lifecycle plus discovery.
@@ -195,5 +208,11 @@ void fakeBackendSetLinkDown(const std::string& mac, bool down);
 // Fake-backend hook: force a camera's card-remaining, in seconds, so the media
 // alarm can be rehearsed. Takes effect on that camera's next status poll.
 void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds);
+
+// Fake-backend hooks for host-key pinning tests: replace the fingerprint a
+// simulated body presents (an impostor, or a factory-reset camera), and count
+// how many times credentials were handed to that body's connect.
+void fakeBackendSetHostKey(const std::string& mac, const std::string& fingerprint);
+int fakeBackendCredentialOffers(const std::string& mac);
 
 }  // namespace camd

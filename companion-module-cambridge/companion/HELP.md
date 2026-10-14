@@ -1,6 +1,9 @@
 # CamBridge
 
-Controls Sony FX3 and FX30 bodies through a running **CamBridge** server.
+Controls Sony Camera Remote SDK bodies through a running **CamBridge** server.
+The shared catalog lists 32 models; additional models await hardware validation.
+Controls depend on the connected body, lens and mode. PTZ motion is not implemented.
+Requires Companion 4.2 or newer (module API 1.14.1 / Node 22).
 
 ## Setup
 
@@ -91,3 +94,12 @@ The **PTZ controller** button category has a row of camera-select keys for the c
 Variables: `$(cambridge:ptz_selected)`, `ptz_selected_label`, `ptz_selected_group`, `ptz_selected_state`, `ptz_selected_tally`, `ptz_selected_pan|_tilt|_zoom|_preset|_tracking|_moving`, `ptz_bank`, `ptz_bank_count`, `ptz_bank_slot_N_label`. Feedbacks: camera is selected, bank slot is selected / on air / not connected.
 
 At a big venue, untick **Ready-made buttons for every PTZ camera** in the module config: the per-camera button categories (hundreds of buttons) go away and the controller page covers every head. Camera dropdowns list cameras in CamBridge's order as `Name (group)`.
+
+## Stills and cinema cameras
+
+Add non-Sony USB or Blackmagic cameras in CamBridge Setup. Native-control and
+refresh actions use the returned external controls; USB dropdown values are
+choice indices. Still capture requires a memory-card target and non-Bulb shutter.
+Existing Record actions support Blackmagic. Unconfirmed recording displays
+unknown. SDK presets, matching, undo and live view do not apply to these adapters.
+See docs/stills-cinema-control.md for installation and model-specific limits.

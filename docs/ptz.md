@@ -24,7 +24,14 @@ on a new model to see what it really answers.
 There is nothing to build or install beyond Node.js. With no Sony bodies in the
 config, CamBridge runs without camd — no Sony SDK, no daemon, and no
 "daemon offline" banner. The launchers (`start.sh`, the app) decide this from
-the config themselves.
+the config themselves, and on the very first run, before any camera is added,
+they start without camd when it is not built. The first run also creates the
+config, so a new Mac needs no editing: see the
+[short path in install.md](install.md#ptz-heads-only-the-short-path).
+
+A Sony BRC-AM7 or FR7 is also a Sony SDK camera. Add it here, as a PTZ head;
+Setup then shows it as already added if camd discovers it too, so it is never
+controlled two ways at once.
 
 ## Adding cameras
 

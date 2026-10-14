@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 1,
+  "provider": "sony-crsdk",
+  "sdkVersion": "2.02.00",
+  "reviewedAt": "2026-09-12",
+  "source": "https://support.d-imaging.sony.co.jp/app/sdk/en/index.html",
+  "connectionNote": "Use an interface supported by that model in the installed Sony SDK API reference. The catalog does not promise USB, Ethernet or Wi-Fi on every model.",
+  "models": [
+    {
+      "model": "ILME-FX3",
+      "name": "FX3",
+      "family": "Cinema Line",
+      "aliases": [
+        "FX3"
+      ],
+      "minimumFirmware": "2.00",
+      "verification": "historical-rig-use"
+    },
+    {
+      "model": "ILME-FX30",
+      "name": "FX30",
+      "family": "Cinema Line",
+      "aliases": [
+        "FX30"
+      ],
+      "minimumFirmware": null,
+      "verification": "historical-rig-use"
+    },
+    {
+      "model": "ILME-FX3A",
+      "name": "FX3A",
+      "family": "Cinema Line",
+      "aliases": [
+        "FX3A"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILME-FX2",
+      "name": "FX2",
+      "family": "Cinema Line",
+      "aliases": [
+        "FX2"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILME-FX6",
+      "name": "FX6",
+      "family": "Cinema Line",
+      "aliases": [
+        "FX6",
+        "ILME-FX6V",
+        "ILME-FX6T"
+      ],
+      "minimumFirmware": "3.00",
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "MPC-2610",
+      "name": "BURANO",
+      "family": "Cinema Line",
+      "aliases": [
+        "BURANO",
+        "BURANO(MPC-2610)"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILME-FR7",
+      "name": "FR7",
+      "family": "PTZ",
+      "aliases": [
+        "FR7"
+      ],
+      "minimumFirmware": "3.00",
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "BRC-AM7",
+      "name": "BRC-AM7",
+      "family": "PTZ",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "PXW-Z300",
+      "name": "PXW-Z300",
+      "family": "Camcorder",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "PXW-Z380",
+      "name": "PXW-Z380",
+      "family": "Camcorder",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "PXW-Z200",
+      "name": "PXW-Z200",
+      "family": "Camcorder",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "HXR-NX800",
+      "name": "HXR-NX800",
+      "family": "Camcorder",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-1M2",
+      "name": "Alpha 1 II",
+      "family": "Alpha",
+      "aliases": [
+        "A1 II",
+        "α1 II"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-1",
+      "name": "Alpha 1",
+      "family": "Alpha",
+      "aliases": [
+        "A1",
+        "α1"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-9M3",
+      "name": "Alpha 9 III",
+      "family": "Alpha",
+      "aliases": [
+        "A9 III",
+        "α9 III"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-9M2",
+      "name": "Alpha 9 II",
+      "family": "Alpha",
+      "aliases": [
+        "A9 II",
+        "α9 II"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7RM6",
+      "name": "Alpha 7R VI",
+      "family": "Alpha",
+      "aliases": [
+        "A7R VI",
+        "α7R VI"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7RM5",
+      "name": "Alpha 7R V",
+      "family": "Alpha",
+      "aliases": [
+        "A7R V",
+        "α7R V"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7RM4A",
+      "name": "Alpha 7R IVA",
+      "family": "Alpha",
+      "aliases": [
+        "A7R IVA",
+        "α7R IVA"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7RM4",
+      "name": "Alpha 7R IV",
+      "family": "Alpha",
+      "aliases": [
+        "A7R IV",
+        "α7R IV"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7CR",
+      "name": "Alpha 7CR",
+      "family": "Alpha",
+      "aliases": [
+        "A7CR",
+        "α7CR"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7SM3",
+      "name": "Alpha 7S III",
+      "family": "Alpha",
+      "aliases": [
+        "A7S III",
+        "α7S III"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7M5",
+      "name": "Alpha 7 V",
+      "family": "Alpha",
+      "aliases": [
+        "A7 V",
+        "α7 V"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7M4",
+      "name": "Alpha 7 IV",
+      "family": "Alpha",
+      "aliases": [
+        "A7 IV",
+        "α7 IV"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7CM2",
+      "name": "Alpha 7C II",
+      "family": "Alpha",
+      "aliases": [
+        "A7C II",
+        "α7C II"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-7C",
+      "name": "Alpha 7C",
+      "family": "Alpha",
+      "aliases": [
+        "A7C",
+        "α7C"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILCE-6700",
+      "name": "Alpha 6700",
+      "family": "Alpha",
+      "aliases": [
+        "A6700",
+        "α6700"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ZV-E1",
+      "name": "ZV-E1",
+      "family": "ZV",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ZV-E10M2",
+      "name": "ZV-E10 II",
+      "family": "ZV",
+      "aliases": [
+        "ZV-E10 II"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "DSC-RX1RM3",
+      "name": "RX1R III",
+      "family": "Compact",
+      "aliases": [
+        "RX1R III"
+      ],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "DSC-RX0M2",
+      "name": "RX0 II",
+      "family": "Compact",
+      "aliases": [
+        "RX0 II"
+      ],
+      "minimumFirmware": "3.00",
+      "verification": "awaiting-hardware"
+    },
+    {
+      "model": "ILX-LR1",
+      "name": "ILX-LR1",
+      "family": "Industrial",
+      "aliases": [],
+      "minimumFirmware": null,
+      "verification": "awaiting-hardware"
+    }
+  ]
+}

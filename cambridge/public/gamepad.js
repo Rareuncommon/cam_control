@@ -73,7 +73,13 @@ export function createGamepadControl({ onStep, onButton, onStatus, onSticks }) {
       if (lastPadName) {
         lastPadName = '';
         onSticks?.(null);   // unplugged mid-move: whatever it was driving stops
-        onStatus({ connected: false, name: '' });
+        // A controller that goes away is disarmed: replugging it (or a
+        // different pad) must not resume driving a camera by itself.
+        const wasEnabled = enabled;
+        enabled = false;
+        nextDue.clear();
+        wasPressed.clear();
+        onStatus({ connected: false, name: '', disarmed: wasEnabled });
       }
       return;
     }

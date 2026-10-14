@@ -35,6 +35,21 @@ public:
     virtual void publish(const std::string& jsonText) = 0;
 };
 
+// What happened to a job the caller waited on. The distinction matters for
+// anything with a physical effect: NotExecuted means the job was withdrawn and
+// will never run, so the caller may safely report failure (or retry). Unknown
+// means the job had already started on the camera when the caller stopped
+// waiting; the effect may or may not have happened, and must be read back
+// rather than assumed — never blindly retried, which could toggle REC twice.
+enum class RunOutcome { Completed, NotExecuted, InFlightUnknown };
+
+// Record Stop outranks everything queued: it jumps the queue, and it withdraws
+// any record Start still waiting, which would otherwise run after the Stop and
+// leave the camera rolling.
+enum class JobKind { Generic, RecordStart, RecordStop };
+
+const char* runOutcomeName(RunOutcome o);
+
 class CameraWorker {
 public:
     CameraWorker(CameraConfig cfg, Backend* backend, EventPublisher* publisher,
@@ -54,11 +69,19 @@ public:
         std::string reportedModel;
         std::string ip;
         std::string mac;
+        std::string deviceId;
+        std::string transport;
         ConnState state = ConnState::Offline;
         CameraStatus status;
         int reconnectAttempts = 0;
         std::string lastError;
         bool discovered = false;
+        // SSH host-key pinning. `fingerprint` is the pin; `observedFingerprint`
+        // what the body presented when it was refused; `hostKey` is one of
+        // notRequired | unknown | pinnedFirstUse | pinned | mismatch.
+        std::string fingerprint;
+        std::string observedFingerprint;
+        std::string hostKey = "unknown";
     };
     Snapshot snapshot() const;
     const std::string& id() const { return cfg_.id; }
@@ -68,7 +91,13 @@ public:
     // the job did not complete within timeoutMs — in which case the job may still
     // execute later, so anything it writes must outlive the call (capture a
     // shared_ptr, never a stack reference).
+    //
+    // A job still queued when the caller gives up is withdrawn and never runs
+    // (audit DC-2: a timed-out Start used to fire later, after the operator had
+    // been told it failed).
     bool run(std::function<void(CameraSession*)> fn, int timeoutMs);
+    RunOutcome runJob(std::function<void(CameraSession*)> fn, int timeoutMs,
+                      JobKind kind = JobKind::Generic);
 
     // Offered by the discovery thread when a matching body appears on the network.
     // A camera reappearing after being absent cancels any pending backoff: the
@@ -81,6 +110,15 @@ public:
 
     // Forces a teardown and immediate reconnect attempt.
     void requestReconnect();
+
+    // Cosmetic: changes the display label only. Never touches the session.
+    void setLabel(const std::string& label);
+
+    // Deliberate re-pair after IdentityChanged: pins `fingerprint` and
+    // reconnects. Refused unless the worker is in IdentityChanged and the value
+    // equals exactly what the camera presented, so it cannot pin a key nobody
+    // has seen, nor replace a pin that is working.
+    bool repin(const std::string& fingerprint, std::string& err);
 
     // Record control with read-before-write. The FX30 has no toggle command, so a
     // blind button press would flip a live recording; this reads RecordingState,
@@ -106,9 +144,13 @@ private:
     void refreshAndPublishProperties();
     int backoffDelayMs() const;
 
+    enum JobPhase : int { kPending = 0, kRunning = 1, kDone = 2, kCancelled = 3 };
     struct Job {
         std::function<void(CameraSession*)> fn;
         std::shared_ptr<std::promise<void>> done;
+        std::shared_ptr<std::atomic<int>> phase;
+        std::chrono::steady_clock::time_point deadline;
+        JobKind kind = JobKind::Generic;
     };
 
     CameraConfig cfg_;
@@ -142,6 +184,12 @@ private:
     std::atomic<bool> reappeared_{false};
 
     ConnState state_ = ConnState::Offline;
+
+    // The pinned host key. Read by the worker thread for every connect, written
+    // by repin() from an HTTP thread and by first-use pinning.
+    mutable std::mutex pinMu_;
+    std::string pinned_;
+    std::string observed_;
     int reconnectAttempts_ = 0;
     std::chrono::steady_clock::time_point nextAttempt_{};
     std::chrono::steady_clock::time_point lastHeartbeatOk_{};

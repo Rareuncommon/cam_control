@@ -46,11 +46,14 @@ function ccdp({ destination = 1, category = 0, parameter = 3, relative = 0,
 
 const IRIS = [280, 320, 350, 400, 450, 500, 560, 630, 710, 800, 900, 1000, 1100, 1300, 1600, 2200];
 
+// `...over` first, so nested properties merge with the defaults instead of
+// being replaced by the sparse override (audit 2026-09-23 fixture observation).
 function camera(over = {}) {
   return {
-    id: 'fx3',
-    label: 'Wide',
-    state: 'connected',
+    ...over,
+    id: over.id ?? 'fx3',
+    label: over.label ?? 'Wide',
+    state: over.state ?? 'connected',
     properties: {
       fNumber: { value: 400, writable: true, allowed: IRIS },
       isoSensitivity: { value: 800, writable: true, allowed: [200, 400, 800, 1600, 3200, 6400, 12800] },
@@ -62,7 +65,6 @@ function camera(over = {}) {
       zoomPosition: { value: 0, writable: true, range: { min: 0, max: 1000, step: 1 } },
       ...(over.properties ?? {}),
     },
-    ...over,
   };
 }
 
@@ -105,13 +107,16 @@ test('a signed value stays signed', () => {
   assert.equal(d.values[0], -6);
 });
 
-test('a value count longer than the buffer reads only what is there', () => {
-  // A malformed or truncated packet must not read past the end.
+test('a value count longer than the buffer is refused, never read past the end', () => {
+  // A malformed or truncated packet must not read past the end — and, since
+  // the 2026-09-23 audit (CS4), must not be half-decoded either: the partial
+  // result used to reach the mappings, which filled the gap with 0.
   const body = ccdp({ dataType: TYPE.INT16, values: [1, 2] });
   body.writeUInt8(50, WRAPPER.elementCount);
   const d = decodeCCdP(body);
-  assert.equal(d.ok, true);
-  assert.equal(d.values.length, 2);
+  assert.equal(d.ok, false);
+  assert.match(d.error, /advertises 50/);
+  assert.ok(d.raw.length > 0, 'the raw bytes are still returned for diagnosis');
 });
 
 // --- mapping ----------------------------------------------------------------

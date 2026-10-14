@@ -14,12 +14,14 @@ import { isIP } from 'node:net';
 import { dirname, join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CamdClient } from './camd-client.js';
+import { CamdClient, resolveCamdToken } from './camd-client.js';
 import { StateModel } from './state.js';
 import { Logger } from './log.js';
 import { JsonStore } from './store.js';
 import { Presets, Gangs, matchFrom, UndoHistory, PRESET_PROPS, PROP_GROUPS, FOCUS_EXCLUDED_REASON } from './control.js';
-import { Adoption, normaliseMac, suggestId } from './adopt.js';
+import { Adoption, normaliseMac, suggestId, cameraIdentity } from './adopt.js';
+import { cameraCatalog, modelSupport } from './camera-support.js';
+import { ExternalManager, externalCatalog } from './external/manager.js';
 import { AtemTally, tallyForCameras } from './atem.js';
 import { decodeCCdP, toCameraWrites, cameraForDestination, WriteCoalescer } from './atem-cc.js';
 import { ViscaServer } from './visca.js';
@@ -43,7 +45,10 @@ const PUBLIC_DIR = join(__dirname, '..', 'public');
 
 function loadConfig(path) {
   const defaults = {
-    cambridge: { bind: '0.0.0.0', port: 8088, camdUrl: 'ws://127.0.0.1:8787/ws' },
+    // No camdUrl default: unset, it follows camd.restPort and camd.wsPath, so
+    // moving camd to another port moves its event socket with it. A default
+    // here pinned the socket to 8787 while REST went to the new port.
+    cambridge: { bind: '0.0.0.0', port: 8088 },
     camd: { bind: '127.0.0.1', restPort: 8787, wsPath: '/ws' },
     logging: { dir: './logs', level: 'info' },
     cameras: [],
@@ -114,6 +119,15 @@ const MIME = {
  * compresses about tenfold; below this size the saving is not worth the work.
  */
 const GZIP_OVER_BYTES = 16 * 1024;
+
+/**
+ * Sends a store-backed result with a status that matches it. These used to go
+ * out as HTTP 200 even with {ok:false}, so a panel checking the transport saw
+ * success when the store had refused the write (audit DC-9).
+ */
+function sendResult(res, result) {
+  return sendJson(res, result?.ok === false ? 409 : 200, result);
+}
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
@@ -208,14 +222,23 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const camdWs = cfg.cambridge.camdUrl
     ?? `ws://127.0.0.1:${cfg.camd.restPort}${cfg.camd.wsPath}`;
 
+  const camdUsed = camdNeeded(cfg, process.env);
+  if (!camdUsed) {
+    log.info('cambridge', process.env.CAMBRIDGE_CAMD === 'off'
+      ? 'camd not started (not built, and no Sony bodies configured) — running without it'
+      : 'no Sony bodies configured — running without camd');
+  }
+
+  const camdToken = resolveCamdToken(cfg.camd);
+  if (camdUsed && !camdToken) {
+    log.warn('camd', 'no camd access token (CAMD_AUTH_TOKEN or camd.authToken); camd will refuse every request');
+  }
   const camd = new CamdClient({
     baseUrl: camdBase,
     wsUrl: camdWs,
+    token: camdToken,
     log: (level, msg) => log.write(level, 'camd', msg),
   });
-
-  const camdUsed = camdNeeded(cfg);
-  if (!camdUsed) log.info('cambridge', 'no Sony bodies configured — running without camd');
 
   // PTZ heads are driven from here, not through camd: there is no SDK
   // involved, and each head speaks its own network protocol.
@@ -258,6 +281,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     add: async (input) => { const r = await adoption.addPtz(input); if (r.ok) syncMeta(); return r; },
     log: (level, msg) => log.write(level, 'ptz', msg),
   });
+  // Stills bodies over USB and Blackmagic cinema cameras over REST: their own
+  // manager, but the same state model, order and stream as every other camera.
+  const external = new ExternalManager({ adoption });
 
   const undo = new UndoHistory();
   const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
@@ -318,6 +344,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * the joystick would have been reported as a fault.
    */
   const runAction = async (cameraId, action, body) => {
+    if (external.has(cameraId)) {
+      try { return { ok: true, status: 200, body: await external.action(cameraId, action, body ?? {}) }; }
+      catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
+    }
     if (isPtz(cameraId)) {
       // The same Reconnect button the Sony cards have; for a PTZ head it cuts
       // the backoff short.
@@ -374,6 +404,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       atemWrites = new WriteCoalescer(
         (cameraId, prop, value) => applyFn(cameraId, prop, value),
         cfg.atem.coalesceMs ?? 120,
+        (level, msg) => log.write(level, 'atem-link', msg),
       );
 
       atem.on('cameraControl', (body) => {
@@ -745,6 +776,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     }, 60);
   });
 
+  external.on('change', () => state.applyExternal(external.view()));
+
   // --- camd event wiring ----------------------------------------------------
   camd.on('camdConnected', async () => {
     state.setCamdConnected(true);
@@ -798,13 +831,51 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     }
   });
 
+  // A camd built before it learned to skip PTZ entries loads every camera in
+  // the config, PTZ heads included, and reports them as its own. Whatever it
+  // says under a PTZ head's id is ignored: taken at its word, it would replace
+  // the head in the panel with a Sony body claimed by address or model.
+  let warnedPtzFromCamd = false;
+  const fromCamdAboutPtz = (id) => {
+    if (!id || !isPtz(id)) return false;
+    if (!warnedPtzFromCamd) {
+      warnedPtzFromCamd = true;
+      log.warn('camd', `camd reports PTZ head "${id}" as a Sony camera — ignored. `
+        + 'Rebuild camd (cmake --build camd/build) so it leaves PTZ heads alone.');
+    }
+    return true;
+  };
+
   camd.on('event', async (ev) => {
+    if (fromCamdAboutPtz(ev.cameraId)) return;
     switch (ev.event) {
-      case 'hello':
-        state.replaceAll(ev.cameras ?? [], ev.backend, 'camd');
+      case 'hello': {
+        const sony = (ev.cameras ?? []).filter((c) => !fromCamdAboutPtz(c.id));
+        state.replaceAll(sony, ev.backend, 'camd');
+        // A pin camd made while this service was not listening still has to
+        // reach the config.
+        for (const c of sony) {
+          if (c.hostKey === 'pinnedFirstUse' && c.fingerprint) await adoption.pinFingerprint(c.id, c.fingerprint);
+        }
         await refreshAllProperties();
         break;
+      }
       case 'connectionState':
+        // Trust on first use: camd pinned the host key this body presented on
+        // its first connection. Persist it with the camera so a restart keeps
+        // enforcing it, and say so, so the operator can compare it with the
+        // camera's Access Authen. Info screen.
+        if (ev.hostKey === 'pinnedFirstUse' && ev.fingerprint) {
+          const pinned = await adoption.pinFingerprint(ev.cameraId, ev.fingerprint);
+          if (pinned.ok && !pinned.unchanged) {
+            log.warn('camera', `${ev.cameraId}: pinned SSH host key ${ev.fingerprint} on first connection; `
+              + 'check it matches the camera\'s Access Authen. Info screen');
+          } else if (!pinned.ok) log.error('camera', `${ev.cameraId}: could not store host key: ${pinned.error}`);
+        }
+        if (ev.state === 'identityChanged') {
+          log.error('camera', `${ev.cameraId}: camera identity changed; credentials were not sent. `
+            + `Pinned ${ev.fingerprint ?? '?'}, presented ${ev.observedFingerprint ?? '(none)'}`);
+        }
         await onConnectionState(ev);
         break;
       case 'statusUpdate': {
@@ -827,6 +898,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
 
   async function refreshProperties(cameraId) {
+    // Stills and cinema cameras carry their controls in their own view.
+    if (external.has(cameraId)) return;
     const res = isPtz(cameraId)
       ? await ptz.getProperties(cameraId)
       : await camd.getProperties(cameraId);
@@ -845,7 +918,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     if (!camdUsed) return;
     const res = await camd.listCameras();
     if (res.ok && res.body?.cameras) {
-      state.replaceAll(res.body.cameras, null, 'camd');
+      state.replaceAll(res.body.cameras.filter((c) => !fromCamdAboutPtz(c.id)), null, 'camd');
       await refreshAllProperties();
     }
   }
@@ -900,7 +973,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   // --- HTTP -----------------------------------------------------------------
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+    let url;
+    try { url = new URL(req.url, 'http://localhost'); }
+    catch { return sendJson(res, 400, { error: 'Invalid request URL' }); }
     const path = url.pathname;
     res.acceptsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '');
 
@@ -1001,6 +1076,25 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         return;
       }
 
+      if (path === '/api/external/catalog' && req.method === 'GET') return sendJson(res, 200, externalCatalog());
+      if (path === '/api/external/discovered' && req.method === 'GET') {
+        try { return sendJson(res, 200, { cameras: await external.discover() }); }
+        catch (error) { return sendJson(res, 503, { ok: false, error: error.message }); }
+      }
+      if (path === '/api/external/cameras' && req.method === 'POST') {
+        try { return sendJson(res, 201, { ok: true, camera: await external.add(await readBody(req)) }); }
+        catch (error) { return sendJson(res, 400, { ok: false, error: error.message }); }
+      }
+      m = path.match(/^\/api\/external\/cameras\/([^/]+)(?:\/(refresh|set|capture))?$/);
+      if (m && req.method === 'DELETE' && !m[2]) {
+        try { external.remove(decodeURIComponent(m[1])); return sendJson(res, 200, { ok: true }); }
+        catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+      if (m && req.method === 'POST' && m[2]) {
+        try { return sendJson(res, 200, await external.action(decodeURIComponent(m[1]), m[2], await readBody(req) ?? {})); }
+        catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+
       // --- state ---
       // The same envelope the SSE push carries, minus its `type`. One shape for
       // both paths: the Companion module falls back to polling this when its
@@ -1065,7 +1159,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
             detail: 'nothing to undo on this camera' });
         }
         const [result] = await applyWithoutHistory(cameraId, { [entry.prop]: entry.from });
-        if (result.ok) await refreshProperties(cameraId);
+        if (result.ok && !external.has(cameraId)) await refreshProperties(cameraId);
         log.info('undo', `${actor()}${cameraId} ${entry.prop} ${entry.to} -> ${entry.from}` +
           (result.ok ? '' : ` FAILED: ${result.error}`));
         return sendJson(res, result.ok ? 200 : 502, {
@@ -1133,6 +1227,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Everything needed to add a camera from the browser. Discovery is annotated
       // with whether each body is already adopted, and by which entry, so the setup
       // page never offers to adopt a camera twice.
+      if (path === '/api/camera-support' && req.method === 'GET') {
+        return sendJson(res, 200, cameraCatalog());
+      }
+
       if (path === '/api/discovered' && req.method === 'GET') {
         if (!camdUsed) {
           return sendJson(res, 200, {
@@ -1146,40 +1244,38 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const d = await camd.discovered();
         if (!d.ok) return sendJson(res, 502, d.body ?? { error: 'camd unreachable' });
         const adopted = adoption.adopted();
-        const byMac = new Map(adopted.map((c) => [normaliseMac(c.mac), c]));
+        const byIdentity = new Map(adopted.map((c) => [cameraIdentity(c), c]).filter(([key]) => key));
+        // A BRC-AM7 or FR7 is both an SDK camera and a PTZ head. One already
+        // added as a head is shown as added: adopting it through the SDK as
+        // well would put two sets of controls on one camera.
+        const ptzByIp = new Map(adopted.filter(isPtzEntry).map((c) => [c.ip, c]));
         const takenIds = new Set(adopted.map((c) => c.id));
         const list = (d.body?.discovered ?? []).map((cam) => {
           const mac = normaliseMac(cam.mac);
-          const owner = byMac.get(mac);
+          const identity = cameraIdentity(cam);
+          const owner = (identity ? byIdentity.get(identity) : null) ?? (cam.ip ? ptzByIp.get(cam.ip) : null) ?? null;
           return {
             ...cam,
-            mac: mac ?? cam.mac,
+            identity,
+            adoptable: !!identity,
+            support: modelSupport(cam.model),
+            mac: mac ?? '',
             adopted: !!owner,
             adoptedAs: owner ? { id: owner.id, label: owner.label } : null,
-            suggestedId: owner ? owner.id : suggestId(cam.model, mac, takenIds),
+            suggestedId: owner ? owner.id : suggestId(cam.model, mac || cam.deviceId, takenIds),
           };
         });
         // The hint tracks what is actually on the network. Telling an operator to
         // go and read credentials off three screens, when none of the cameras
         // wants any, is how a setup page trains people to ignore it.
         const needAuth = list.filter((c) => c.accessAuthRequired && !c.adopted);
-        const noAuth = list.filter((c) => !c.accessAuthRequired);
-        // A camera reporting no access authentication is a warning, not a
-        // convenience: on FX3/FX30 firmware the body then refuses SDK control
-        // over the network entirely, connecting and dropping in a loop. Say so
-        // here, where someone is looking at the camera that will do it.
-        const credentialHint = noAuth.length
-          ? `${noAuth.length === 1 ? 'A camera has' : `${noAuth.length} cameras have`} ` +
-            'access authentication turned OFF. These bodies will not accept remote ' +
-            'control in that state — turn [Access Authen. Settings] back On, then ' +
-            'enter the username and password from [Access Authen. Info].'
+        const legacyAuthWarning = list.filter((c) => !c.accessAuthRequired && c.ip &&
+          ['ILME-FX3', 'ILME-FX30'].includes(c.support.model));
+        const credentialHint = legacyAuthWarning.length
+          ? 'For FX3/FX30 network control, keep Access Authentication On and enter each body’s credentials.'
           : needAuth.length
-            ? `${needAuth.length} of these ${needAuth.length === 1 ? 'needs its password' : 'need their passwords'}, ` +
-              'shown on the camera at MENU → Network → Network Option → [Access Authen. Info]. ' +
-              'Each body has its own; you only enter them once.'
-            : (list.length
-              ? 'Every camera here is already added.'
-              : 'No cameras seen yet. Check USB-LAN Connection and Remote Shooting on each body.');
+            ? 'Enter the access credentials only for cameras that request them. USB PC Remote connections may not need a password.'
+            : 'Connect using a model-supported USB PC Remote or network connection, then add the discovered camera. Controls depend on the body, lens and mode.';
 
         return sendJson(res, 200, {
           discovered: list,
@@ -1190,10 +1286,26 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 
       if (path === '/api/adopt' && req.method === 'POST') {
         const body = await readBody(req);
-        if (!body?.mac) return sendJson(res, 400, { error: 'mac is required' });
+        if (!cameraIdentity(body)) return sendJson(res, 400, { error: 'a discovered MAC or SDK device ID is required' });
+        const head = body.ip && adoption.adopted().find((c) => isPtzEntry(c) && c.ip === body.ip);
+        if (head) {
+          return sendJson(res, 409, { ok: false,
+            error: `${body.ip} is already added as the PTZ head "${head.label}"; control it there` });
+        }
         const result = await adoption.adopt(body);
         if (result.ok) { syncMeta(); await refreshEverything(); }
         return sendJson(res, result.ok ? 201 : 409, result);
+      }
+
+      // Deliberate re-pair after a host-key change (admin). The body must carry
+      // the fingerprint the camera presented, which camd verifies.
+      const rp = path.match(/^\/api\/cameras\/([^/]+)\/adoption\/repin$/);
+      if (rp && req.method === 'POST') {
+        const id = decodeURIComponent(rp[1]);
+        const body = await readBody(req);
+        const result = await adoption.repin(id, body?.fingerprint);
+        log.warn('adopt', `${actor()}re-pair ${id}: ${result.ok ? 'accepted' : result.error}`);
+        return sendJson(res, result.ok ? 200 : 409, result);
       }
 
       let am = path.match(/^\/api\/cameras\/([^/]+)\/adoption$/);
@@ -1483,7 +1595,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         // payload in the log on its way to being turned down.
         log.info('action', `${actor()}${cameraId} ${action}`
           + (result.status === 403 ? ' REFUSED (admin)' : body ? ` ${JSON.stringify(body)}` : ''));
-        if (result.ok) await refreshProperties(cameraId);
+        if (result.ok && !external.has(cameraId)) await refreshProperties(cameraId);
         return sendJson(res, result.ok ? 200 : (result.status || 502), {
           ok: result.ok, cameraId, action, ...(result.body ?? {}),
         });
@@ -1493,8 +1605,14 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/record-all' && req.method === 'POST') {
         const body = await readBody(req);
         const want = body?.start !== false;
-        // PTZ heads are not recorders; "record all" means every camera that rolls.
-        const targets = state.list().filter((c) => c.state === 'connected' && c.kind !== 'ptz');
+        // PTZ heads are not recorders; "record all" means every camera that
+        // rolls. A stills body rolls only if it says it can; a Blackmagic body
+        // is always sent a stop, connected or not, because a stop must not be
+        // skipped on the strength of a status poll that may be stale.
+        const rolls = (c) => (c.kind === 'external'
+          ? (want ? c.capabilities?.record?.available === true : c.provider === 'blackmagic-rest')
+          : c.state === 'connected' && c.kind !== 'ptz');
+        const targets = state.list().filter(rolls);
         log.info('action', `${actor()}record ${want ? 'start' : 'stop'} on ${targets.length} camera(s)`);
         const results = await Promise.all(targets.map(async (cam) => {
           const r = await runAction(cam.id, want ? 'recordStart' : 'recordStop');
@@ -1505,7 +1623,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           log.error('action',
             `record ${want ? 'start' : 'stop'} failed on: ${failed.map((f) => f.cameraId).join(', ')}`);
         }
-        return sendJson(res, 200, { ok: failed.length === 0, results });
+        return sendJson(res, 200, { ok: results.length > 0 && failed.length === 0, results });
       }
 
       // --- quit ---
@@ -1526,6 +1644,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
           camd.stop();
           await stopSkaarhoj();
           await ptz.stop();
+          await external.stop();
           atem?.stop();
           atemWrites?.stop();
           await visca?.stop();
@@ -1548,8 +1667,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       m = path.match(/^\/api\/cameras\/([^/]+)\/presets\/([^/]+)$/);
       if (m) {
         const [, cameraId, name] = m.map(decodeURIComponent);
-        if (req.method === 'PUT')    return sendJson(res, 200, presets.savePreset(cameraId, name));
-        if (req.method === 'DELETE') return sendJson(res, 200, presets.deletePreset(cameraId, name));
+        if (req.method === 'PUT')    return sendResult(res, presets.savePreset(cameraId, name));
+        if (req.method === 'DELETE') return sendResult(res, presets.deletePreset(cameraId, name));
         if (req.method === 'POST') {
           const body = await readBody(req);
           undo.mark(cameraId, `preset "${name}"`);
@@ -1566,8 +1685,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       m = path.match(/^\/api\/scenes\/([^/]+)$/);
       if (m) {
         const name = decodeURIComponent(m[1]);
-        if (req.method === 'PUT')    return sendJson(res, 200, presets.saveScene(name));
-        if (req.method === 'DELETE') return sendJson(res, 200, presets.deleteScene(name));
+        if (req.method === 'PUT')    return sendResult(res, presets.saveScene(name));
+        if (req.method === 'DELETE') return sendResult(res, presets.deleteScene(name));
         if (req.method === 'POST') {
           const body = await readBody(req);
           // A mark on every camera, not just the ones the scene names — the
@@ -1592,12 +1711,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const name = decodeURIComponent(m[1]);
         if (req.method === 'PUT') {
           const body = await readBody(req);
-          return sendJson(res, 200, gangs.define(name, body?.members ?? {}));
+          return sendResult(res, gangs.define(name, body?.members ?? {}));
         }
-        if (req.method === 'DELETE') return sendJson(res, 200, gangs.remove(name));
+        if (req.method === 'DELETE') return sendResult(res, gangs.remove(name));
         if (req.method === 'POST') {
           const body = await readBody(req);
-          return sendJson(res, 200, gangs.setEnabled(name, body?.enabled !== false));
+          return sendResult(res, gangs.setEnabled(name, body?.enabled !== false));
         }
       }
 
@@ -1637,9 +1756,13 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'GET') {
         const cameraId = decodeURIComponent(m[1]);
         const single = url.searchParams.get('single') === '1';
-        const upstream = `${camd.liveviewUrl(cameraId)}${single ? '?single=1' : ''}`;
+        // Abort the upstream MJPEG read when the browser goes away, so a
+        // closed tab does not keep a camd stream (and a camera worker job per
+        // frame) alive.
+        const upstreamAbort = new AbortController();
+        res.on('close', () => upstreamAbort.abort());
         try {
-          const r = await fetch(upstream);
+          const r = await camd.fetchLiveview(cameraId, single, upstreamAbort.signal);
           res.writeHead(r.status, {
             'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream',
             'Cache-Control': 'no-store',
@@ -1693,6 +1816,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     atem,
     visca,
     ptz,
+    external,
     /** The live panel link while driving one, else null. */
     get skaarhoj() { return skaarhoj; },
     start() {
@@ -1701,6 +1825,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // a connection state never lands on a camera the model does not know.
       state.replaceAll(ptz.snapshots(), null, 'ptz');
       ptz.start();
+      state.applyExternal(external.view());
+      external.start();
       startSkaarhoj();
       if (atem) {
         log.info('atem', `watching switcher at ${cfg.atem.host}:${cfg.atem.port} for tally`);
@@ -1742,6 +1868,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       camd.stop();
       await stopSkaarhoj();
       await ptz.stop();
+      await external.stop();
       atem?.stop();
       atemWrites?.stop();
       await visca?.stop();

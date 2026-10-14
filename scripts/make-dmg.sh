@@ -278,13 +278,22 @@ trap cleanup EXIT INT TERM
 # adapters from a path relative to here.
 cd "${RES}/camd" || { alert "CamBridge" "The app bundle is incomplete."; exit 1; }
 
+# camd requires a per-launch access token on every request (audit DC-1). One
+# fresh secret per launch, exported so camd and the Node service share it; it is
+# never written to the config file.
+export CAMD_AUTH_TOKEN="$(LC_ALL=C od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+camd_health() {
+  curl -fsS -H @<(printf 'Authorization: Bearer %s\n' "${CAMD_AUTH_TOKEN}") \
+    "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1
+}
+
 say "starting camd"
 ./camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
 CAMD_PID=$!
 
 healthy=false
 for _ in $(seq 1 50); do
-    if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then healthy=true; break; fi
+    if camd_health; then healthy=true; break; fi
     kill -0 "${CAMD_PID}" 2>/dev/null || break
     sleep 0.2
 done

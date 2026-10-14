@@ -25,13 +25,16 @@ node cambridge/src/server.js --config config/cambridge.json
 
 ### Phase 1 — acceptance met
 
-`curl` reads iris and drives record on a camera:
+`curl` reads iris and drives record on a camera. Since the 2026-09-23 audit
+remediation camd refuses every request without its per-launch token, and any
+request carrying an `Origin` header; start camd with `CAMD_AUTH_TOKEN` set (at
+least 32 characters; `scripts/start.sh` generates one) and send it as below:
 
 ```sh
-curl localhost:8787/cameras/cam1/properties
-curl -X PUT localhost:8787/cameras/cam1/properties/fNumber -d '{"value":410}'
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" localhost:8787/cameras/cam1/properties
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" -X PUT localhost:8787/cameras/cam1/properties/fNumber -d '{"value":410}'
 #   -> {"applied":400,"exact":false,...}  the camera's nearest legal step
-curl -X POST localhost:8787/cameras/cam1/actions/recordStart
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" -X POST localhost:8787/cameras/cam1/actions/recordStart
 ```
 
 ### Phase 3 — acceptance met
@@ -65,8 +68,8 @@ You can rehearse the kill tests without unplugging anything. Under `--fake` only
 camd exposes:
 
 ```sh
-curl -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
-curl -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":false}'
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":true}'
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" -X POST localhost:8787/debug/link/AA:BB:CC:00:00:02 -d '{"down":false}'
 ```
 
 **Still outstanding, and only real cameras can do it:**
@@ -147,7 +150,7 @@ Start with **one** camera in the config. `GET /discovered` lists every body on
 the network with its MAC, which is the easiest way to fill the config in:
 
 ```sh
-curl localhost:8787/discovered
+curl -H "Authorization: Bearer $CAMD_AUTH_TOKEN" localhost:8787/discovered
 ```
 
 Send me the `--verbose` log from the first connect attempt. The interesting part

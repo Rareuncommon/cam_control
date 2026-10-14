@@ -82,6 +82,7 @@ export function buildFeedbacks(self) {
             { id: 'connecting', label: 'Connecting' },
             { id: 'reconnecting', label: 'Reconnecting' },
             { id: 'unauthorized', label: 'Wrong password' },
+            { id: 'identityChanged', label: 'Identity changed (re-pair needed)' },
             { id: 'offline', label: 'Offline' },
             { id: '__notok__', label: 'Anything other than connected' },
           ],
@@ -101,6 +102,14 @@ export function buildFeedbacks(self) {
       defaultStyle: { bgcolor: AMBER, color: BLACK },
       options: [],
       callback: () => self.cameras.some((c) => c.state !== 'connected'),
+    },
+
+    linkDown: {
+      name: 'Companion cannot reach CamBridge (camera state unknown)',
+      type: 'boolean',
+      defaultStyle: { bgcolor: AMBER, color: BLACK },
+      options: [],
+      callback: () => !self.linkUp,
     },
 
     camdDown: {

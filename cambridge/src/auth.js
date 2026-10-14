@@ -92,11 +92,14 @@ export async function pinMatchesAsync(pin, stored) {
  * is added.
  */
 export const ADMIN_ROUTES = [
+  /^POST \/api\/external\/cameras$/,
+  /^DELETE \/api\/external\/cameras\/[^/]+$/,
   /^POST \/api\/adopt$/,               // stores camera credentials
   /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+$/, // forgets or re-credentials a body
   // The routes the panel actually calls to forget or re-credential a camera.
   // The line above guarded a path nothing used, which left these at operator.
   /^(DELETE|PATCH|PUT) \/api\/cameras\/[^/]+\/adoption$/,
+  /^POST \/api\/cameras\/[^/]+\/adoption\/repin$/, // trusts a new camera host key
   /^POST \/api\/shutdown$/,            // stops the app for everyone
   /^POST \/api\/auth\/pin$/,           // changes who can get in
   /^POST \/api\/ptz\/(detect|cameras|bulk)$/, // probes with, and stores, PTZ credentials
@@ -120,6 +123,7 @@ export const PUBLIC_ROUTES = [
 ];
 
 export function requiredRole(method, path) {
+  try { path = decodeURIComponent(path); } catch { return 'admin'; }
   const key = `${method} ${path}`;
   if (PUBLIC_ROUTES.some((r) => r.test(key))) return 'public';
   if (ADMIN_ROUTES.some((r) => r.test(key))) return 'admin';
