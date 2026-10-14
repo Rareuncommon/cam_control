@@ -124,6 +124,31 @@ export function markClipping(rgba, { overAt = 250, underAt = 4 } = {}) {
 }
 
 /**
+ * Measures, then recolours for display — in that order (audit CS2).
+ *
+ * The panel used to recolour the frame first and measure the recoloured
+ * pixels: a clipped white pixel painted red by the clipping overlay has a luma
+ * below the clipping threshold, so the clip readout reported less clipping
+ * than the picture had, and the false-colour histogram described the palette
+ * rather than the exposure. Measurements now come from the camera's own
+ * pixels; the overlay only changes what is drawn.
+ *
+ * `measure` is false on the frames between scope updates, when the previous
+ * result is redrawn instead. Returns { hist?, clip?, overlaid }.
+ */
+export function measureThenOverlay(rgba, { mode = 'off', measure = true, histogram: wantHist = false,
+  clipReadout = false, lut = null } = {}) {
+  const out = { overlaid: false };
+  if (measure) {
+    if (wantHist) out.hist = histogram(rgba);
+    if (clipReadout) out.clip = clipStats(rgba);
+  }
+  if (mode === 'false' && lut) { applyFalseColour(rgba, lut); out.overlaid = true; }
+  else if (mode === 'clip') { markClipping(rgba); out.overlaid = true; }
+  return out;
+}
+
+/**
  * Average colour of a region, for picture-based white balance comparison.
  *
  * `region` is normalised (0–1) so the caller does not need the frame size.

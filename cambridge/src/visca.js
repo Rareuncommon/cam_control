@@ -46,17 +46,32 @@ const MAX_CARRY = 1024;
  * Both framings: the 8-byte VISCA-over-IP header (first byte 0x01/0x02) and
  * raw VISCA (first byte 0x8n, ending 0xFF).
  *
+ * Nothing malformed is ever run (audit CS5). A message must be 3–16 bytes,
+ * start 0x8n and end 0xFF; a header must announce such a length. A malformed
+ * message is skipped whole. Bytes that can never become a message — a raw run
+ * with no terminator inside sixteen bytes, or a carry past its limit — set
+ * `bad`, and a TCP peer that sends them is not a controller.
+ *
  * @param {Buffer} data
- * @returns {{messages: Array<{message: Buffer, sequence: number, framed: boolean}>, rest: Buffer}}
+ * @returns {{messages: Array<{message: Buffer, sequence: number, framed: boolean}>, rest: Buffer, bad: boolean}}
  */
 export function splitMessages(data) {
   const messages = [];
+  let bad = false;
   let at = 0;
+  const wellFormed = (m) => m.length >= 3 && m.length <= MAX_MESSAGE
+    && (m[0] & 0x80) !== 0 && m[m.length - 1] === 0xff;
   while (at < data.length) {
     const first = data[at];
     if ((first & 0x80) !== 0) {
       const end = data.indexOf(0xff, at);
-      if (end < 0) break;                       // a raw message still arriving
+      if (end < 0 || end - at + 1 > MAX_MESSAGE) {
+        if (end < 0 && data.length - at <= MAX_MESSAGE) break;   // a raw message still arriving
+        // No terminator where one must be: never a VISCA message.
+        bad = true;
+        at = end < 0 ? data.length : end + 1;
+        continue;
+      }
       messages.push({ message: data.subarray(at, end + 1), sequence: 0, framed: false });
       at = end + 1;
       continue;
@@ -64,20 +79,32 @@ export function splitMessages(data) {
     if (data.length - at < 8) break;            // a header still arriving
     const type = data.readUInt16BE(at);
     const length = data.readUInt16BE(at + 2);
-    if (type !== PAYLOAD_COMMAND && type !== PAYLOAD_REPLY && type !== PAYLOAD_INQUIRY) {
+    // Control frames (a controller's sequence-number RESET when it connects)
+    // and device-setting commands are VISCA-over-IP, just not camera commands:
+    // skipped, never a reason to drop the controller.
+    if (PAYLOAD_SKIPPED.has(type) && length <= MAX_MESSAGE) {
+      if (data.length - at < 8 + length) break;
+      at += 8 + length;
+      continue;
+    }
+    if ((type !== PAYLOAD_COMMAND && type !== PAYLOAD_REPLY && type !== PAYLOAD_INQUIRY)
+        || length < 3 || length > MAX_MESSAGE) {
       at += 1;                                  // not a header: skip a byte and resynchronise
+      bad = true;
       continue;
     }
     if (data.length - at < 8 + length) break;   // a body still arriving
-    messages.push({
-      message: data.subarray(at + 8, at + 8 + length),
-      sequence: data.readUInt32BE(at + 4),
-      framed: true,
-    });
+    const message = data.subarray(at + 8, at + 8 + length);
+    if (wellFormed(message)) {
+      messages.push({ message, sequence: data.readUInt32BE(at + 4), framed: true });
+    } else {
+      bad = true;                               // the length was right, the message is not
+    }
     at += 8 + length;
   }
   const rest = data.subarray(at);
-  return { messages, rest: rest.length > MAX_CARRY ? Buffer.alloc(0) : rest };
+  if (rest.length > MAX_CARRY) return { messages, rest: Buffer.alloc(0), bad: true };
+  return { messages, rest, bad };
 }
 
 /** "192.0.2.10" or "192.0.2.0/24"; IPv4 only, which is what VISCA controllers use. */
@@ -99,6 +126,8 @@ export function matchesAllow(address, allow) {
 const PAYLOAD_COMMAND = 0x0100;
 const PAYLOAD_INQUIRY = 0x0110;
 const PAYLOAD_REPLY = 0x0111;
+/** Device setting command, control command, control reply. */
+const PAYLOAD_SKIPPED = new Set([0x0120, 0x0200, 0x0201]);
 
 // VISCA replies. The socket number in the low nibble is echoed as 1; nothing
 // here queues commands deeply enough for it to mean anything more.
@@ -109,6 +138,13 @@ const ERR_NOT_EXECUTABLE = [0x61, 0x41];
 
 /** f-number is transported ×100 by camd; VISCA iris positions are a table index. */
 const IRIS_STEP = 1;
+
+// A VISCA message is at most 16 bytes including its address byte and 0xFF
+// terminator. Anything claiming more is not VISCA (audit CS5).
+const MAX_MESSAGE = 16;
+// Complete messages one TCP controller may have waiting for the camera. A
+// peer beyond this is not a controller, and is disconnected (audit CS5).
+const MAX_QUEUED = 32;
 
 export class ViscaServer {
   /**
@@ -241,7 +277,9 @@ export class ViscaServer {
           const peer = { id: `visca-tcp:${socket.remoteAddress}:${socket.remotePort}`, tcp: true, cameraId };
           let carry = Buffer.alloc(0);
           let chain = Promise.resolve();
+          let waiting = 0;
           socket.on('close', () => {
+            peer.closed = true;
             l.sockets.delete(socket);
             // Whatever this controller was holding stops with it.
             this.ptz?.releaseSource(peer.id);
@@ -250,14 +288,29 @@ export class ViscaServer {
           // with it; a booth joystick unplugged during a shoot is routine.
           socket.on('error', (err) => this.log('debug', `VISCA TCP client: ${err.message}`));
           socket.on('data', (data) => {
-            const { messages, rest } = splitMessages(Buffer.concat([carry, data]));
+            if (peer.closed) return;
+            const { messages, rest, bad } = splitMessages(Buffer.concat([carry, data]));
             carry = rest;
+            // Bytes that can never be VISCA, or more commands waiting than any
+            // controller sends, are not a controller (audit CS5). It is cut
+            // off, and nothing it sent runs after that.
+            if (bad || waiting + messages.length > MAX_QUEUED) {
+              this.log('warn', `VISCA: dropped ${socket.remoteAddress} — ${bad ? 'not VISCA' : 'too many commands waiting'}`);
+              socket.destroy();
+              return;
+            }
+            waiting += messages.length;
             // In order, one at a time: a drive and its stop in one chunk must
             // reach the camera as a drive and then a stop.
             chain = chain.then(async () => {
               for (const m of messages) {
+                waiting -= 1;
+                // A controller already gone must not start a move: its moves
+                // latch, and the release for it has already been sent.
+                if (peer.closed) continue;
                 const reply = await this.#handleMessage(m, peer);
-                if (!socket.destroyed) for (const frame of reply) socket.write(frame);
+                if (peer.closed) this.ptz?.releaseSource(peer.id);
+                else for (const frame of reply) socket.write(frame);
               }
             }).catch((err) => this.log('debug', `VISCA TCP: ${err.message}`));
           });
@@ -337,7 +390,15 @@ export class ViscaServer {
     // Address 0 is not a real target; treat it as camera 1 so a controller that
     // sends 0x80 still reaches something rather than silently doing nothing.
     const address = (message[0] & 0x0f) || 1;
-    const replies = await this.execute(address, message, peer);
+    let replies;
+    try {
+      replies = await this.execute(address, message, peer);
+    } catch (err) {
+      // A camera write that throws is a failure the controller must see, not an
+      // unhandled rejection with no reply (audit CS6).
+      this.log('warn', `VISCA command failed: ${err.message}`);
+      replies = [[0x90, ...ERR_NOT_EXECUTABLE, 0xff]];
+    }
     return replies.map((payload) => this.#frame(payload, sequence, framed));
   }
 
@@ -413,15 +474,13 @@ export class ViscaServer {
       if (idx < 0) return 'refused';
       const next = sorted[idx + direction];
       if (next === undefined) return 'refused';
-      await this.applyFn(cam.id, prop, next);
-      return 'ok';
+      return this.#applied(await this.applyFn(cam.id, prop, next));
     }
     if (p.range) {
       const step = (p.range.step || 1) * IRIS_STEP;
       const next = Math.min(Math.max(current + direction * step, p.range.min), p.range.max);
       if (next === current) return 'refused';
-      await this.applyFn(cam.id, prop, next);
-      return 'ok';
+      return this.#applied(await this.applyFn(cam.id, prop, next));
     }
     return 'refused';
   }
@@ -429,8 +488,17 @@ export class ViscaServer {
   async #direct(cam, prop, value) {
     const p = cam.properties?.[prop];
     if (!p || !p.writable) return 'refused';
-    await this.applyFn(cam.id, prop, value);
-    return 'ok';
+    return this.#applied(await this.applyFn(cam.id, prop, value));
+  }
+
+  /**
+   * Completion is only sent for a write the camera accepted (audit CS6). The
+   * writable check above is a snapshot; the camera can still refuse (a mode
+   * change, a state transition, camd timing out), and that must reach the
+   * controller as "not executable" rather than a false completion.
+   */
+  #applied(result) {
+    return result && result.ok === false ? 'refused' : 'ok';
   }
 
   /**
@@ -482,12 +550,10 @@ export class ViscaServer {
     const highNibble = mode & 0xf0;
     const speed = (mode & 0x0f) || 3;
     if (mode === 0x02 || highNibble === 0x20) {
-      await this.actionFn(cam.id, 'focusNudge', { steps: speed * 3 });
-      return 'ok';
+      return this.#applied(await this.actionFn(cam.id, 'focusNudge', { steps: speed * 3 }));
     }
     if (mode === 0x03 || highNibble === 0x30) {
-      await this.actionFn(cam.id, 'focusNudge', { steps: -speed * 3 });
-      return 'ok';
+      return this.#applied(await this.actionFn(cam.id, 'focusNudge', { steps: -speed * 3 }));
     }
     if (args.length >= 5) {
       const raw = ((args[1] & 0x0f) << 12) | ((args[2] & 0x0f) << 8)
@@ -500,8 +566,7 @@ export class ViscaServer {
   async #focusMode(cam, args) {
     // 0x02 auto, 0x03 manual, 0x01 trigger a one-shot AF.
     if (args[0] === 0x01) {
-      await this.actionFn(cam.id, 'autofocus');
-      return 'ok';
+      return this.#applied(await this.actionFn(cam.id, 'autofocus'));
     }
     return 'refused';
   }

@@ -1,4 +1,4 @@
-// Camera adoption: discover a body on the network, give it credentials, and make
+// Camera adoption: discover a body over USB or a supported network connection, give it credentials, and make
 // it a permanent part of the system — all without touching a terminal.
 //
 // Two things have to happen together and stay consistent: camd has to be told
@@ -46,11 +46,31 @@ export function suggestId(model, mac, taken = new Set()) {
 
 export function normaliseMac(input) {
   const hex = String(input || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
-  if (hex.length !== 12) return null;
+  if (hex.length !== 12 || /^(0{12}|F{12})$/.test(hex)) return null;
   return hex.match(/../g).join(':');
 }
 
+export function cameraIdentity(camera) {
+  const mac = normaliseMac(camera?.mac);
+  if (mac) return `mac:${mac}`;
+  const id = camera?.deviceId;
+  return typeof id === 'string' && id.length <= 16384 && /^sony-sdk:[0-9]+:(?:[0-9a-f]{2})+$/.test(id)
+    ? `device:${id}` : null;
+}
+
 export class Adoption {
+  #pending = Promise.resolve();
+  #mutate(operation) {
+    const next = this.#pending.then(operation);
+    this.#pending = next.catch(() => {});
+    return next;
+  }
+  adopt(input) { return this.#mutate(() => this.#adopt(input)); }
+  forget(id) { return this.#mutate(() => this.#forget(id)); }
+  update(id, changes) { return this.#mutate(() => this.#update(id, changes)); }
+  pinFingerprint(id, fingerprint) { return this.#mutate(() => this.#pinFingerprint(id, fingerprint)); }
+  repin(id, fingerprint) { return this.#mutate(() => this.#repin(id, fingerprint)); }
+
   /**
    * @param {string} configPath
    * @param {import('./camd-client.js').CamdClient} camd
@@ -148,21 +168,35 @@ export class Adoption {
 
   /**
    * Adopt a discovered camera.
-   * @param {{mac:string,model?:string,ip?:string,label?:string,username?:string,password?:string,id?:string}} input
+   * @param {{mac?:string,deviceId?:string,model?:string,ip?:string,label?:string,username?:string,password?:string,id?:string}} input
    */
-  async adopt(input) {
-    const mac = normaliseMac(input.mac);
-    if (!mac) return { ok: false, error: 'a valid MAC address is required' };
+  async #adopt(input) {
+    const identity = cameraIdentity(input);
+    if (!identity) return { ok: false, error: 'a discovered MAC or SDK device ID is required' };
+    // Names, addresses and authentication requirements come from SDK discovery,
+    // not a model typed into an API request. Unknown SDK models remain usable.
+    const scan = await this.camd.request('GET', '/discovered');
+    if (!scan.ok) return { ok: false, error: 'cannot verify camera discovery' };
+    const matches = (scan.body?.discovered ?? []).filter((c) => cameraIdentity(c) === identity);
+    if (matches.length !== 1) return { ok: false, error: 'camera identity is missing or ambiguous; refresh discovery' };
+    const discovered = matches[0];
+    const mac = normaliseMac(discovered.mac);
+    const deviceId = mac ? '' : discovered.deviceId;
+    input = { ...input, model: discovered.model, ip: discovered.ip };
+    if (discovered.accessAuthRequired && (!input.username?.trim() || !input.password)) {
+      return { ok: false, error: 'this camera requires its access-authentication username and password' };
+    }
 
     const cfg = this.readConfig();
     cfg.cameras ??= [];
 
-    if (cfg.cameras.some((c) => normaliseMac(c.mac) === mac)) {
-      return { ok: false, error: `that camera is already adopted (${mac})` };
+    if (cfg.cameras.some((c) => cameraIdentity(c) === identity)) {
+      return { ok: false, error: 'that camera is already adopted' };
     }
 
     const taken = new Set(cfg.cameras.map((c) => c.id));
-    const id = input.id?.trim() || suggestId(input.model, mac, taken);
+    const id = input.id?.trim() || suggestId(input.model, mac || deviceId, taken);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(id)) return { ok: false, error: 'invalid camera id' };
     if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
 
     const entry = {
@@ -170,7 +204,9 @@ export class Adoption {
       label: input.label?.trim() || input.model || id,
       model: input.model || '',
       ip: input.ip || '',
-      mac,
+      mac: mac || '',
+      deviceId,
+      transport: discovered.transport || '',
       auth: {
         username: input.username?.trim() ?? '',
         password: input.password ?? '',
@@ -185,8 +221,15 @@ export class Adoption {
     }
 
     try {
-      cfg.cameras.push(entry);
-      this.writeConfig(cfg);
+      // Auth may have changed while camd was answering. Merge into the latest
+      // file rather than overwrite a newly saved PIN with our older snapshot.
+      const latest = this.readConfig();
+      latest.cameras ??= [];
+      if (latest.cameras.some((c) => c.id === id || cameraIdentity(c) === identity)) {
+        throw new Error('camera configuration changed during adoption; refresh and retry');
+      }
+      latest.cameras.push(entry);
+      this.writeConfig(latest);
     } catch (err) {
       // Roll the runtime change back rather than leaving a camera that works now
       // and disappears at the next restart.
@@ -199,17 +242,28 @@ export class Adoption {
     return { ok: true, camera: { ...entry, auth: undefined } };
   }
 
-  async forget(id) {
+  async #forget(id) {
     const cfg = this.readConfig();
     const before = (cfg.cameras ?? []).length;
     const gone = (cfg.cameras ?? []).find((c) => c.id === id);
     cfg.cameras = (cfg.cameras ?? []).filter((c) => c.id !== id);
     if (cfg.cameras.length === before) return { ok: false, error: `no camera "${id}" in config` };
 
-    if (gone?.kind === 'ptz') await this.ptz?.remove(id);
-    else await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+    if (gone?.kind === 'ptz') {
+      await this.ptz?.remove(id);
+    } else {
+      // A camera camd refuses to let go of is still connected; forgetting it
+      // here would leave it controlled with no entry to manage it. A daemon
+      // that is not running, or does not know the camera, holds nothing.
+      const removed = await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+      if (!removed.ok && removed.status && removed.status !== 404) {
+        return { ok: false, error: removed.body?.error ?? 'camd refused removal' };
+      }
+    }
     try {
-      this.writeConfig(cfg);
+      const latest = this.readConfig();
+      latest.cameras = (latest.cameras ?? []).filter((c) => c.id !== id);
+      this.writeConfig(latest);
     } catch (err) {
       return { ok: false, error: `could not save config: ${err.message}` };
     }
@@ -218,20 +272,26 @@ export class Adoption {
   }
 
   /** Rename, or replace credentials, on an already-adopted camera. */
-  async update(id, changes) {
+  async #update(id, changes) {
     const cfg = this.readConfig();
     const entry = (cfg.cameras ?? []).find((c) => c.id === id);
     if (!entry) return { ok: false, error: `no camera "${id}" in config` };
 
-    if (typeof changes.label === 'string' && changes.label.trim()) {
+    let labelChanged = false;
+    if (typeof changes.label === 'string' && changes.label.trim() && changes.label.trim() !== entry.label) {
       entry.label = changes.label.trim();
+      labelChanged = true;
     }
+    // Only an actual change of connection identity needs a fresh SDK session.
+    // Re-submitting the credentials a camera already has is not a change.
     let credentialsChanged = false;
-    if (typeof changes.username === 'string' && changes.username.trim()) {
+    if (typeof changes.username === 'string' && changes.username.trim() &&
+        changes.username.trim() !== entry.auth?.username) {
       entry.auth = { ...(entry.auth ?? {}), username: changes.username.trim() };
       credentialsChanged = true;
     }
-    if (typeof changes.password === 'string' && changes.password) {
+    if (typeof changes.password === 'string' && changes.password &&
+        changes.password !== entry.auth?.password) {
       entry.auth = { ...(entry.auth ?? {}), password: changes.password };
       credentialsChanged = true;
     }
@@ -239,8 +299,10 @@ export class Adoption {
     // is something an operator edits. A Sony body's is whatever camd finds.
     // Groups are the operator's way of finding one camera among thirty:
     // "Stage", "Balcony". An empty string takes a camera out of its group.
+    let otherChanged = false;
     if (typeof changes.group === 'string') {
       const g = changes.group.trim().slice(0, 40);
+      if (g !== (entry.group ?? '')) otherChanged = true;
       if (g) entry.group = g; else delete entry.group;
     }
     if (entry.kind === 'ptz' && typeof changes.ip === 'string' && changes.ip.trim()) {
@@ -248,7 +310,11 @@ export class Adoption {
       // Two entries at one address would be two sets of controls on one head.
       const clash = cfg.cameras.find((c) => c.id !== id && c.kind === 'ptz' && c.ip === changes.ip.trim());
       if (clash) return { ok: false, status: 409, error: `${changes.ip.trim()} is already "${clash.label}"` };
+      if (entry.ip !== changes.ip.trim()) otherChanged = true;
       entry.ip = changes.ip.trim();
+    }
+    if (!labelChanged && !credentialsChanged && !otherChanged) {
+      return { ok: true, unchanged: true, camera: { ...entry, auth: undefined } };
     }
 
     try {
@@ -264,13 +330,25 @@ export class Adoption {
       return { ok: true, camera: { ...entry, auth: undefined } };
     }
 
-    // A label change is cosmetic and can be applied live. New credentials only
-    // take effect on a fresh connection, so the camera is re-adopted in place —
-    // which is still far better than restarting the daemon and dropping the rest.
-    await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
-    const res = await this.camd.request('POST', '/cameras', entry);
-    if (!res.ok) {
-      return { ok: false, error: res.body?.error ?? 'camd refused the updated camera' };
+    // A label is cosmetic and is applied live (audit DC-4: renaming used to
+    // drop and re-adopt the camera, interrupting live view and control during
+    // a shoot). New credentials only take effect on a fresh connection, so
+    // only then is the camera re-adopted in place — still far better than
+    // restarting the daemon and dropping the rest.
+    if (credentialsChanged) {
+      await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+      const res = await this.camd.request('POST', '/cameras', entry);
+      if (!res.ok) {
+        return { ok: false, error: res.body?.error ?? 'camd refused the updated camera' };
+      }
+    } else {
+      const res = await this.camd.request('PUT', `/cameras/${encodeURIComponent(id)}/label`, { label: entry.label });
+      if (!res.ok) {
+        // Saved, and shown from config on the next daemon start; the live
+        // connection is deliberately left alone rather than reconnected.
+        this.log.warn?.('adopt', `label for ${id} saved; camd did not apply it live: ${res.body?.error ?? res.status}`);
+        return { ok: true, camera: { ...entry, auth: undefined }, liveLabel: false };
+      }
     }
 
     this.log.info('adopt',
@@ -354,5 +432,50 @@ export class Adoption {
     }
     this.log.info('adopt', `camera order: ${cfg.cameras.map((c) => c.id).join(', ')}`);
     return { ok: true, order: cfg.cameras.map((c) => c.id) };
+  }
+
+  /**
+   * Persists the SSH host key camd pinned on this camera's first connection
+   * (trust on first use). Only fills an empty pin: an existing pin is never
+   * replaced from an event, because that is exactly what an impostor would
+   * produce. Changing a pin is repin(), a deliberate operator action.
+   */
+  async #pinFingerprint(id, fingerprint) {
+    if (typeof fingerprint !== 'string' || !fingerprint || fingerprint.length > 512) {
+      return { ok: false, error: 'invalid fingerprint' };
+    }
+    const cfg = this.readConfig();
+    const entry = (cfg.cameras ?? []).find((c) => c.id === id);
+    if (!entry) return { ok: false, error: `no camera "${id}" in config` };
+    if (entry.fingerprint) {
+      return entry.fingerprint === fingerprint
+        ? { ok: true, unchanged: true }
+        : { ok: false, error: 'a different host key is already pinned; re-pair deliberately to change it' };
+    }
+    entry.fingerprint = fingerprint;
+    try { this.writeConfig(cfg); } catch (err) { return { ok: false, error: `could not save config: ${err.message}` }; }
+    this.log.info('adopt', `pinned SSH host key for ${id}: ${fingerprint}`);
+    return { ok: true, pinned: fingerprint };
+  }
+
+  /**
+   * Deliberate re-pair after "camera identity changed". camd accepts only the
+   * exact fingerprint the camera presented, and only while the camera is in
+   * that state; the stored pin changes only after camd agreed.
+   */
+  async #repin(id, fingerprint) {
+    if (typeof fingerprint !== 'string' || fingerprint.length > 512) return { ok: false, error: 'invalid fingerprint' };
+    const cfg = this.readConfig();
+    const entry = (cfg.cameras ?? []).find((c) => c.id === id);
+    if (!entry) return { ok: false, error: `no camera "${id}" in config` };
+    const res = await this.camd.request('POST', `/cameras/${encodeURIComponent(id)}/repin`, { fingerprint });
+    if (!res.ok) return { ok: false, error: res.body?.error ?? 'camd refused the re-pair' };
+    const latest = this.readConfig();
+    const current = (latest.cameras ?? []).find((c) => c.id === id);
+    if (!current) return { ok: false, error: `no camera "${id}" in config` };
+    if (fingerprint) current.fingerprint = fingerprint; else delete current.fingerprint;
+    try { this.writeConfig(latest); } catch (err) { return { ok: false, error: `could not save config: ${err.message}` }; }
+    this.log.warn?.('adopt', `re-paired ${id}: host key ${fingerprint || '(none)'} pinned by operator`);
+    return { ok: true, id, fingerprint };
   }
 }

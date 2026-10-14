@@ -71,9 +71,9 @@
                without disturbing exposure mid-take. -->
           <span class="note">Recall only:</span>
           <div class="chips" id="recall-groups">
-            <div class="chip" data-group="exposure">Exposure</div>
-            <div class="chip" data-group="colour">White balance</div>
-            <div class="chip" data-group="look">Look</div>
+            <button type="button" class="chip" data-group="exposure" aria-pressed="false">Exposure</button>
+            <button type="button" class="chip" data-group="colour" aria-pressed="false">White balance</button>
+            <button type="button" class="chip" data-group="look" aria-pressed="false">Look</button>
           </div>
           <span class="spacer"></span>
           <label class="note" for="ramp">Ramp over</label>
@@ -140,11 +140,11 @@
     <!-- Everything below can be on at once: they are drawn over the picture
          rather than replacing it. -->
     <div class="chips" id="guide-chips">
-      <div class="chip" data-guide="histogram">Histogram</div>
-      <div class="chip" data-guide="clipReadout">Clip %</div>
-      <div class="chip" data-guide="thirds">Thirds</div>
-      <div class="chip" data-guide="centre">Centre</div>
-      <div class="chip" data-guide="safe">Safe area</div>
+      <button type="button" class="chip" data-guide="histogram" aria-pressed="false">Histogram</button>
+      <button type="button" class="chip" data-guide="clipReadout" aria-pressed="false">Clip %</button>
+      <button type="button" class="chip" data-guide="thirds" aria-pressed="false">Thirds</button>
+      <button type="button" class="chip" data-guide="centre" aria-pressed="false">Centre</button>
+      <button type="button" class="chip" data-guide="safe" aria-pressed="false">Safe area</button>
     </div>
 
     <span class="field">
@@ -269,6 +269,32 @@
   </div>
   <datalist id="group-list"></datalist>
 
+  <!-- Stills bodies over USB (gphoto2) and Blackmagic cinema cameras over
+       their REST API. Sony bodies use the network discovery above. -->
+  <div class="card" id="external-card">
+    <h3>Stills and cinema cameras</h3>
+    <p id="external-catalog-count" class="note"></p>
+    <details><summary>Stills / cinema compatibility</summary>
+      <label for="external-search">Search cameras</label><input id="external-search" type="search" placeholder="Canon R5, Nikon Z8, Blackmagic…">
+      <p id="external-search-count" class="note"></p><table id="external-catalog-table" class="list"></table>
+    </details>
+    <button id="external-scan">Find USB cameras</button>
+    <div id="external-usb-list"></div>
+    <p class="note">USB requires gphoto2. Sony cameras use the Sony setup below. For Blackmagic, enable Web Media Manager/network access on the camera.</p>
+    <form id="external-add-form">
+      <div class="formgrid">
+        <label for="external-model">Cinema camera</label><select id="external-model"></select>
+        <label for="external-label">Label</label><input id="external-label" maxlength="256" placeholder="Cinema A">
+        <label for="external-host">Camera IP</label><input id="external-host" required placeholder="192.168.1.50">
+        <label for="external-port">Port</label><input id="external-port" type="number" min="1" max="65535" value="80" required>
+        <label for="external-https">HTTPS</label><input id="external-https" type="checkbox">
+        <label for="external-user">Username (if required)</label><input id="external-user" autocomplete="off">
+        <label for="external-password">Password</label><input id="external-password" type="password" autocomplete="new-password">
+      </div>
+      <button type="submit">Add cinema camera</button>
+    </form>
+    <div id="external-added"></div>
+  </div>
   <div class="card">
     <h3>Added cameras</h3>
     <div class="sub">These are saved and reconnect on their own, in this order everywhere in the panel.
@@ -308,6 +334,17 @@
     <div class="status" id="sk-status" style="margin-top:12px"></div>
   </div>
 
+  <div class="card">
+    <details>
+      <summary>Camera compatibility</summary>
+      <p class="sub" id="portfolio-summary">Loading camera portfolio…</p>
+      <label for="portfolio-search">Find a camera</label>
+      <input id="portfolio-search" type="search" placeholder="Model or family, e.g. Alpha, FX6, PTZ">
+      <table class="list" id="portfolio-table"></table>
+      <p class="note">Available controls depend on the connected camera, firmware, lens and mode.
+        New models await hardware validation. For PTZ movement, add a separate network PTZ connection above. Media transfer is not implemented.</p>
+    </details>
+  </div>
   <div class="card">
     <h3>Who can control the cameras</h3>
     <div class="sub" id="auth-state"></div>
@@ -388,14 +425,10 @@
 
   <!-- Not a convenience. FX3/FX30 firmware refuses SDK control over the network
        when access authentication is off, so this is the state to warn about. -->
-  <p class="note" id="adopt-noauth" style="display:none;margin:12px 0 0">
-    ⚠️ This camera reports access authentication <strong>turned off</strong>.
-    These bodies will not accept remote control in that state — they connect and
-    drop in a loop. On the camera, set
-    <strong>MENU → Network → Network Option → [Access Authen. Settings]</strong>
-    back to <strong>On</strong>, then add it with the username and password from
-    <strong>[Access Authen. Info]</strong>.
-  </p>
+  <p id="adopt-noauth" class="note" style="display:none">
+      This connection does not request credentials. USB cameras usually use PC Remote mode.
+      For FX3/FX30 network connections, keep Access Authentication On.
+    </p>
   <div class="line" style="margin-top:14px;justify-content:flex-end">
     <button id="adopt-cancel" class="ghost">Cancel</button>
     <button id="adopt-confirm" class="primary">Add camera</button>

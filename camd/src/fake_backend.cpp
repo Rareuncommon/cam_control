@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "camd/camera.h"
+#include "camd/host_key.h"
 #include "camd/log.h"
 #include "camd/properties.h"
 
@@ -24,6 +25,10 @@ namespace {
 
 // A shared, process-wide switch so tests (and a curl against the daemon) can pull
 // a virtual Ethernet cable. Keyed by MAC.
+std::mutex g_hostKeyMu;
+std::map<std::string, std::string> g_hostKey;
+std::map<std::string, int> g_credentialOffers;
+
 std::mutex g_linkMu;
 std::map<std::string, bool> g_linkDown;
 
@@ -33,7 +38,7 @@ bool linkDown(const std::string& mac) {
     return it != g_linkDown.end() && it->second;
 }
 
-// Forced card-remaining, in seconds, keyed by MAC. Set by the debug endpoint so
+// Forced card-remaining, in seconds, keyed by MAC or SDK device ID. Set by the debug endpoint so
 // a nearly-full card can be rehearsed on demand: the alarm that matters most is
 // the one nobody has ever seen fire.
 std::mutex g_mediaMu;
@@ -193,6 +198,9 @@ std::int64_t snapTo(const std::vector<std::int64_t>& allowed, std::int64_t want)
 
 class FakeSession : public CameraSession {
 public:
+    void setHostFingerprint(std::string fp) { hostFingerprint_ = std::move(fp); }
+    std::string hostFingerprint() const override { return hostFingerprint_; }
+
     FakeSession(DiscoveredCamera info, EventSink* sink)
         : info_(std::move(info)), sink_(sink) {
 
@@ -231,9 +239,9 @@ public:
         // Matches the FX30 finding: the toggle command is not available.
         props_[prop::kRecToggleSupported] = enumerated(super35 ? 0 : 0, {0, 1}, false);
 
-        // ND: the FX30 has an internal variable ND, the FX3 does not. Modelling
-        // that difference means the UI's "this body has no ND" path is exercised.
-        if (super35) {
+        // Exercise an ND-capable profile without inventing internal ND on FX30.
+        // All fake values remain synthetic; SDK properties decide real controls.
+        if (info_.model.find("FX6") != std::string::npos) {
             props_[prop::kNdFilter] = enumerated(1, {0, 1});
             props_[prop::kNdMode] = enumerated(2, {1, 2});
             props_[prop::kNdValue] = ranged(30, 0, 100, 1);
@@ -378,7 +386,7 @@ public:
             std::chrono::duration_cast<std::chrono::seconds>(now - lastTick_).count();
 
         std::int64_t forced = 0;
-        if (takeMediaOverride(info_.mac, forced)) {
+        if (takeMediaOverride(info_.mac.empty() ? info_.deviceId : info_.mac, forced)) {
             mediaSec_ = forced < 0 ? 0 : forced;
             LOG_WARN("fake", "card for %s forced to %llds remaining", info_.mac.c_str(),
                      static_cast<long long>(mediaSec_));
@@ -417,10 +425,11 @@ public:
     bool autofocus(std::string& err) override {
         if (!check(err)) return false;
         std::lock_guard<std::mutex> lock(mu_);
-        // Pretend AF landed somewhere plausible and different.
-        static std::mt19937 rng{1234};
+        // Pretend AF landed somewhere plausible and different. The generator
+        // is per session: a function-static one was shared by every fake body
+        // but guarded only by each body's own mutex, so concurrent AF raced.
         std::uniform_int_distribution<int> d(300, 700);
-        props_[prop::kFocusPosition].current = d(rng);
+        props_[prop::kFocusPosition].current = d(afRng_);
         if (sink_) sink_->onPropertyChanged();
         return true;
     }
@@ -473,7 +482,7 @@ public:
 private:
     bool check(std::string& err) {
         if (disconnected_) { err = "session closed"; return false; }
-        if (linkDown(info_.mac)) {
+        if (linkDown(info_.mac.empty() ? info_.deviceId : info_.mac)) {
             err = "no response from camera (simulated link down)";
             if (sink_ && !notified_) {
                 notified_ = true;
@@ -489,6 +498,8 @@ private:
     EventSink* sink_;
     std::vector<std::int64_t> fullIso_;
     std::mutex mu_;
+    std::mt19937 afRng_{1234};
+    std::string hostFingerprint_;
     PropertyMap props_;
     bool recording_ = false;
     std::string lastKey_;
@@ -518,7 +529,7 @@ public:
         (void)timeoutMs;
         std::vector<DiscoveredCamera> out;
         for (const auto& c : present_) {
-            if (!linkDown(c.mac)) out.push_back(c);
+            if (!linkDown(c.mac.empty() ? c.deviceId : c.mac)) out.push_back(c);
         }
         return out;
     }
@@ -527,18 +538,52 @@ public:
                                         const CameraConfig& cfg,
                                         EventSink* sink,
                                         std::string& err) override {
-        if (linkDown(target.mac)) {
+        if (linkDown(target.mac.empty() ? target.deviceId : target.mac)) {
             err = "camera unreachable (simulated link down)";
             return nullptr;
         }
-        if (target.sshRequired && (cfg.username.empty() || cfg.password.empty())) {
-            err = "camera requires access authentication but no credentials configured";
+        std::string fingerprint;
+        if (!target.sshRequired && !cfg.fingerprint.empty()) {
+            // A pinned body that no longer asks for authentication is refused,
+            // as in the Sony backend: no silent downgrade.
+            err = identityChangedError(cfg.fingerprint, "");
             return nullptr;
         }
-        return std::make_unique<FakeSession>(target, sink);
+        if (target.sshRequired) {
+            fingerprint = liveHostKey(target);
+            if (cfg.username.empty() || cfg.password.empty()) {
+                err = "camera requires access authentication but no credentials configured";
+                return nullptr;
+            }
+            // Same policy and order as the Sony backend: the presented key is
+            // checked against the pin before credentials are offered.
+            const HostKeyDecision d = decideHostKey(cfg.fingerprint, fingerprint);
+            if (d == HostKeyDecision::Mismatch || d == HostKeyDecision::Unavailable) {
+                err = identityChangedError(cfg.fingerprint, fingerprint);
+                return nullptr;
+            }
+            noteCredentialOffer(target);
+        }
+        auto session = std::make_unique<FakeSession>(target, sink);
+        session->setHostFingerprint(fingerprint);
+        return session;
     }
 
     std::string versionString() override { return "fake backend (no hardware)"; }
+
+    // What a body with access authentication presents: an override set by a
+    // test, else its configured fake key, else one derived from its identity.
+    static std::string liveHostKey(const DiscoveredCamera& t) {
+        const std::string key = t.mac.empty() ? t.deviceId : t.mac;
+        std::lock_guard<std::mutex> lock(g_hostKeyMu);
+        auto it = g_hostKey.find(key);
+        if (it != g_hostKey.end()) return it->second;
+        return t.fakeHostKey.empty() ? "SHA256:fake-" + key : t.fakeHostKey;
+    }
+    static void noteCredentialOffer(const DiscoveredCamera& t) {
+        std::lock_guard<std::mutex> lock(g_hostKeyMu);
+        ++g_credentialOffers[t.mac.empty() ? t.deviceId : t.mac];
+    }
 
 private:
     std::vector<DiscoveredCamera> present_;
@@ -564,4 +609,16 @@ void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds) 
     g_mediaOverride[mac] = seconds;
 }
 
+}  // namespace camd
+
+namespace camd {
+void fakeBackendSetHostKey(const std::string& mac, const std::string& fingerprint) {
+    std::lock_guard<std::mutex> lock(g_hostKeyMu);
+    g_hostKey[mac] = fingerprint;
+}
+int fakeBackendCredentialOffers(const std::string& mac) {
+    std::lock_guard<std::mutex> lock(g_hostKeyMu);
+    auto it = g_credentialOffers.find(mac);
+    return it == g_credentialOffers.end() ? 0 : it->second;
+}
 }  // namespace camd

@@ -36,6 +36,8 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
+
 #include <CRSDK/CameraRemote_SDK.h>
 #include <CRSDK/CrCommandData.h>
 #include <CRSDK/CrDeviceProperty.h>
@@ -46,6 +48,9 @@
 #include <CRSDK/IDeviceCallback.h>
 
 #include "camd/camera.h"
+#include "camd/connection_ready.h"
+#include "camd/device_identity.h"
+#include "camd/host_key.h"
 #include "camd/log.h"
 #include "camd/properties.h"
 
@@ -231,10 +236,13 @@ class Callback : public SDK::IDeviceCallback {
 public:
     Callback(EventSink* sink, std::string id) : sink_(sink), id_(std::move(id)) {}
 
+    ConnectionReady ready;
     void OnConnected(SDK::DeviceConnectionVersioin version) override {
+        ready.connected();
         LOG_INFO(id_.c_str(), "SDK OnConnected (version %d)", static_cast<int>(version));
     }
     void OnDisconnected(CrInt32u error) override {
+        ready.disconnected();
         if (sink_) sink_->onDisconnected(static_cast<int>(error));
     }
     void OnPropertyChanged() override {
@@ -265,6 +273,9 @@ public:
         : handle_(handle), cb_(std::move(cb)), id_(std::move(id)) {}
 
     ~SonySession() override { disconnect(); }
+
+    void setHostFingerprint(std::string fp) { hostFingerprint_ = std::move(fp); }
+    std::string hostFingerprint() const override { return hostFingerprint_; }
 
     bool getProperties(PropertyMap& out, std::string& err) override {
         if (!handle_) { err = "not connected"; return false; }
@@ -608,20 +619,18 @@ public:
         CrInt32 count = 0;
         CrInt32u code = SDK::CrDeviceProperty_RecordingState;
         SDK::CrError e = SDK::GetSelectDeviceProperties(handle_, 1, &code, &props, &count);
-        if (e == SDK::CrError_None) {
-            if (props) SDK::ReleaseDeviceProperties(handle_, props);
-            return true;
-        }
+        const bool selectedAlive = e == SDK::CrError_None && props && count > 0;
+        if (props) SDK::ReleaseDeviceProperties(handle_, props);
+        if (selectedAlive) return true;
 
         SDK::CrDeviceProperty* all = nullptr;
         CrInt32 allCount = 0;
         SDK::CrError e2 = SDK::GetDeviceProperties(handle_, &all, &allCount);
-        if (e2 == SDK::CrError_None) {
-            if (all) SDK::ReleaseDeviceProperties(handle_, all);
-            return true;
-        }
+        const bool allAlive = e2 == SDK::CrError_None && all && allCount > 0;
+        if (all) SDK::ReleaseDeviceProperties(handle_, all);
+        if (allAlive) return true;
 
-        err = "heartbeat probe failed " + hexError(e) + " and " + hexError(e2);
+        err = "heartbeat returned no usable properties: " + hexError(e) + " and " + hexError(e2);
         return false;
     }
 
@@ -634,12 +643,17 @@ public:
     }
 
 private:
+    std::string hostFingerprint_;
     SDK::CrDeviceHandle handle_{0};
     std::unique_ptr<Callback> cb_;
     std::string id_;
 };
 
 // --- backend ----------------------------------------------------------------
+
+std::string sdkIdentity(const SDK::ICrCameraObjectInfo* info) {
+    return encodeSdkDeviceId(info->GetIdType(), info->GetId(), info->GetIdSize());
+}
 
 class SonyBackend : public Backend {
 public:
@@ -684,9 +698,11 @@ public:
             DiscoveredCamera d;
             d.model = crCharToString(info->GetModel());
             d.name = crCharToString(info->GetName());
-            d.guid = crCharToString(info->GetGuid());
+            d.deviceId = sdkIdentity(info);
+            d.transport = crCharToString(info->GetConnectionTypeName());
             d.ip = crCharToString(info->GetIPAddressChar());
             d.mac = macToString(info->GetMACAddressChar(), info->GetMACAddressCharSize());
+            if (d.mac == "00:00:00:00:00:00" || d.mac == "FF:FF:FF:FF:FF:FF") d.mac.clear();
             d.sshRequired = (info->GetSSHsupport() == SDK::CrSSHsupport_ON);
             out.push_back(std::move(d));
         }
@@ -700,7 +716,7 @@ public:
                                         std::string& err) override {
         if (!initialised_) { err = "SDK not initialised"; return nullptr; }
 
-        // Re-enumerate to obtain a live ICrCameraObjectInfo for this MAC. The
+        // Re-enumerate to obtain a live ICrCameraObjectInfo for this identity. The
         // objects handed out by a previous enumeration are released with their
         // list, so they cannot be cached across calls.
         SDK::ICrEnumCameraObjectInfo* list = nullptr;
@@ -715,21 +731,35 @@ public:
         for (CrInt32u i = 0; i < n; ++i) {
             const SDK::ICrCameraObjectInfo* info = list->GetCameraObjectInfo(i);
             if (!info) continue;
-            if (macToString(info->GetMACAddressChar(), info->GetMACAddressCharSize()) ==
-                target.mac) {
+            const bool sameDevice = !cfg.deviceId.empty()
+                ? sdkIdentity(info) == cfg.deviceId
+                : (!target.mac.empty() && macToString(info->GetMACAddressChar(),
+                    info->GetMACAddressCharSize()) == target.mac);
+            if (sameDevice) {
                 match = info;
                 break;
             }
         }
         if (!match) {
             list->Release();
-            err = "camera " + target.mac + " is no longer on the network";
+            err = "camera is no longer discoverable on its configured connection";
             return nullptr;
         }
 
         // Access authentication. The camera decides whether it wants credentials;
-        // we ask rather than assume, and the fingerprint is fetched from the body
-        // rather than pinned in config, so a firmware reset does not lock us out.
+        // we ask rather than assume.
+        //
+        // Host-key pinning. GetFingerprint() reports the key the body presents
+        // and takes no credentials; Connect() is the only call that carries the
+        // username and password. So the presented fingerprint is compared with
+        // the pin HERE, before Connect(): a device answering for this camera's
+        // identity with a different key is refused and never receives them.
+        // (This used to log a warning and proceed with the live value.) The
+        // first connection pins what was presented (trust on first use); the
+        // worker reports it so the operator can compare it with the camera's
+        // Access Authen. Info screen. The pinned value is what Connect() is
+        // given, so if the SDK itself checks the fingerprint against the live
+        // key, it checks against the pin.
         std::string fingerprint;
         if (match->GetSSHsupport() == SDK::CrSSHsupport_ON) {
             char fpBuf[128] = {0};
@@ -742,7 +772,13 @@ public:
                       " (camera wants access authentication)";
                 return nullptr;
             }
-            fingerprint.assign(fpBuf, fpSize);
+            fingerprint.assign(fpBuf, std::min<CrInt32u>(fpSize, sizeof(fpBuf)));
+            const HostKeyDecision d = decideHostKey(cfg.fingerprint, fingerprint);
+            if (d == HostKeyDecision::Mismatch || d == HostKeyDecision::Unavailable) {
+                list->Release();
+                err = identityChangedError(cfg.fingerprint, fingerprint);
+                return nullptr;
+            }
             if (cfg.username.empty() || cfg.password.empty()) {
                 list->Release();
                 err = "camera requires access authentication but config has no "
@@ -750,13 +786,13 @@ public:
                       " — read them from the camera's [Access Authen. Info]";
                 return nullptr;
             }
-            // Warn rather than refuse on a fingerprint mismatch: the config value is
-            // an operator convenience, and the SDK verifies against the live value.
-            if (!cfg.fingerprint.empty() && cfg.fingerprint != fingerprint) {
-                LOG_WARN(cfg.id.c_str(),
-                         "fingerprint differs from config — the camera may have been "
-                         "reinitialised. Proceeding with the live value.");
-            }
+        } else if (!cfg.fingerprint.empty()) {
+            // A pinned body that now claims not to need authentication is not
+            // the body that was paired (or its settings were changed). Refuse
+            // rather than silently downgrade; re-pairing is a deliberate act.
+            list->Release();
+            err = identityChangedError(cfg.fingerprint, "");
+            return nullptr;
         }
 
         auto cb = std::make_unique<Callback>(sink, cfg.id);
@@ -784,9 +820,17 @@ public:
             return nullptr;
         }
 
+        if (!cb->ready.wait(std::chrono::seconds(10))) {
+            SDK::Disconnect(handle);
+            SDK::ReleaseDevice(handle);
+            err = "Sony did not confirm the camera connection. Check PC Remote mode, camera access credentials, and other camera apps.";
+            return nullptr;
+        }
         LOG_INFO(cfg.id.c_str(), "connected: %s %s at %s", target.model.c_str(),
                  target.mac.c_str(), target.ip.c_str());
-        return std::make_unique<SonySession>(handle, std::move(cb), cfg.id);
+        auto session = std::make_unique<SonySession>(handle, std::move(cb), cfg.id);
+        session->setHostFingerprint(fingerprint);
+        return session;
     }
 
     std::string versionString() override {

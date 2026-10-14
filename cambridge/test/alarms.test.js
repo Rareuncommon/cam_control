@@ -13,12 +13,17 @@ import {
 } from '../src/alarms.js';
 import { StateModel } from '../src/state.js';
 
+// `...over` comes first so its top-level fields (id, label, state) apply while
+// the nested status below still merges defaults with the override. It used to
+// come last and replace the merged status wholesale with the sparse override
+// (audit 2026-09-23 fixture observation).
 function camera(over = {}) {
   return {
-    id: 'cam1',
-    label: 'Wide',
-    state: 'connected',
-    detail: null,
+    ...over,
+    id: over.id ?? 'cam1',
+    label: over.label ?? 'Wide',
+    state: over.state ?? 'connected',
+    detail: over.detail ?? null,
     status: {
       battery: 90,
       media: '',
@@ -31,7 +36,6 @@ function camera(over = {}) {
       recordDropped: false,
       ...(over.status ?? {}),
     },
-    ...over,
   };
 }
 

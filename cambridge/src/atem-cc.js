@@ -65,14 +65,37 @@ export const WRAPPER = {
  *
  * @param {Buffer} body the block payload, after the 8-byte command header
  */
+const TYPE_SIZE = {
+  [TYPE.VOID]: 0, [TYPE.INT8]: 1, [TYPE.INT16]: 2, [TYPE.INT32]: 4, [TYPE.INT64]: 8, [TYPE.FIXED16]: 2,
+};
+
 export function decodeCCdP(body) {
   if (!body || body.length < WRAPPER.values) {
     return { ok: false, error: 'CCdP block too short', raw: hex(body) };
   }
 
   const dataType = body.readUInt8(WRAPPER.dataType);
-  const count = Math.max(0, body.readUInt8(WRAPPER.elementCount));
-  const values = readValues(body.subarray(WRAPPER.values), dataType, count);
+  const count = body.readUInt8(WRAPPER.elementCount);
+  const payload = body.subarray(WRAPPER.values);
+  const size = TYPE_SIZE[dataType];
+  // Refuse rather than salvage (audit CS4). A block whose advertised element
+  // count the payload cannot hold used to decode "whatever fits", and a
+  // mapping then substituted 0 for the missing value: an endpoint write
+  // (minimum focus, closed iris) from a malformed or unsupported packet.
+  // Trailing bytes beyond the values are tolerated as padding.
+  if (dataType === TYPE.STRING) {
+    return { ok: false, error: 'string values are not used by any mapped control', raw: hex(body) };
+  }
+  if (size === undefined) {
+    return { ok: false, error: `unsupported data type ${dataType}`, raw: hex(body) };
+  }
+  if (count * size > payload.length) {
+    return { ok: false, error: `block advertises ${count} value(s) but carries ${payload.length} byte(s)`, raw: hex(body) };
+  }
+  const values = readValues(payload, dataType, count);
+  if (!values.every(Number.isFinite)) {
+    return { ok: false, error: 'non-finite value', raw: hex(body) };
+  }
 
   return {
     ok: true,
@@ -92,9 +115,7 @@ export function decodeCCdP(body) {
 function readValues(buf, dataType, count) {
   const out = [];
   const take = (size, read) => {
-    for (let i = 0; i < count && (i + 1) * size <= buf.length; i++) {
-      out.push(read(i * size));
-    }
+    for (let i = 0; i < count; i++) out.push(read(i * size));
   };
   switch (dataType) {
     case TYPE.VOID: break;
@@ -103,11 +124,26 @@ function readValues(buf, dataType, count) {
     case TYPE.INT32: take(4, (o) => buf.readInt32BE(o)); break;
     case TYPE.INT64: take(8, (o) => Number(buf.readBigInt64BE(o))); break;
     case TYPE.FIXED16: take(2, (o) => buf.readInt16BE(o) / FIXED16_SCALE); break;
-    case TYPE.STRING: out.push(buf.toString('utf8').replace(/\0+$/, '')); break;
     default: break;
   }
   return out;
 }
+
+/**
+ * The data type and value count each mapped control must arrive with, from
+ * the published protocol table. A block that does not match is skipped with
+ * the reason instead of being coerced into a write.
+ */
+export const EXPECTED = {
+  '0.0': { type: TYPE.FIXED16, count: 1 },   // focus, normalised
+  '0.1': { type: TYPE.VOID, count: 0 },      // instantaneous autofocus
+  '0.3': { type: TYPE.FIXED16, count: 1 },   // aperture, normalised
+  '0.8': { type: TYPE.FIXED16, count: 1 },   // zoom, normalised
+  '1.2': { type: TYPE.INT16, count: 2 },     // manual white balance: kelvin, tint
+  '1.5': { type: TYPE.INT32, count: 1 },     // exposure, microseconds
+  '1.13': { type: TYPE.INT8, count: 1 },     // gain, dB
+  '1.14': { type: TYPE.INT32, count: 1 },    // ISO
+};
 
 function hex(buf) {
   if (!buf?.length) return '';
@@ -183,6 +219,11 @@ export function toCameraWrites(decoded, camera) {
 
   const v = decoded.values;
   const key = `${decoded.category}.${decoded.parameter}`;
+  const expected = EXPECTED[key];
+  if (expected && (decoded.dataType !== expected.type || v.length < expected.count)) {
+    skip(`expected ${expected.count} value(s) of type ${expected.type}, got ${v.length} of type ${decoded.dataType}`);
+    return { writes, skipped };
+  }
 
   switch (key) {
     // --- lens ---
@@ -195,7 +236,7 @@ export function toCameraWrites(decoded, camera) {
       if (!prop?.writable) { skip('this lens does not report a focus position'); break; }
       const range = prop.range;
       if (!range) { skip('focus has no reported range'); break; }
-      const n = Math.min(1, Math.max(0, v[0] ?? 0));
+      const n = Math.min(1, Math.max(0, v[0]));
       writes.push({ prop: 'focusPosition', value: Math.round(range.min + n * (range.max - range.min)) });
       break;
     }
@@ -203,7 +244,7 @@ export function toCameraWrites(decoded, camera) {
     case '0.3': {
       const prop = props.fNumber;
       if (!prop?.writable) { skip('iris is not writable — it is probably on Auto'); break; }
-      const value = normalisedApertureToFNumber(v[0] ?? 0, prop);
+      const value = normalisedApertureToFNumber(v[0], prop);
       if (value === null) skip('this body reported no aperture list');
       else writes.push({ prop: 'fNumber', value });
       break;
@@ -212,7 +253,7 @@ export function toCameraWrites(decoded, camera) {
     case '0.8': {
       const prop = props.zoomPosition;
       if (!prop?.range) { skip('this lens does not report a zoom position'); break; }
-      const n = Math.min(1, Math.max(0, v[0] ?? 0));
+      const n = Math.min(1, Math.max(0, v[0]));
       writes.push({
         prop: 'zoomPosition',
         value: Math.round(prop.range.min + n * (prop.range.max - prop.range.min)),
@@ -305,29 +346,59 @@ export class WriteCoalescer {
    * @param {(cameraId: string, prop: string, value: number) => Promise<any>} flushFn
    * @param {number} intervalMs
    */
-  constructor(flushFn, intervalMs = 120) {
+  constructor(flushFn, intervalMs = 120, log = () => {}) {
     this.flushFn = flushFn;
     this.intervalMs = intervalMs;
+    this.log = log;
     /** @type {Map<string, {cameraId: string, prop: string, value: number}>} */
     this.pending = new Map();
     this.timer = null;
+    this.flushing = false;
+    // Bumped by stop(); a drain started under an older generation stops
+    // between writes instead of finishing a batch nobody wants any more.
+    this.generation = 0;
   }
 
   submit(cameraId, prop, value) {
-    this.pending.set(`${cameraId}|${prop}`, { cameraId, prop, value });
-    if (!this.timer) this.timer = setTimeout(() => this.flush(), this.intervalMs);
+    // Re-inserting moves the key to the end, so a property changed again
+    // while its older value waits is written after everything queued before.
+    const key = `${cameraId}|${prop}`;
+    this.pending.delete(key);
+    this.pending.set(key, { cameraId, prop, value });
+    this.#schedule();
   }
 
+  #schedule() {
+    if (!this.timer && !this.flushing) this.timer = setTimeout(() => this.flush(), this.intervalMs);
+  }
+
+  /**
+   * Drains are serialized (audit follow-up): a slow camera write used to let
+   * the next timer start a second drain alongside the first, so two values
+   * for one property could land out of order. Values submitted during a drain
+   * wait for the next one, which is scheduled when this one finishes.
+   */
   async flush() {
     this.timer = null;
-    const batch = [...this.pending.values()];
-    this.pending.clear();
-    for (const { cameraId, prop, value } of batch) {
-      await this.flushFn(cameraId, prop, value);
+    if (this.flushing) return;
+    this.flushing = true;
+    const generation = this.generation;
+    try {
+      const batch = [...this.pending.values()];
+      this.pending.clear();
+      for (const { cameraId, prop, value } of batch) {
+        if (generation !== this.generation) return;
+        try { await this.flushFn(cameraId, prop, value); }
+        catch (err) { this.log('warn', `ATEM Link write failed: ${err.message}`); }
+      }
+    } finally {
+      this.flushing = false;
+      if (this.pending.size && generation === this.generation) this.#schedule();
     }
   }
 
   stop() {
+    this.generation++;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.pending.clear();

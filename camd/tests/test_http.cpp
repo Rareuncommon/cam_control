@@ -76,6 +76,8 @@ TEST(http_server_binds_and_reports_port) {
     Server s;
     s.route("GET", "/health", [](const Request&, Response& res) { res.text(200, "ok"); });
     // Port 0 lets the OS choose, so tests never collide with a running daemon.
+    // A token is mandatory since the DC-1 remediation; start() fails closed.
+    s.requireToken("0123456789abcdef0123456789abcdef");
     CHECK(s.start("127.0.0.1", 0));
     CHECK(s.port() > 0);
     CHECK(s.running());

@@ -19,7 +19,7 @@ CONFIG="${CONFIG:-./config/cambridge.json}"
 CAMD_ARGS=()
 for arg in "$@"; do
   case "${arg}" in
-    --fake|--verbose) CAMD_ARGS+=("${arg}") ;;
+    --fake|--fake-portfolio|--verbose) CAMD_ARGS+=("${arg}") ;;
     --config=*)       CONFIG="${arg#--config=}" ;;
     *) echo "start.sh: unknown option '${arg}'" >&2; exit 2 ;;
   esac
@@ -81,6 +81,15 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# camd requires a per-launch access token on every request (audit DC-1). One
+# fresh secret per launch, exported so camd and the Node service share it; it is
+# never written to the config file.
+export CAMD_AUTH_TOKEN="$(LC_ALL=C od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+camd_health() {
+  curl -fsS -H @<(printf 'Authorization: Bearer %s\n' "${CAMD_AUTH_TOKEN}") \
+    "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1
+}
+
 if [[ "${NEED_CAMD}" == yes ]]; then
   echo "Starting camd${CAMD_ARGS[*]+ ${CAMD_ARGS[*]}}…"
   ./camd/build/camd --config "${CONFIG}" ${CAMD_ARGS[@]+"${CAMD_ARGS[@]}"} &
@@ -89,7 +98,7 @@ if [[ "${NEED_CAMD}" == yes ]]; then
   # Wait for camd to answer before starting the UI, so the browser never opens
   # onto a "camd unreachable" banner that is really just a startup race.
   for _ in $(seq 1 50); do
-    if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
+    if camd_health; then
       break
     fi
     if ! kill -0 "${CAMD_PID}" 2>/dev/null; then
@@ -99,7 +108,7 @@ if [[ "${NEED_CAMD}" == yes ]]; then
     sleep 0.2
   done
 
-  if ! curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
+  if ! camd_health; then
     echo "camd did not become healthy within 10s." >&2
     exit 1
   fi

@@ -122,3 +122,21 @@ TEST(config_find_by_id) {
     CHECK(c.findById("cam1") != nullptr);
     CHECK(c.findById("nope") == nullptr);
 }
+
+#include "camd/device_identity.h"
+TEST(sdk_identity_preserves_type_and_embedded_null_bytes) {
+    const unsigned char id[] = {0x01, 0x00, 0xff};
+    CHECK_EQ(encodeSdkDeviceId(2, id, 3), std::string("sony-sdk:2:0100ff"));
+    CHECK(encodeSdkDeviceId(1, id, 3) != encodeSdkDeviceId(2, id, 3));
+    CHECK(encodeSdkDeviceId(1, nullptr, 3).empty());
+    CHECK(encodeSdkDeviceId(1, id, 0).empty());
+    CHECK(encodeSdkDeviceId(1, id, 4097).empty());
+}
+TEST(config_keeps_a_usb_identity_without_a_mac_or_ip) {
+    Config c;
+    std::vector<std::string> errs;
+    CHECK(Config::loadString(R"({"cameras":[{"id":"usb","model":"ILCE-7M4","deviceId":"sony-sdk:2:0100ff"}]})", c, errs));
+    CHECK_EQ(c.cameras[0].deviceId, std::string("sony-sdk:2:0100ff"));
+    CHECK(c.cameras[0].mac.empty());
+    CHECK(c.cameras[0].ip.empty());
+}

@@ -308,6 +308,25 @@ export class UndoHistory {
 
 // --- presets and scenes -----------------------------------------------------
 
+/**
+ * Applies `mutate` to one section of the store and persists it, all or
+ * nothing (audit DC-9). JsonStore.save() reports a failed write (disk full,
+ * permissions, read-only volume) by returning false; that result used to be
+ * ignored, so the UI said "saved" and the change vanished at the next restart.
+ * On failure the section is restored to its last durable state.
+ */
+function persist(store, section, mutate) {
+  const before = structuredClone(store.data[section]);
+  mutate(store.data[section]);
+  if (store.save() === false) {
+    store.data[section] = before;
+    return false;
+  }
+  return true;
+}
+
+const NOT_SAVED = 'could not be saved to disk (check free space and permissions); nothing was changed';
+
 export class Presets {
   /**
    * @param {import('./store.js').JsonStore} store
@@ -331,9 +350,10 @@ export class Presets {
     if (Object.keys(values).length === 0) {
       return { ok: false, error: `${cameraId} reported no usable properties` };
     }
-    this.store.data.presets[cameraId] ??= {};
-    this.store.data.presets[cameraId][name] = values;
-    this.store.save();
+    if (!persist(this.store, 'presets', (p) => { p[cameraId] ??= {}; p[cameraId][name] = values; })) {
+      this.log.error('presets', `preset "${name}" for ${cameraId} ${NOT_SAVED}`);
+      return { ok: false, error: `Preset "${name}" ${NOT_SAVED}` };
+    }
     this.log.info('presets', `saved preset "${name}" for ${cameraId}: ${describe(values)}`);
     return { ok: true, name, cameraId, values };
   }
@@ -346,8 +366,9 @@ export class Presets {
     if (!this.store.data.presets[cameraId]?.[name]) {
       return { ok: false, error: 'no such preset' };
     }
-    delete this.store.data.presets[cameraId][name];
-    this.store.save();
+    if (!persist(this.store, 'presets', (p) => { delete p[cameraId][name]; })) {
+      return { ok: false, error: `Deleting preset "${name}" ${NOT_SAVED}` };
+    }
     this.log.info('presets', `deleted preset "${name}" for ${cameraId}`);
     return { ok: true };
   }
@@ -380,8 +401,10 @@ export class Presets {
     if (Object.keys(scene).length === 0) {
       return { ok: false, error: 'no connected cameras to capture' };
     }
-    this.store.data.scenes[name] = scene;
-    this.store.save();
+    if (!persist(this.store, 'scenes', (sc) => { sc[name] = scene; })) {
+      this.log.error('scenes', `scene "${name}" ${NOT_SAVED}`);
+      return { ok: false, error: `Scene "${name}" ${NOT_SAVED}` };
+    }
     this.log.info('scenes',
       `saved scene "${name}" covering ${Object.keys(scene).join(', ')}` +
       (skipped.length ? ` (skipped offline: ${skipped.join(', ')})` : ''));
@@ -394,8 +417,9 @@ export class Presets {
 
   deleteScene(name) {
     if (!this.store.data.scenes[name]) return { ok: false, error: 'no such scene' };
-    delete this.store.data.scenes[name];
-    this.store.save();
+    if (!persist(this.store, 'scenes', (sc) => { delete sc[name]; })) {
+      return { ok: false, error: `Deleting scene "${name}" ${NOT_SAVED}` };
+    }
     this.log.info('scenes', `deleted scene "${name}"`);
     return { ok: true };
   }
@@ -446,24 +470,27 @@ export class Gangs {
   list() { return this.store.data.gangs; }
 
   define(name, members) {
-    this.store.data.gangs[name] = { members, enabled: true };
-    this.store.save();
+    if (!persist(this.store, 'gangs', (g) => { g[name] = { members, enabled: true }; })) {
+      return { ok: false, error: `Link "${name}" ${NOT_SAVED}` };
+    }
     this.log.info('gang', `defined "${name}" with ${Object.keys(members).join(', ')}`);
     return { ok: true, name, members };
   }
 
   remove(name) {
     if (!this.store.data.gangs[name]) return { ok: false, error: 'no such gang' };
-    delete this.store.data.gangs[name];
-    this.store.save();
+    if (!persist(this.store, 'gangs', (g) => { delete g[name]; })) {
+      return { ok: false, error: `Removing link "${name}" ${NOT_SAVED}` };
+    }
     return { ok: true };
   }
 
   setEnabled(name, enabled) {
+    if (!this.store.data.gangs[name]) return { ok: false, error: 'no such gang' };
+    if (!persist(this.store, 'gangs', (all) => { all[name].enabled = !!enabled; })) {
+      return { ok: false, error: `Link "${name}" ${NOT_SAVED}` };
+    }
     const g = this.store.data.gangs[name];
-    if (!g) return { ok: false, error: 'no such gang' };
-    g.enabled = !!enabled;
-    this.store.save();
     this.log.info('gang', `"${name}" ${enabled ? 'enabled' : 'disabled'}`);
     return { ok: true, name, enabled: g.enabled };
   }

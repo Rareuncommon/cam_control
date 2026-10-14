@@ -52,6 +52,7 @@ add_library(camd_core STATIC
   src/registry.cpp
   src/api.cpp
   src/fake_backend.cpp
+  src/host_key.cpp
 )
 target_include_directories(camd_core PUBLIC include)
 target_compile_options(camd_core PRIVATE -Wall -Wextra)
@@ -101,6 +102,11 @@ if(CAMD_BUILD_TESTS)
     tests/test_ws.cpp
     tests/test_config.cpp
     tests/test_worker.cpp
+    tests/test_dc1_auth.cpp
+    tests/test_dc2_jobs.cpp
+    tests/test_dc11_ws.cpp
+    tests/test_cs9_parsing.cpp
+    tests/test_host_key.cpp
   )
   target_link_libraries(camd_tests PRIVATE camd_core)
   target_compile_options(camd_tests PRIVATE -Wall -Wextra)

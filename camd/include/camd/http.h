@@ -10,9 +10,12 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
@@ -71,6 +74,9 @@ public:
     long read(char* buf, std::size_t len);
 
     void setReadTimeout(int ms);
+    // Bounds each send(): a peer that stops reading makes writeAll fail after
+    // this long instead of blocking the writing thread forever.
+    void setWriteTimeout(int ms);
     void shutdownWrite();
     void close();
 
@@ -95,6 +101,14 @@ public:
     // Registers the single WebSocket endpoint.
     void webSocket(std::string path, WebSocketHandler h);
 
+    // Per-launch bearer secret required on EVERY request, WebSocket upgrade
+    // included, before any routing happens. start() refuses to run without
+    // one (fail closed). Requests are also refused when they carry an Origin
+    // header (camd has no browser clients; a page that reaches the port is
+    // exactly what this blocks) or a Host that is not a loopback name (DNS
+    // rebinding).
+    void requireToken(std::string token) { token_ = std::move(token); }
+
     // Binds and starts accepting on a background thread. Returns false if the
     // socket cannot be bound — the caller should treat that as fatal at startup.
     bool start(const std::string& bindAddr, int port);
@@ -117,14 +131,34 @@ private:
     const Route* match(const std::string& method, const std::string& path,
                        std::map<std::string, std::string>& params) const;
 
-    int listenFd_{-1};
+    // Read by the accept thread while stop() runs on another, hence atomic.
+    std::atomic<int> listenFd_{-1};
     int boundPort_{0};
     std::atomic<bool> running_{false};
     std::thread acceptThread_;
     std::vector<Route> routes_;
     std::string wsPath_;
     WebSocketHandler wsHandler_;
+    std::string token_;
+
+    // Connection threads are detached but reference this Server (routes,
+    // handlers). stop() wakes every open socket and waits for them to finish,
+    // so none can outlive the object.
+    std::mutex connMu_;
+    std::condition_variable connCv_;
+    // id -> dup() of the connection's socket. The dup is ours to close, so it
+    // can never be recycled underneath stop(); shutdown() on it reaches the
+    // same socket the connection thread is using.
+    std::map<std::uint64_t, int> openConns_;
+    std::uint64_t nextConnId_{0};
 };
+
+// Exposed for unit testing. Returns 0 when the request may proceed, otherwise
+// the HTTP status to refuse it with (401 missing/wrong token, 403 Origin or
+// non-loopback Host). `why` names the reason for the log.
+int checkAccess(const Request& req, const std::string& token, std::string& why);
+bool isLoopbackHost(const std::string& hostHeader);
+bool isLoopbackBind(const std::string& bindAddr);
 
 // Exposed for unit testing.
 std::string urlDecode(std::string_view in);

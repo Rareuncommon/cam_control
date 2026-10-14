@@ -6,6 +6,7 @@
 // record and a silent exit is the hardest failure to diagnose.
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -37,8 +38,12 @@ void usage() {
         "  --fake            run with the in-memory backend instead of the Sony SDK.\n"
         "                    Serves three simulated bodies so the UI and the Node\n"
         "                    layer can be exercised without the studio rig.\n"
+        "  --fake-portfolio  simulate mixed Sony families and two same-model USB bodies\n"
         "  --port <n>        override camd.restPort\n"
         "  --verbose         force debug logging regardless of config\n"
+        "\n"
+        "Every request must carry Authorization: Bearer <token>, where the token\n"
+        "comes from CAMD_AUTH_TOKEN or camd.authToken (at least 32 characters).\n"
         "  --help            this text\n";
 }
 
@@ -47,6 +52,7 @@ void usage() {
 int main(int argc, char** argv) {
     std::string configPath = "./config/cambridge.json";
     bool fake = false;
+    bool fakePortfolio = false;
     bool verbose = false;
     int portOverride = 0;
 
@@ -54,6 +60,7 @@ int main(int argc, char** argv) {
         const std::string arg = argv[i];
         if (arg == "--config" && i + 1 < argc) { configPath = argv[++i]; }
         else if (arg == "--fake") { fake = true; }
+        else if (arg == "--fake-portfolio") { fake = true; fakePortfolio = true; }
         else if (arg == "--verbose") { verbose = true; }
         else if (arg == "--port" && i + 1 < argc) { portOverride = std::atoi(argv[++i]); }
         else if (arg == "--help" || arg == "-h") { usage(); return 0; }
@@ -89,6 +96,26 @@ int main(int argc, char** argv) {
 
     if (portOverride > 0) cfg.restPort = portOverride;
 
+    // Access control (audit DC-1). The launcher generates a fresh secret per
+    // launch and hands the same value to the Node service. No token, no daemon:
+    // a loopback port is reachable by every process on the machine.
+    if (const char* envToken = std::getenv("CAMD_AUTH_TOKEN"); envToken && *envToken) {
+        cfg.authToken = envToken;
+    }
+    if (cfg.authToken.size() < 32) {
+        std::cerr << "camd: no usable access token. Set CAMD_AUTH_TOKEN (or camd.authToken in "
+                     "the config) to a random secret of at least 32 characters; the Node "
+                     "service must use the same value. scripts/start.sh does this for you.\n";
+        LOG_ERROR("camd", "refusing to start without an access token of at least 32 characters");
+        return 2;
+    }
+    if (!camd::http::isLoopbackBind(cfg.bind)) {
+        std::cerr << "camd: camd.bind must be a loopback address (127.x.x.x), not '" << cfg.bind
+                  << "'. The Node service is the network-facing boundary.\n";
+        LOG_ERROR("camd", "refusing non-loopback bind %s", cfg.bind.c_str());
+        return 2;
+    }
+
     LOG_INFO("camd", "starting: %zu camera(s), REST on %s:%d, WS at %s",
              cfg.cameras.size(), cfg.bind.c_str(), cfg.restPort, cfg.wsPath.c_str());
     if (cfg.cameras.empty()) {
@@ -121,6 +148,23 @@ int main(int argc, char** argv) {
             if (!cfg.cameras[i].model.empty()) present[i].model = cfg.cameras[i].model;
             if (!cfg.cameras[i].ip.empty()) present[i].ip = cfg.cameras[i].ip;
         }
+        if (fakePortfolio) {
+            present.clear();
+            const char* mixed[] = {"ILME-FX3", "ILME-FX6", "ILCE-7M4", "ILCE-7M4", "ILME-FR7", "ILX-LR1"};
+            for (int i = 0; i < 6; ++i) {
+                camd::DiscoveredCamera d;
+                d.model = mixed[i]; d.name = mixed[i];
+                const bool usb = i == 2 || i == 3 || i == 5;
+                d.transport = usb ? "USB" : "Network";
+                d.deviceId = "sony-sdk:1:0" + std::to_string(i + 1);
+                if (!usb) {
+                    d.mac = "AA:BB:CC:00:00:0" + std::to_string(i + 1);
+                    d.ip = "127.0.0." + std::to_string(51 + i);
+                    d.sshRequired = true;
+                }
+                present.push_back(d);
+            }
+        }
         backend = camd::makeFakeBackend(std::move(present));
     } else {
         backend = camd::makeSonyBackend();
@@ -138,6 +182,7 @@ int main(int argc, char** argv) {
     }
 
     camd::http::Server server;
+    server.requireToken(cfg.authToken);
     camd::Api api(registry, hub, fake);
     api.install(server, cfg.wsPath);
 

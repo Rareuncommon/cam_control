@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "camd/host_key.h"
 #include "camd/json.h"
 #include "camd/log.h"
 
@@ -44,6 +45,7 @@ const char* connStateName(ConnState s) {
         case ConnState::Connected:    return "connected";
         case ConnState::Reconnecting: return "reconnecting";
         case ConnState::Unauthorized: return "unauthorized";
+        case ConnState::IdentityChanged: return "identityChanged";
     }
     return "unknown";
 }
@@ -102,7 +104,11 @@ CameraWorker::CameraWorker(CameraConfig cfg, Backend* backend,
     snap_.configuredModel = cfg_.model;
     snap_.ip = cfg_.ip;
     snap_.mac = cfg_.mac;
+    snap_.deviceId = cfg_.deviceId;
     snap_.state = ConnState::Offline;
+    pinned_ = cfg_.fingerprint;
+    snap_.fingerprint = pinned_;
+    snap_.hostKey = pinned_.empty() ? "unknown" : "pinned";
 }
 
 CameraWorker::~CameraWorker() { stop(); }
@@ -124,6 +130,7 @@ void CameraWorker::stop() {
         leftover.swap(jobs_);
     }
     for (auto& j : leftover) {
+        if (j.phase) j.phase->store(kCancelled);
         if (j.done) j.done->set_value();
     }
 }
@@ -133,21 +140,65 @@ CameraWorker::Snapshot CameraWorker::snapshot() const {
     return snap_;
 }
 
+const char* runOutcomeName(RunOutcome o) {
+    switch (o) {
+        case RunOutcome::Completed:       return "completed";
+        case RunOutcome::NotExecuted:     return "notExecuted";
+        case RunOutcome::InFlightUnknown: return "unknown";
+    }
+    return "unknown";
+}
+
 bool CameraWorker::run(std::function<void(CameraSession*)> fn, int timeoutMs) {
+    return runJob(std::move(fn), timeoutMs, JobKind::Generic) == RunOutcome::Completed;
+}
+
+RunOutcome CameraWorker::runJob(std::function<void(CameraSession*)> fn, int timeoutMs,
+                                JobKind kind) {
     if (!running_) {
         // Answer immediately rather than making the caller wait for a timeout on a
         // worker that will never service the job.
         fn(nullptr);
-        return true;
+        return RunOutcome::Completed;
     }
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
+    auto phase = std::make_shared<std::atomic<int>>(kPending);
+    Job job{std::move(fn), done, phase,
+            clock_t_::now() + std::chrono::milliseconds(std::max(0, timeoutMs)), kind};
+    std::vector<std::shared_ptr<std::promise<void>>> withdrawn;
     {
         std::lock_guard<std::mutex> lock(jobMu_);
-        jobs_.push_back(Job{std::move(fn), done});
+        if (kind == JobKind::RecordStop) {
+            // A queued Start would run after this Stop and leave the camera
+            // rolling. Withdraw it: its caller is told it never executed.
+            for (auto it = jobs_.begin(); it != jobs_.end();) {
+                int expected = kPending;
+                if (it->kind == JobKind::RecordStart &&
+                    it->phase->compare_exchange_strong(expected, kCancelled)) {
+                    withdrawn.push_back(it->done);
+                    it = jobs_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            jobs_.push_front(std::move(job));
+        } else {
+            jobs_.push_back(std::move(job));
+        }
     }
+    for (auto& w : withdrawn) w->set_value();
     jobCv_.notify_all();
-    return future.wait_for(std::chrono::milliseconds(timeoutMs)) == std::future_status::ready;
+
+    if (future.wait_for(std::chrono::milliseconds(timeoutMs)) == std::future_status::ready) {
+        return phase->load() == kDone ? RunOutcome::Completed : RunOutcome::NotExecuted;
+    }
+    // Withdraw it if the worker has not picked it up. If it has, the camera may
+    // be acting on it right now and the result is genuinely unknown.
+    int expected = kPending;
+    if (phase->compare_exchange_strong(expected, kCancelled)) return RunOutcome::NotExecuted;
+    if (expected == kDone) return RunOutcome::Completed;
+    return RunOutcome::InFlightUnknown;
 }
 
 void CameraWorker::offerDiscovery(const DiscoveredCamera& d) {
@@ -169,6 +220,8 @@ void CameraWorker::offerDiscovery(const DiscoveredCamera& d) {
         snap_.reportedModel = d.model;
         if (!d.ip.empty()) snap_.ip = d.ip;
         if (!d.mac.empty()) snap_.mac = d.mac;
+        snap_.deviceId = d.deviceId;
+        snap_.transport = d.transport;
     }
     jobCv_.notify_all();
 }
@@ -179,6 +232,40 @@ void CameraWorker::offerMissing() {
     // haveTarget_ is deliberately left set: the last known address stays as a
     // reconnect candidate, so a body that is briefly invisible to discovery is
     // still retried rather than being forgotten.
+}
+
+void CameraWorker::setLabel(const std::string& label) {
+    {
+        std::lock_guard<std::mutex> lock(stateMu_);
+        snap_.label = label;
+    }
+    // Republish so event consumers see the new label without a reconnect.
+    publishConnectionState();
+}
+
+bool CameraWorker::repin(const std::string& fingerprint, std::string& err) {
+    {
+        std::lock_guard<std::mutex> lock(pinMu_);
+        if (snapshot().state != ConnState::IdentityChanged) {
+            err = "nothing to re-pair: the camera's identity has not changed";
+            return false;
+        }
+        if (fingerprint != observed_) {
+            err = "fingerprint does not match the one the camera presented";
+            return false;
+        }
+        pinned_ = observed_;
+        observed_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMu_);
+        snap_.fingerprint = fingerprint;
+        snap_.observedFingerprint.clear();
+        snap_.hostKey = "pinned";
+    }
+    LOG_WARN(cfg_.id.c_str(), "re-paired: host key %s pinned by operator", fingerprint.c_str());
+    requestReconnect();
+    return true;
 }
 
 void CameraWorker::requestReconnect() {
@@ -211,11 +298,17 @@ void CameraWorker::publishConnectionState() {
     ev.set("event", json::Value("connectionState"));
     ev.set("cameraId", json::Value(s.id));
     ev.set("state", json::Value(connStateName(s.state)));
+    ev.set("label", json::Value(s.label));
     ev.set("model", json::Value(s.reportedModel.empty() ? s.configuredModel : s.reportedModel));
     ev.set("ip", json::Value(s.ip));
     ev.set("mac", json::Value(s.mac));
+    ev.set("deviceId", json::Value(s.deviceId));
+    ev.set("transport", json::Value(s.transport));
     ev.set("reconnectAttempts", json::Value(static_cast<std::int64_t>(s.reconnectAttempts)));
     if (!s.lastError.empty()) ev.set("detail", json::Value(s.lastError));
+    ev.set("hostKey", json::Value(s.hostKey));
+    if (!s.fingerprint.empty()) ev.set("fingerprint", json::Value(s.fingerprint));
+    if (!s.observedFingerprint.empty()) ev.set("observedFingerprint", json::Value(s.observedFingerprint));
     publisher_->publish(ev.dump());
 }
 
@@ -288,6 +381,22 @@ void CameraWorker::drainJobs(CameraSession* session) {
             job = std::move(jobs_.front());
             jobs_.pop_front();
         }
+        // Claim the job. It fails when the caller already withdrew it; a job
+        // whose deadline passed while it queued is withdrawn here too, so the
+        // caller's timeout and the worker agree even if the caller has not woken.
+        int expected = kPending;
+        const bool expired = clock_t_::now() > job.deadline;
+        if (expired) {
+            if (job.phase->compare_exchange_strong(expected, kCancelled)) {
+                LOG_WARN(cfg_.id.c_str(), "dropped a command that expired while queued");
+            }
+            if (job.done) job.done->set_value();
+            continue;
+        }
+        if (!job.phase->compare_exchange_strong(expected, kRunning)) {
+            if (job.done) job.done->set_value();
+            continue;
+        }
         try {
             job.fn(session);
         } catch (const std::exception& e) {
@@ -295,6 +404,7 @@ void CameraWorker::drainJobs(CameraSession* session) {
         } catch (...) {
             LOG_ERROR(cfg_.id.c_str(), "job threw a non-exception");
         }
+        job.phase->store(kDone);
         if (job.done) job.done->set_value();
     }
 }
@@ -326,8 +436,31 @@ void CameraWorker::stepConnecting() {
     LOG_INFO(cfg_.id.c_str(), "connecting to %s (%s) at %s", target.model.c_str(),
              target.mac.c_str(), target.ip.c_str());
 
-    auto session = backend_->open(target, cfg_, sink_.get(), err);
+    CameraConfig connectCfg = cfg_;
+    {
+        std::lock_guard<std::mutex> lock(pinMu_);
+        connectCfg.fingerprint = pinned_;
+    }
+    auto session = backend_->open(target, connectCfg, sink_.get(), err);
     if (!session) {
+        std::string observed;
+        if (parseIdentityChanged(err, observed)) {
+            // Not retried: the same device would be asked again and again, and
+            // an impostor gains nothing but the operator must decide. Leaves
+            // only through repin().
+            {
+                std::lock_guard<std::mutex> lock(pinMu_);
+                observed_ = observed;
+            }
+            {
+                std::lock_guard<std::mutex> lock(stateMu_);
+                snap_.observedFingerprint = observed;
+                snap_.hostKey = "mismatch";
+            }
+            LOG_ERROR(cfg_.id.c_str(), "%s", err.c_str());
+            setState(ConnState::IdentityChanged, err);
+            return;
+        }
         ++reconnectAttempts_;
         // Distinguish credential rejection: retrying forever on a wrong password
         // just fills the log, and the UI should say something actionable.
@@ -342,6 +475,26 @@ void CameraWorker::stepConnecting() {
         return;
     }
 
+    // Pin on first use; report what was pinned so the Node layer persists it
+    // and tells the operator.
+    const std::string presented = session->hostFingerprint();
+    std::string hostKeyState;
+    {
+        std::lock_guard<std::mutex> lock(pinMu_);
+        if (presented.empty()) hostKeyState = pinned_.empty() ? "notRequired" : "pinned";
+        else if (pinned_.empty()) { pinned_ = presented; hostKeyState = "pinnedFirstUse"; }
+        else hostKeyState = "pinned";
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMu_);
+        if (!presented.empty()) snap_.fingerprint = presented;
+        snap_.hostKey = hostKeyState;
+        snap_.observedFingerprint.clear();
+    }
+    if (hostKeyState == "pinnedFirstUse") {
+        LOG_WARN(cfg_.id.c_str(), "first connection: pinned SSH host key %s. Check it against the "
+                 "camera's Access Authen. Info screen.", presented.c_str());
+    }
     session_ = std::move(session);
     sdkDisconnected_ = false;
     propertyDirty_ = false;
@@ -353,6 +506,8 @@ void CameraWorker::stepConnecting() {
         snap_.reportedModel = target.model;
         snap_.ip = target.ip;
         snap_.mac = target.mac;
+        snap_.deviceId = target.deviceId;
+        snap_.transport = target.transport;
     }
     setState(ConnState::Connected, "");
 
@@ -474,6 +629,15 @@ void CameraWorker::threadMain() {
             case ConnState::Connecting:   stepConnecting();   break;
             case ConnState::Connected:    stepConnected();    break;
             case ConnState::Reconnecting: stepReconnecting(); break;
+            case ConnState::IdentityChanged:
+                // Parked: never retried on a timer. A re-pair, or an operator's
+                // explicit Reconnect, checks the key again; an unchanged
+                // mismatch is refused again before any credentials are sent.
+                if (reconnectRequested_.exchange(false)) {
+                    reconnectAttempts_ = 0;
+                    setState(ConnState::Connecting, "checking camera identity");
+                }
+                break;
             case ConnState::Unauthorized:
                 // Keep retrying, but slowly: credentials may be corrected on the
                 // camera without restarting the daemon.
@@ -515,6 +679,11 @@ bool CameraWorker::setRecording(CameraSession* session, bool wantRecording,
     }
     finalState = st.recordingState;
 
+    if (st.recordingState != kRecordingRecording &&
+        st.recordingState != kRecordingNotRecording) {
+        err = "camera does not report a usable RecordingState; refusing to press REC blind";
+        return false;
+    }
     const bool isRecording = (st.recordingState == kRecordingRecording);
     if (isRecording == wantRecording) {
         // Already in the requested state. Doing nothing is the whole point: the
@@ -523,11 +692,6 @@ bool CameraWorker::setRecording(CameraSession* session, bool wantRecording,
         LOG_INFO(cfg_.id.c_str(), "record %s requested; already %s, no action",
                  wantRecording ? "start" : "stop", isRecording ? "recording" : "idle");
         return true;
-    }
-
-    if (st.recordingState == kRecordingUnknown) {
-        err = "camera does not report RecordingState; refusing to press REC blind";
-        return false;
     }
 
     // Observed on the FX30 during Phase 0: Down starts recording, Up stops it.
@@ -556,8 +720,8 @@ bool CameraWorker::setRecording(CameraSession* session, bool wantRecording,
                       wantRecording ? "start" : "stop");
             return false;
         }
-        const bool nowRecording = (check.recordingState == kRecordingRecording);
-        if (nowRecording == wantRecording) {
+        const auto wantedState = wantRecording ? kRecordingRecording : kRecordingNotRecording;
+        if (check.recordingState == wantedState) {
             LOG_INFO(cfg_.id.c_str(), "record %s confirmed (state 0x%llX)",
                      wantRecording ? "start" : "stop",
                      static_cast<unsigned long long>(check.recordingState));
@@ -616,6 +780,10 @@ bool Registry::addCamera(const CameraConfig& cc, std::string& err) {
             if (w->id() == cc.id) { err = "a camera with id '" + cc.id + "' already exists"; return false; }
         }
         for (const auto& existing : cfg_.cameras) {
+            if (!cc.deviceId.empty() && existing.deviceId == cc.deviceId) {
+                err = "SDK device is already adopted as '" + existing.id + "'";
+                return false;
+            }
             if (!cc.mac.empty() && existing.mac == cc.mac) {
                 err = "camera " + cc.mac + " is already adopted as '" + existing.id + "'";
                 return false;
@@ -634,10 +802,11 @@ bool Registry::addCamera(const CameraConfig& cc, std::string& err) {
     // the next sweep. Without this, a camera adopted through the UI sits at
     // "offline" for up to a full discovery interval and the operator is shown a
     // red banner for a camera that is in fact fine.
-    if (!cc.mac.empty()) {
+    if (!cc.mac.empty() || !cc.deviceId.empty()) {
         std::lock_guard<std::mutex> lock(discMu_);
         for (const auto& d : discovered_) {
-            if (upperMac(d.mac) == cc.mac) {
+            if ((!cc.deviceId.empty() && d.deviceId == cc.deviceId) ||
+                (cc.deviceId.empty() && !cc.mac.empty() && upperMac(d.mac) == cc.mac)) {
                 worker->offerDiscovery(d);
                 break;
             }
@@ -763,10 +932,20 @@ void Registry::discoveryLoop() {
             workers[widx]->offerDiscovery(found[fidx]);
         };
 
-        // Pass 1 — MAC. Authoritative.
+        // Opaque SDK identities pin USB cameras before any weaker matching.
+        // An unplugged USB body must never steal another body of the same model.
         for (std::size_t wi = 0; wi < workers.size(); ++wi) {
             const CameraConfig* cc = configFor(workers[wi]->id());
-            if (!cc || cc->mac.empty()) continue;
+            if (!cc || cc->deviceId.empty()) continue;
+            for (std::size_t i = 0; i < found.size(); ++i) {
+                if (!claimed[i] && found[i].deviceId == cc->deviceId) { claim(wi, i); break; }
+            }
+        }
+
+        // Pass 1 — MAC. Authoritative for legacy/network configuration.
+        for (std::size_t wi = 0; wi < workers.size(); ++wi) {
+            const CameraConfig* cc = configFor(workers[wi]->id());
+            if (assigned[wi] || !cc || !cc->deviceId.empty() || cc->mac.empty()) continue;
             for (std::size_t i = 0; i < found.size(); ++i) {
                 if (!claimed[i] && upperMac(found[i].mac) == cc->mac) { claim(wi, i); break; }
             }
@@ -779,7 +958,7 @@ void Registry::discoveryLoop() {
             // A config entry that names a MAC is pinned to that body. Never fall
             // back for it: binding "FX30 — Center" to whatever FX30 happens to be
             // reachable is worse than leaving it offline and saying so.
-            if (!cc || !cc->mac.empty() || cc->ip.empty()) continue;
+            if (!cc || !cc->deviceId.empty() || !cc->mac.empty() || cc->ip.empty()) continue;
             for (std::size_t i = 0; i < found.size(); ++i) {
                 if (!claimed[i] && found[i].ip == cc->ip) { claim(wi, i); break; }
             }
@@ -789,7 +968,7 @@ void Registry::discoveryLoop() {
         for (std::size_t wi = 0; wi < workers.size(); ++wi) {
             if (assigned[wi]) continue;
             const CameraConfig* cc = configFor(workers[wi]->id());
-            if (!cc || !cc->mac.empty() || cc->model.empty()) continue;
+            if (!cc || !cc->deviceId.empty() || !cc->mac.empty() || cc->model.empty()) continue;
             int matches = 0;
             int candidate = -1;
             for (std::size_t i = 0; i < found.size(); ++i) {
@@ -840,10 +1019,15 @@ json::Value cameraSnapshotJson(const CameraWorker::Snapshot& s) {
     v.set("reportedModel", json::Value(s.reportedModel));
     v.set("ip", json::Value(s.ip));
     v.set("mac", json::Value(s.mac));
+    v.set("deviceId", json::Value(s.deviceId));
+    v.set("transport", json::Value(s.transport));
     v.set("state", json::Value(connStateName(s.state)));
     v.set("discovered", json::Value(s.discovered));
     v.set("reconnectAttempts", json::Value(static_cast<std::int64_t>(s.reconnectAttempts)));
     if (!s.lastError.empty()) v.set("detail", json::Value(s.lastError));
+    v.set("hostKey", json::Value(s.hostKey));
+    if (!s.fingerprint.empty()) v.set("fingerprint", json::Value(s.fingerprint));
+    if (!s.observedFingerprint.empty()) v.set("observedFingerprint", json::Value(s.observedFingerprint));
 
     json::Value st = json::Value::makeObject();
     st.set("battery", json::Value(static_cast<std::int64_t>(s.status.batteryPercent)));

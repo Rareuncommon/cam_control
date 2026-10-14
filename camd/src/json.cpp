@@ -32,7 +32,11 @@ Value::~Value() = default;
 std::int64_t Value::asInt(std::int64_t def) const {
     if (!isNumber()) return def;
     // Reject values a 64-bit integer cannot represent rather than wrapping.
-    if (!std::isfinite(n_)) return def;
+    // Converting an out-of-range double to int64 is undefined behaviour, so the
+    // bound check must come first. 2^63 is exactly representable as a double;
+    // anything at or above it (or below -2^63) cannot be held.
+    constexpr double kTwo63 = 9223372036854775808.0;
+    if (!std::isfinite(n_) || n_ >= kTwo63 || n_ < -kTwo63) return def;
     return static_cast<std::int64_t>(n_);
 }
 
@@ -309,27 +313,57 @@ private:
         }
     }
 
+    // Strict RFC 8259 number grammar:
+    //   -? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?
+    // No leading '+', no leading zeros, no bare '.', no dangling exponent. The
+    // result must also be finite: 1e400 is valid grammar but not a usable
+    // number, and every consumer here would otherwise have to guard for inf.
     bool parseNumber(Value& out) {
+        auto digit = [this] { return !eof() && peek() >= '0' && peek() <= '9'; };
         std::size_t start = p_;
-        if (!eof() && (peek() == '-' || peek() == '+')) ++p_;
-        bool anyDigit = false;
-        while (!eof() && peek() >= '0' && peek() <= '9') { ++p_; anyDigit = true; }
+        if (!eof() && peek() == '-') ++p_;
+        if (!digit()) { fail("expected value"); return false; }
+        if (peek() == '0') {
+            ++p_;
+            if (digit()) { fail("leading zeros are not valid JSON"); return false; }
+        } else {
+            while (digit()) ++p_;
+        }
         if (!eof() && peek() == '.') {
             ++p_;
-            while (!eof() && peek() >= '0' && peek() <= '9') { ++p_; anyDigit = true; }
+            if (!digit()) { fail("expected digit after decimal point"); return false; }
+            while (digit()) ++p_;
         }
-        if (anyDigit && !eof() && (peek() == 'e' || peek() == 'E')) {
+        if (!eof() && (peek() == 'e' || peek() == 'E')) {
             ++p_;
             if (!eof() && (peek() == '-' || peek() == '+')) ++p_;
-            while (!eof() && peek() >= '0' && peek() <= '9') ++p_;
+            if (!digit()) { fail("expected digit in exponent"); return false; }
+            while (digit()) ++p_;
         }
-        if (!anyDigit) { fail("expected value"); return false; }
         std::string num(t_.substr(start, p_ - start));
-        out = Value(std::strtod(num.c_str(), nullptr));
+        char* end = nullptr;
+        const double d = std::strtod(num.c_str(), &end);
+        if (end != num.c_str() + num.size() || !std::isfinite(d)) {
+            fail("number out of range");
+            return false;
+        }
+        out = Value(d);
+        return true;
+    }
+
+    // Arrays and objects recurse, so an unbounded nesting depth is an
+    // unbounded stack. Nothing camd reads legitimately nests past a handful of
+    // levels; 64 is generous and far below any stack limit.
+    static constexpr int kMaxDepth = 64;
+
+    bool enter() {
+        if (++depth_ > kMaxDepth) { fail("nesting too deep"); return false; }
         return true;
     }
 
     bool parseArray(Value& out) {
+        if (!enter()) return false;
+        struct Leave { int& d; ~Leave() { --d; } } leave{depth_};
         ++p_;  // '['
         Array arr;
         skipWs();
@@ -351,6 +385,8 @@ private:
     }
 
     bool parseObject(Value& out) {
+        if (!enter()) return false;
+        struct Leave { int& d; ~Leave() { --d; } } leave{depth_};
         ++p_;  // '{'
         Object obj;
         skipWs();
@@ -379,6 +415,7 @@ private:
 
     std::string_view t_;
     std::size_t p_{0};
+    int depth_{0};
     std::string err_;
 };
 

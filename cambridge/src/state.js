@@ -12,6 +12,7 @@
 import { EventEmitter } from 'node:events';
 import { decorate, RECORDING_STATE } from './normalise.js';
 import { labelFor } from './ptz/schema.js';
+import { modelSupport, cameraCapabilities } from './camera-support.js';
 
 /**
  * One camera's status, from either a snapshot or a statusUpdate event.
@@ -117,10 +118,15 @@ export class StateModel extends EventEmitter {
       model: snap.model,
       ip: snap.ip,
       mac: snap.mac,
+      deviceId: snap.deviceId ?? '',
+      transport: snap.transport ?? '',
       state: snap.state,
       discovered: !!snap.discovered,
       reconnectAttempts: snap.reconnectAttempts ?? 0,
       detail: snap.detail ?? null,
+      hostKey: snap.hostKey ?? 'unknown',
+      fingerprint: snap.fingerprint ?? null,
+      observedFingerprint: snap.observedFingerprint ?? null,
       status: statusFrom(snap.status),
     };
   }
@@ -140,13 +146,42 @@ export class StateModel extends EventEmitter {
     return this.cameras.get(id);
   }
 
+  /**
+   * A camera we can no longer see mid-take needs its take closed, but not
+   * called a drop: from here we genuinely cannot tell whether it kept rolling
+   * on its own card or stopped. `dropped: null` is that third answer, and the
+   * take log prints it as unknown rather than picking one.
+   */
+  #closeTakeUnknown(cam) {
+    if (cam.status?.recording) {
+      const take = this.#openTakeFor(cam.id);
+      if (take) {
+        take.endedAt = Date.now();
+        take.dropped = null;
+      }
+      // Clear the flag too, or the reconnect — which reports not-recording —
+      // looks like an unexplained stop and raises a second, wrong alarm for
+      // something already recorded above.
+      cam.status = { ...cam.status, recording: false, recordDropped: false };
+    }
+    cam.recordStartedAt = null;
+  }
+
   applyConnectionState(ev) {
     const cam = this.ensure(ev.cameraId);
     const previous = cam.state;
     cam.state = ev.state;
+    if (typeof ev.label === 'string' && ev.label) cam.label = ev.label;
+    // SSH host-key pinning, as camd reports it. An identity change keeps the
+    // pin and the presented value side by side so the operator can compare.
+    if (typeof ev.hostKey === 'string') cam.hostKey = ev.hostKey;
+    if (typeof ev.fingerprint === 'string') cam.fingerprint = ev.fingerprint;
+    cam.observedFingerprint = typeof ev.observedFingerprint === 'string' ? ev.observedFingerprint : null;
     if (ev.model) cam.model = ev.model;
     if (ev.ip) cam.ip = ev.ip;
     if (ev.mac) cam.mac = ev.mac;
+    if (ev.deviceId) cam.deviceId = ev.deviceId;
+    if (ev.transport) cam.transport = ev.transport;
     cam.reconnectAttempts = ev.reconnectAttempts ?? cam.reconnectAttempts;
     cam.detail = ev.detail ?? null;
 
@@ -160,18 +195,7 @@ export class StateModel extends EventEmitter {
       // drop: from here we genuinely cannot tell whether it kept rolling on its
       // own card or stopped. `dropped: null` is that third answer, and the take
       // log prints it as unknown rather than picking one.
-      if (cam.status?.recording) {
-        const take = this.#openTakeFor(cam.id);
-        if (take) {
-          take.endedAt = Date.now();
-          take.dropped = null;
-        }
-        // Clear the flag too, or the reconnect — which reports not-recording —
-        // looks like an unexplained stop and raises a second, wrong alarm for
-        // something already recorded above.
-        cam.status = { ...cam.status, recording: false, recordDropped: false };
-      }
-      cam.recordStartedAt = null;
+      this.#closeTakeUnknown(cam);
     }
     this.emit('change', { type: 'connectionState', cameraId: ev.cameraId, from: previous, to: ev.state });
   }
@@ -302,11 +326,17 @@ export class StateModel extends EventEmitter {
       // The daemon is gone: every camera's state is unknown, and saying so is the
       // point. Fail loud in the UI. Only camd's cameras, though — a PTZ head
       // does not go through the daemon and is exactly as reachable as before.
+      //
+      // Takes still open are closed with an unknown outcome, exactly as for a
+      // single camera vanishing (audit DC-10: they used to stay "rolling" in
+      // the take log for the whole outage). A camera still recording when the
+      // daemon returns starts a fresh take from its reported status.
       for (const cam of this.cameras.values()) {
         if ((cam.source ?? 'camd') !== 'camd') continue;
         cam.state = 'offline';
         cam.detail = 'camd unreachable';
         cam.properties = {};
+        this.#closeTakeUnknown(cam);
       }
     }
     this.emit('change', { type: 'camdConnection', connected });
@@ -343,6 +373,46 @@ export class StateModel extends EventEmitter {
   }
 
   /** Position, motion, tracking: the fast-changing part of a PTZ head. */
+  /**
+   * Stills and cinema cameras — gphoto2 bodies over USB and Blackmagic over
+   * REST. Their manager hands over finished views; this keeps them in the same
+   * model as every other camera, so they share the order, the groups, the
+   * alarms and the change-only stream.
+   *
+   * Only a camera whose view actually changed is marked. A Blackmagic body is
+   * asked for its status every five seconds, and resending it unchanged each
+   * time would be the full-frame stream this model exists to avoid.
+   */
+  applyExternal(list) {
+    const seen = new Set();
+    let reshaped = false;
+    for (const snap of list ?? []) {
+      seen.add(snap.id);
+      const existing = this.cameras.get(snap.id);
+      // External ids start "ext-", so they cannot collide with another
+      // source's; if one ever did, it must not replace that camera.
+      if (existing && (existing.source ?? 'camd') !== 'external') continue;
+      const signature = JSON.stringify(snap);
+      if (existing?.externalSignature === signature) continue;
+      this.cameras.set(snap.id, {
+        ...this.#fromSnapshot(snap, 'external'),
+        kind: 'external',
+        vendor: snap.provider === 'blackmagic-rest' ? 'blackmagic' : 'gphoto2',
+        provider: snap.provider,
+        capabilities: snap.capabilities ?? null,
+        external: snap.external ?? null,
+        properties: {},
+        externalSignature: signature,
+      });
+      if (existing) this.emit('change', { type: 'connectionState', cameraId: snap.id });
+      else reshaped = true;
+    }
+    for (const [id, cam] of [...this.cameras]) {
+      if (cam.source === 'external' && !seen.has(id)) { this.cameras.delete(id); reshaped = true; }
+    }
+    if (reshaped) this.emit('change', { type: 'all' });
+  }
+
   applyPtz(cameraId, ptz) {
     const cam = this.cameras.get(cameraId);
     if (!cam) return;
@@ -408,7 +478,23 @@ export class StateModel extends EventEmitter {
       ...(cam.kind === 'ptz' ? {
         ptz: cam.ptz ?? null,
         capabilities: this.ptzSchemas.get(cam.id)?.capabilities ?? null,
-      } : {}),
+      } : cam.kind === 'external' ? {
+        provider: cam.provider,
+        transport: cam.transport ?? '',
+        capabilities: cam.capabilities,
+        external: cam.external,
+      } : {
+        // What the Sony SDK says about this body, and how it is reached.
+        deviceId: cam.deviceId ?? '',
+        transport: cam.transport ?? '',
+        support: modelSupport(cam.model),
+        capabilities: cameraCapabilities(cam),
+        // The camera's SSH host key, pinned on first use (fingerprints are not
+        // secret: they identify the camera, they do not unlock it).
+        hostKey: cam.hostKey ?? 'unknown',
+        fingerprint: cam.fingerprint ?? null,
+        observedFingerprint: cam.observedFingerprint ?? null,
+      }),
       properties,
     };
   }
