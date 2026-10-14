@@ -6,6 +6,8 @@
 // Raw values are still available with a _raw suffix for expressions that need
 // to do arithmetic.
 
+import { PTZ_VARIABLES, ptzVariableValues } from './ptz.js';
+
 const PER_CAMERA = [
   ['label', 'Name'],
   ['model', 'Model'],
@@ -19,8 +21,13 @@ const PER_CAMERA = [
   ['nd', 'ND filter'],
   ['battery', 'Battery %'],
   ['media', 'Media'],
+  ['card', 'Card time remaining'],
+  ['alarm', 'Worst alarm, or empty'],
+  ['rectime', 'Elapsed record time'],
   ['tally', 'Tally (PGM / PVW / off)'],
 ];
+
+const PTZ_PER_CAMERA = new Set(['label', 'model', 'state', 'alarm', 'tally']);
 
 /** Companion variable ids must be simple; camera ids may contain hyphens. */
 export function varId(cameraId) {
@@ -35,11 +42,23 @@ export function buildVariableDefinitions(cameras) {
     { variableId: 'daemon', name: 'CamBridge daemon state' },
     { variableId: 'cameras_down', name: 'Names of cameras not connected' },
     { variableId: 'tally_program', name: 'Camera currently on program' },
+    { variableId: 'rolling', name: 'Rolling count, e.g. "2 of 3"' },
+    { variableId: 'alarm_count', name: 'Number of active alarms' },
+    { variableId: 'alarm', name: 'Worst active alarm, or empty' },
   ];
   for (const cam of cameras) {
     const v = varId(cam.id);
+    const ptz = cam.kind === 'ptz';
     for (const [suffix, name] of PER_CAMERA) {
+      // A PTZ head has no exposure, card or battery to report.
+      if (ptz && !PTZ_PER_CAMERA.has(suffix)) continue;
       defs.push({ variableId: `${v}_${suffix}`, name: `${cam.label || cam.id}: ${name}` });
+    }
+    if (ptz) {
+      for (const [suffix, name] of PTZ_VARIABLES) {
+        defs.push({ variableId: `${v}_${suffix}`, name: `${cam.label || cam.id}: ${name}` });
+      }
+      continue;
     }
     // Raw companions for the numeric ones, for expressions.
     for (const suffix of ['iris', 'iso', 'shutter', 'kelvin', 'nd']) {
@@ -55,17 +74,42 @@ const raw = (cam, prop) => {
   return Number.isFinite(value) ? value : '';
 };
 
-export function buildVariableValues(cameras, { camdConnected = true } = {}) {
+/** "12:04", or "—" when the camera does not report the figure. */
+function clock(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  const s = Math.floor(seconds);
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const pad = (n) => String(n).padStart(2, '0');
+  return hh > 0 ? `${hh}:${pad(mm)}:${pad(s % 60)}` : `${mm}:${pad(s % 60)}`;
+}
+
+/**
+ * @param {Set<string>|null} [only]  per-camera values for just these ids; the
+ *        summary values (counts, daemon, alarms) are always included.
+ */
+export function buildVariableValues(cameras, {
+  camdConnected = true, camdUsed = true, alarmsByCamera = {}, alarms = [], roll = null, now = Date.now(),
+  only = null,
+} = {}) {
+  const connected = cameras.filter((c) => c.state === 'connected').length;
   const values = {
     camera_count: cameras.length,
-    connected_count: cameras.filter((c) => c.state === 'connected').length,
+    connected_count: connected,
     recording_count: cameras.filter((c) => c.status?.recording).length,
-    daemon: camdConnected ? 'connected' : 'UNREACHABLE',
+    daemon: !camdUsed ? 'not used' : camdConnected ? 'connected' : 'UNREACHABLE',
     cameras_down: cameras.filter((c) => c.state !== 'connected').map((c) => c.label || c.id).join(', '),
     tally_program: cameras.filter((c) => c.tally?.program).map((c) => c.label || c.id).join(', '),
+    rolling: roll ? `${roll.rolling} of ${roll.total}` : `0 of ${connected}`,
+    alarm_count: alarms.length,
+    // Alarms arrive most severe first, so the head is the one to show.
+    alarm: alarms.length ? `${alarms[0].label} ${alarms[0].message}` : '',
   };
 
   for (const cam of cameras) {
+    // `only` is the cameras that changed since the last call. With dozens of
+    // heads a position update touches one, and the rest need no rewriting.
+    if (only && !only.has(cam.id)) continue;
     const v = varId(cam.id);
     const t = cam.tally;
     values[`${v}_label`] = cam.label ?? cam.id;
@@ -82,7 +126,17 @@ export function buildVariableValues(cameras, { camdConnected = true } = {}) {
     values[`${v}_battery`] = Number.isFinite(cam.status?.battery) && cam.status.battery >= 0
       ? `${cam.status.battery}%` : '—';
     values[`${v}_media`] = cam.status?.media ?? '';
+    values[`${v}_card`] = clock(cam.status?.mediaSlot1Sec);
+    values[`${v}_rectime`] = cam.recordStartedAt
+      ? clock((now - cam.recordStartedAt) / 1000) : '';
+    const worst = (alarmsByCamera?.[cam.id] ?? [])[0];
+    values[`${v}_alarm`] = worst ? worst.message : '';
     values[`${v}_tally`] = t?.program ? 'PGM' : t?.preview ? 'PVW' : 'off';
+
+    if (cam.kind === 'ptz') {
+      Object.assign(values, ptzVariableValues(cam));
+      continue;
+    }
 
     values[`${v}_iris_raw`] = raw(cam, 'fNumber');
     values[`${v}_iso_raw`] = raw(cam, 'isoSensitivity');

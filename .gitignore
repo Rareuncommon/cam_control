@@ -15,6 +15,9 @@ config/*.local.json
 # state, not source — and it is written by the app, so tracking it would show a
 # dirty tree after every service.
 config/cambridge-presets.json
+# Pictures of PTZ presets, taken when they are stored. Runtime state, and a
+# picture of the set is not something to publish with the source.
+config/ptz-thumbs/
 
 # --- Build output -----------------------------------------------------------
 build/
@@ -56,3 +59,19 @@ dist/
 # Atomic config writes leave a .bak alongside the real file. It holds the same
 # camera credentials, so it is ignored for the same reason.
 config/*.bak
+
+# curl cookie jars left by manual API testing. These hold a live session id.
+.cookies
+*.cookies
+
+# Session exports. They contain the whole conversation and any screenshots in
+# it; useful to produce, never something to commit.
+session-export/
+*.session-export/
+
+# --- Claude Code agent worktrees ----------------------------------------------
+# Parallel work happens in git worktrees here; they are merged, never committed.
+.claude/worktrees/
+
+# Python bytecode from running the export tests.
+__pycache__/

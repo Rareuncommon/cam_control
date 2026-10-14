@@ -72,17 +72,6 @@ PY
     fi
 fi
 
-if [[ ! -x ./camd/build/camd ]]; then
-    alert "CamBridge" "The camera daemon has not been built yet.
-
-Open Terminal once and run:
-    cd ${REPO_ROOT}
-    cmake -S camd -B camd/build && cmake --build camd/build
-
-After that, CamBridge starts normally from the Dock."
-    exit 1
-fi
-
 if ! command -v node >/dev/null 2>&1; then
     # Double-clicked apps do not inherit a login shell's PATH, so a Node installed
     # under Homebrew or nvm is invisible here. Look where it actually lives before
@@ -102,6 +91,23 @@ Install the macOS LTS package from nodejs.org, then launch CamBridge again."
     exit 1
 fi
 
+# A venue with only PTZ heads has no Sony bodies, so no SDK and no daemon. The
+# rule is the server's own (camdNeeded in venue.js), asked rather than copied
+# so the launcher and the server can never disagree about it.
+NEED_CAMD="$(node "${REPO_ROOT}/cambridge/src/venue.js" "${CONFIG}" 2>>"${LAUNCH_LOG}" || echo yes)"
+say "camd needed: ${NEED_CAMD}"
+
+if [[ "${NEED_CAMD}" == yes && ! -x ./camd/build/camd ]]; then
+    alert "CamBridge" "The camera daemon has not been built yet.
+
+Open Terminal once and run:
+    cd ${REPO_ROOT}
+    cmake -S camd -B camd/build && cmake --build camd/build
+
+After that, CamBridge starts normally from the Dock."
+    exit 1
+fi
+
 read -r CAMD_PORT UI_PORT <<<"$(
   node -e '
     const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -109,7 +115,9 @@ read -r CAMD_PORT UI_PORT <<<"$(
   ' "${CONFIG}" 2>>"${LAUNCH_LOG}" || echo "8787 8088"
 )"
 
-for pn in "${CAMD_PORT}:camera daemon" "${UI_PORT}:web interface"; do
+PORTS=("${UI_PORT}:web interface")
+[[ "${NEED_CAMD}" == yes ]] && PORTS+=("${CAMD_PORT}:camera daemon")
+for pn in "${PORTS[@]}"; do
     port="${pn%%:*}"; what="${pn##*:}"
     if lsof -ti:"${port}" >/dev/null 2>&1; then
         alert "CamBridge is already running" \
@@ -132,28 +140,32 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-say "starting camd"
-./camd/build/camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
-CAMD_PID=$!
+if [[ "${NEED_CAMD}" == yes ]]; then
+    say "starting camd"
+    ./camd/build/camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
+    CAMD_PID=$!
 
-healthy=false
-for _ in $(seq 1 50); do
-    if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
-        healthy=true
-        break
-    fi
-    if ! kill -0 "${CAMD_PID}" 2>/dev/null; then break; fi
-    sleep 0.2
-done
+    healthy=false
+    for _ in $(seq 1 50); do
+        if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
+            healthy=true
+            break
+        fi
+        if ! kill -0 "${CAMD_PID}" 2>/dev/null; then break; fi
+        sleep 0.2
+    done
 
-if [[ "${healthy}" != true ]]; then
-    alert "CamBridge could not start" \
-      "The camera daemon did not start.
+    if [[ "${healthy}" != true ]]; then
+        alert "CamBridge could not start" \
+          "The camera daemon did not start.
 
 This is usually the Sony SDK missing from vendor/CrSDK, or a configuration error. The log has the details."
-    exit 1
+        exit 1
+    fi
+    say "camd healthy on ${CAMD_PORT}"
+else
+    say "PTZ only — not starting camd"
 fi
-say "camd healthy on ${CAMD_PORT}"
 
 CAMBRIDGE_LAUNCHER_PID=$$ \
   node cambridge/src/server.js --config "${CONFIG}" >> "${LOG_DIR}/cambridge.stdout.log" 2>&1 &

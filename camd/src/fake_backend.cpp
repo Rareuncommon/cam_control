@@ -33,6 +33,30 @@ bool linkDown(const std::string& mac) {
     return it != g_linkDown.end() && it->second;
 }
 
+// Forced card-remaining, in seconds, keyed by MAC. Set by the debug endpoint so
+// a nearly-full card can be rehearsed on demand: the alarm that matters most is
+// the one nobody has ever seen fire.
+std::mutex g_mediaMu;
+std::map<std::string, std::int64_t> g_mediaOverride;
+
+bool takeMediaOverride(const std::string& mac, std::int64_t& out) {
+    std::lock_guard<std::mutex> lock(g_mediaMu);
+    auto it = g_mediaOverride.find(mac);
+    if (it == g_mediaOverride.end()) return false;
+    out = it->second;
+    g_mediaOverride.erase(it);
+    return true;
+}
+
+// A stable pretend SDK code per property name, so the diagnostic dump has
+// something code-shaped to show. Arbitrary and local to the fake — nothing
+// compares these against Sony's real codes.
+std::uint32_t fakeCodeFor(const std::string& name) {
+    std::uint32_t h = 2166136261u;
+    for (unsigned char c : name) { h ^= c; h *= 16777619u; }
+    return 0x1000u | (h & 0x0FFFu);
+}
+
 PropertyValue enumerated(std::int64_t current, std::vector<std::int64_t> allowed,
                          bool writable = true) {
     PropertyValue p;
@@ -173,6 +197,11 @@ public:
         : info_(std::move(info)), sink_(sink) {
 
         const bool super35 = info_.model.find("FX30") != std::string::npos;
+        // The third body stands in for the one on the rig that refuses a focus
+        // point. Keyed off the MAC rather than the model so the two FX30s are
+        // not both crippled — one must still accept a tap, or the working path
+        // has no coverage either.
+        noAfArea_ = info_.mac == "AA:BB:CC:00:00:03";
         // Iris and gain start gated by their Auto setting, exactly as a real FX30
         // arrives: value present, no list, not writable. applyExposureGates() below
         // flips them when the operator switches the gate to Manual.
@@ -196,6 +225,9 @@ public:
         props_[prop::kZoomPosition] = ranged(0, 0, 1000, 1);
         props_[prop::kRecordingState] = enumerated(kRecordingNotRecording, {}, false);
         props_[prop::kBatteryLevel] = ranged(87, 0, 100, 1, false);
+        // Card remaining, in seconds — the same units the SDK reports. Starts at
+        // a plausible three hours and is drained by tick() below.
+        props_[prop::kMediaFree] = ranged(mediaSec_, 0, 4 * 3600, 1, false);
         // Matches the FX30 finding: the toggle command is not available.
         props_[prop::kRecToggleSupported] = enumerated(super35 ? 0 : 0, {0, 1}, false);
 
@@ -218,7 +250,49 @@ public:
         props_[prop::kSubjectRecognition] = enumerated(1, {0, 1});
         props_[prop::kSteadyShotMovie] = enumerated(1, {0, 1});
         props_[prop::kFocusArea] = enumerated(1, {1, 2, 3, 4, 5, 6});
-        props_[prop::kAfAreaPositionC] = ranged(0, 0, 0x027F01DF, 1);
+
+        // Tap-to-focus, and the body that refuses it.
+        //
+        // A real FX30 answered "afAreaPositionAFS is not supported by this
+        // body" — the property code was simply absent from the list it
+        // returned. So one fake camera has no AF area property at all, the same
+        // way the FX3 has no ND and no record toggle here. Without a body that
+        // refuses, the panel's explanation and its autofocus fallback are code
+        // nobody can run without walking to a tripod.
+        if (!noAfArea_) {
+            props_[prop::kAfAreaPositionC] = ranged(0, 0, 0x027F01DF, 1);
+        }
+    }
+
+    // The unfiltered view. Deliberately reports two codes camd has no name for,
+    // because a fake that only ever returns properties camd already models
+    // cannot exercise the one thing this endpoint exists to reveal: that a
+    // camera offers more than the daemon looks at.
+    bool describeProperties(std::vector<PropertyDescriptor>& out,
+                            std::string& err) override {
+        if (!check(err)) return false;
+        std::lock_guard<std::mutex> lock(mu_);
+        for (const auto& [name, value] : props_) {
+            PropertyDescriptor d;
+            d.name = name;
+            d.code = fakeCodeFor(name);
+            d.current = value.current;
+            d.writable = value.writable;
+            d.enableFlag = value.writable ? 1 : 0;
+            d.elementCount = value.hasRange ? 3 : value.allowed.size();
+            out.push_back(std::move(d));
+        }
+        // Two unmapped codes, standing in for the many a real body reports that
+        // camd never names.
+        for (std::uint32_t code : {0x0200u, 0x0201u}) {
+            PropertyDescriptor d;
+            d.code = code;
+            d.current = 0;
+            d.enableFlag = 1;
+            d.writable = true;
+            out.push_back(std::move(d));
+        }
+        return true;
     }
 
     bool getProperties(PropertyMap& out, std::string& err) override {
@@ -279,11 +353,53 @@ public:
     bool getStatus(CameraStatus& out, std::string& err) override {
         if (!check(err)) return false;
         std::lock_guard<std::mutex> lock(mu_);
+        tick();
         out.batteryPercent = static_cast<int>(props_[prop::kBatteryLevel].current);
         out.recordingState = recording_ ? kRecordingRecording : kRecordingNotRecording;
-        out.media = "SLOT1 128GB";
-        out.mediaPresent = true;
+        out.mediaSlot1Sec = mediaSec_;
+        // Slot 2 stays unreported here for the same reason the Sony backend does
+        // not fill it: the SDK property has not been confirmed to exist. The
+        // Node layer must handle -1 anyway, so the fake exercises that path.
+        out.mediaSlot2Sec = -1;
+        out.media = "SLOT1 " + std::to_string(mediaSec_) + "s remaining";
+        out.mediaPresent = mediaSec_ > 0;
         return true;
+    }
+
+    // Drains the card while recording and the battery always, so thresholds have
+    // something to cross. Driven off the wall clock rather than a call count:
+    // status is polled on a throttle, and a card that empties at a rate set by
+    // how often someone happens to look at it is not a rehearsal of anything.
+    //
+    // Caller holds mu_.
+    void tick() {
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::seconds>(now - lastTick_).count();
+
+        std::int64_t forced = 0;
+        if (takeMediaOverride(info_.mac, forced)) {
+            mediaSec_ = forced < 0 ? 0 : forced;
+            LOG_WARN("fake", "card for %s forced to %llds remaining", info_.mac.c_str(),
+                     static_cast<long long>(mediaSec_));
+        }
+
+        if (elapsed <= 0) return;
+        lastTick_ = now;
+
+        if (recording_ && mediaSec_ > 0) {
+            mediaSec_ = std::max<std::int64_t>(0, mediaSec_ - elapsed);
+        }
+        props_[prop::kMediaFree].current = mediaSec_;
+
+        // Roughly 1% every two minutes: slow enough not to be noise, fast enough
+        // that a demo reaches the warning threshold inside a sitting.
+        batteryDrainAccum_ += elapsed;
+        while (batteryDrainAccum_ >= 120) {
+            batteryDrainAccum_ -= 120;
+            auto& bat = props_[prop::kBatteryLevel].current;
+            if (bat > 0) bat -= 1;
+        }
     }
 
     bool sendRecordButton(bool down, std::string& err) override {
@@ -379,6 +495,10 @@ private:
     bool disconnected_ = false;
     bool notified_ = false;
     bool errorRaised_ = false;
+    bool noAfArea_ = false;
+    std::int64_t mediaSec_ = 3 * 3600;
+    std::int64_t batteryDrainAccum_ = 0;
+    std::chrono::steady_clock::time_point lastTick_ = std::chrono::steady_clock::now();
 };
 
 class FakeBackend : public Backend {
@@ -435,6 +555,13 @@ void fakeBackendSetLinkDown(const std::string& mac, bool down) {
     std::lock_guard<std::mutex> lock(g_linkMu);
     g_linkDown[mac] = down;
     LOG_WARN("fake", "link for %s is now %s", mac.c_str(), down ? "DOWN" : "UP");
+}
+
+// Test and diagnostic hook: put a camera's card near full so the media alarm can
+// be rehearsed. Applied on the session's next status poll, not immediately.
+void fakeBackendSetMediaRemaining(const std::string& mac, std::int64_t seconds) {
+    std::lock_guard<std::mutex> lock(g_mediaMu);
+    g_mediaOverride[mac] = seconds;
 }
 
 }  // namespace camd

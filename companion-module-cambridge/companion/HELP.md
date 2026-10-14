@@ -8,9 +8,17 @@ Controls Sony FX3 and FX30 bodies through a running **CamBridge** server.
 2. In this connection's config, enter the address you open the CamBridge control
    panel on, and its port (8088 by default). If Companion runs on the same Mac
    as CamBridge, `127.0.0.1` is correct.
-3. The status goes green once connected. Cameras appear in every dropdown
+3. If CamBridge has a PIN set, create a token in its config (`tokens`, see
+   *running the app*) and paste it into **Access token** (a secret field; it is
+   sent as `Authorization: Bearer ...` and never logged). Without it every
+   request, including STOP, is refused and the status reads "CamBridge needs a
+   token — set one in the module config".
+4. The status goes green once connected. Cameras appear in every dropdown
    automatically — a camera added in the CamBridge web panel shows up here
    without restarting anything.
+
+**Held-key safety limit** (default 15 s, 5-120): if a held PTZ key never reports
+its release (page change mid-press, lost event), movement stops after this long.
 
 Cameras themselves are added in the CamBridge **Setup** tab, not here.
 
@@ -69,3 +77,17 @@ Global: `$(cambridge:camera_count)`, `connected_count`, `recording_count`,
 
 Tally comes from CamBridge's ATEM listener, configured in `config/cambridge.json`,
 not from Companion. If it is off, tally feedbacks simply stay dark.
+
+## PTZ cameras
+
+PTZ heads (Panasonic, Sony, Canon, PTZOptics) appear in the PTZ actions only. Pan/tilt, zoom and focus are **press-and-hold**: put the move action on button down and **PTZ: release** on button up (the ready-made buttons already do). While held the module refreshes the move every 150 ms; CamBridge stops the head itself if refreshes stop. Also: preset recall/store, STOP ALL, tracking, home, one-push AF and **PTZ: set any setting**, whose choices come from each camera. Variables `$(cambridge:<id>_pan|_tilt|_zoom|_preset|_tracking|_moving)`; feedbacks tracking, preset is current, moving. At a PTZ-only venue `$(cambridge:daemon)` reads "not used".
+
+### Many PTZ cameras: the selected camera and banks
+
+One page can drive any number of heads, like a hardware PTZ controller. **PTZ: select camera** picks a camera, a slot of the current bank, or next/previous (optionally within a group). Every PTZ action and feedback offers **(selected camera)** as its camera, and it is the default for new buttons. The selection belongs to this module instance only; it survives camera-list changes that keep the head, and moving it while a key is held stops the old head first.
+
+The **PTZ controller** button category has a row of camera-select keys for the current bank (tally, selected and offline feedbacks), bank next/previous, the direction pad, zoom and focus, presets 1-8, home, AF, tracking and STOP ALL, all on the selected camera. **PTZ: camera bank next / previous / go to** pages the select keys. Set the bank size (default 8) in the module config.
+
+Variables: `$(cambridge:ptz_selected)`, `ptz_selected_label`, `ptz_selected_group`, `ptz_selected_state`, `ptz_selected_tally`, `ptz_selected_pan|_tilt|_zoom|_preset|_tracking|_moving`, `ptz_bank`, `ptz_bank_count`, `ptz_bank_slot_N_label`. Feedbacks: camera is selected, bank slot is selected / on air / not connected.
+
+At a big venue, untick **Ready-made buttons for every PTZ camera** in the module config: the per-camera button categories (hundreds of buttons) go away and the controller page covers every head. Camera dropdowns list cameras in CamBridge's order as `Name (group)`.

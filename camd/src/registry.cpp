@@ -227,6 +227,10 @@ void CameraWorker::publishStatus(const CameraStatus& st) {
     ev.set("battery", json::Value(static_cast<std::int64_t>(st.batteryPercent)));
     ev.set("media", json::Value(st.media));
     ev.set("mediaPresent", json::Value(st.mediaPresent));
+    // Seconds remaining per slot, -1 when unreported. The string above is for
+    // display; these are what a threshold can act on.
+    ev.set("mediaSlot1Sec", json::Value(st.mediaSlot1Sec));
+    ev.set("mediaSlot2Sec", json::Value(st.mediaSlot2Sec));
     ev.set("recordingState", json::Value(st.recordingState));
     // Convenience booleans so the UI does not need the raw SDK enum, while the
     // raw value stays available for anything we have not anticipated.
@@ -419,6 +423,8 @@ void CameraWorker::stepConnected() {
                     std::lock_guard<std::mutex> lock(stateMu_);
                     changed = st.recordingState != snap_.status.recordingState ||
                               st.batteryPercent != snap_.status.batteryPercent ||
+                              st.mediaSlot1Sec != snap_.status.mediaSlot1Sec ||
+                              st.mediaSlot2Sec != snap_.status.mediaSlot2Sec ||
                               st.media != snap_.status.media;
                     snap_.status = st;
                 }
@@ -843,6 +849,8 @@ json::Value cameraSnapshotJson(const CameraWorker::Snapshot& s) {
     st.set("battery", json::Value(static_cast<std::int64_t>(s.status.batteryPercent)));
     st.set("media", json::Value(s.status.media));
     st.set("mediaPresent", json::Value(s.status.mediaPresent));
+    st.set("mediaSlot1Sec", json::Value(s.status.mediaSlot1Sec));
+    st.set("mediaSlot2Sec", json::Value(s.status.mediaSlot2Sec));
     st.set("recordingState", json::Value(s.status.recordingState));
     st.set("recording", json::Value(s.status.recordingState == kRecordingRecording));
     st.set("recordingFailed", json::Value(s.status.recordingState == kRecordingFailed));

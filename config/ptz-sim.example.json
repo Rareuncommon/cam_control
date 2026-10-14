@@ -1,0 +1,17 @@
+{
+  "$comment": [
+    "Four simulated PTZ heads, no hardware and no camd. For rehearsing the PTZ",
+    "panel and for development:",
+    "  node cambridge/src/server.js --config config/ptz-sim.example.json",
+    "Copy it before editing if you want to keep changes; presets and thumbnails",
+    "are written beside whichever file you start with."
+  ],
+  "cambridge": { "bind": "0.0.0.0", "port": 8088 },
+  "logging": { "dir": "./logs", "level": "info" },
+  "cameras": [
+    { "id": "wide", "kind": "ptz", "vendor": "fake", "label": "Wide", "ip": "fake-wide" },
+    { "id": "centre", "kind": "ptz", "vendor": "fake", "label": "Centre", "ip": "fake-centre", "options": { "tracking": true } },
+    { "id": "tight", "kind": "ptz", "vendor": "fake", "label": "Tight", "ip": "fake-tight" },
+    { "id": "aux", "kind": "ptz", "vendor": "fake", "label": "Aux", "ip": "fake-aux", "options": { "tracking": true } }
+  ]
+}

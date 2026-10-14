@@ -7,8 +7,22 @@
 // back the runtime change if the file write fails — a camera that works today and
 // vanishes on Monday is worse than one that never adopted.
 
-import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { isIP } from 'node:net';
+
+/**
+ * An address a PTZ head can be reached at: an IP, or a host name. Host names
+ * are allowed because some venues name their cameras in DNS, and because a
+ * name that resolves only on the venue's network is still the right thing to
+ * store — it is the venue's network the camera lives on.
+ */
+export function isHostAddress(s) {
+  const v = String(s ?? '').trim();
+  if (isIP(v)) return true;
+  return v.length <= 253
+    && /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/.test(v);
+}
 
 /** Turns a model and MAC into a stable, readable, filesystem-safe id. */
 export function suggestId(model, mac, taken = new Set()) {
@@ -42,10 +56,12 @@ export class Adoption {
    * @param {import('./camd-client.js').CamdClient} camd
    * @param {import('./log.js').Logger} log
    */
-  constructor(configPath, camd, log) {
+  constructor(configPath, camd, log, ptz = null) {
     this.configPath = configPath;
     this.camd = camd;
     this.log = log;
+    /** @type {import('./ptz/source.js').PtzSource | null} */
+    this.ptz = ptz;
   }
 
   readConfig() {
@@ -67,9 +83,18 @@ export class Adoption {
   writeConfig(cfg) {
     mkdirSync(dirname(this.configPath), { recursive: true });
     const tmp = `${this.configPath}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
+    // `mode` only applies when the file is created, so a stale .tmp left by a
+    // crash (or made 0644 by hand) would keep its old mode. Remove it, create
+    // exclusively, and chmod after the write as well.
+    rmSync(tmp, { force: true });
+    writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    chmodSync(tmp, 0o600);
     if (existsSync(this.configPath)) {
-      try { copyFileSync(this.configPath, `${this.configPath}.bak`); } catch { /* best effort */ }
+      const bak = `${this.configPath}.bak`;
+      try {
+        copyFileSync(this.configPath, bak);
+        chmodSync(bak, 0o600);
+      } catch { /* best effort */ }
     }
     renameSync(tmp, this.configPath);
   }
@@ -78,6 +103,47 @@ export class Adoption {
   adopted() {
     const cfg = this.readConfig();
     return Array.isArray(cfg.cameras) ? cfg.cameras : [];
+  }
+
+  /**
+   * Persists the auth block, re-reading first.
+   *
+   * Deliberately re-reads rather than writing a remembered copy: setting a PIN
+   * must not roll back a camera adopted a moment earlier from another browser.
+   * Goes through the same atomic write as everything else here, which also
+   * means the PIN hash lands in a file that is already mode 0600.
+   */
+  saveAuth(authBlock) {
+    try {
+      const cfg = this.readConfig();
+      cfg.auth = authBlock;
+      this.writeConfig(cfg);
+      return { ok: true };
+    } catch (err) {
+      this.log?.error('auth', `could not save the PIN: ${err.message}`);
+      return { ok: false, error: `could not save the PIN: ${err.message}` };
+    }
+  }
+
+  /**
+   * Merges `patch` into one top-level block of the config file, re-reading
+   * first for the same reason saveAuth does: a setting changed here must not
+   * roll back a camera adopted a moment earlier from another browser. Keys
+   * not in the patch — a hand-edited SKAARHOJ mapping, say — are kept.
+   *
+   * @returns {{ok: true, block: object} | {ok: false, error: string}}
+   */
+  saveSection(name, patch) {
+    try {
+      const cfg = this.readConfig();
+      const block = { ...(cfg[name] && typeof cfg[name] === 'object' ? cfg[name] : {}), ...patch };
+      cfg[name] = block;
+      this.writeConfig(cfg);
+      return { ok: true, block };
+    } catch (err) {
+      this.log?.error('config', `could not save ${name}: ${err.message}`);
+      return { ok: false, error: `could not save ${name}: ${err.message}` };
+    }
   }
 
   /**
@@ -136,10 +202,12 @@ export class Adoption {
   async forget(id) {
     const cfg = this.readConfig();
     const before = (cfg.cameras ?? []).length;
+    const gone = (cfg.cameras ?? []).find((c) => c.id === id);
     cfg.cameras = (cfg.cameras ?? []).filter((c) => c.id !== id);
     if (cfg.cameras.length === before) return { ok: false, error: `no camera "${id}" in config` };
 
-    await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
+    if (gone?.kind === 'ptz') await this.ptz?.remove(id);
+    else await this.camd.request('DELETE', `/cameras/${encodeURIComponent(id)}`);
     try {
       this.writeConfig(cfg);
     } catch (err) {
@@ -167,11 +235,33 @@ export class Adoption {
       entry.auth = { ...(entry.auth ?? {}), password: changes.password };
       credentialsChanged = true;
     }
+    // A PTZ head is reached by address, not discovered by MAC, so its address
+    // is something an operator edits. A Sony body's is whatever camd finds.
+    // Groups are the operator's way of finding one camera among thirty:
+    // "Stage", "Balcony". An empty string takes a camera out of its group.
+    if (typeof changes.group === 'string') {
+      const g = changes.group.trim().slice(0, 40);
+      if (g) entry.group = g; else delete entry.group;
+    }
+    if (entry.kind === 'ptz' && typeof changes.ip === 'string' && changes.ip.trim()) {
+      if (!isHostAddress(changes.ip)) return { ok: false, error: `"${changes.ip}" is not an IP address or host name` };
+      // Two entries at one address would be two sets of controls on one head.
+      const clash = cfg.cameras.find((c) => c.id !== id && c.kind === 'ptz' && c.ip === changes.ip.trim());
+      if (clash) return { ok: false, status: 409, error: `${changes.ip.trim()} is already "${clash.label}"` };
+      entry.ip = changes.ip.trim();
+    }
 
     try {
       this.writeConfig(cfg);
     } catch (err) {
       return { ok: false, error: `could not save config: ${err.message}` };
+    }
+
+    if (entry.kind === 'ptz') {
+      await this.ptz?.update(id, entry);
+      this.log.info('adopt',
+        `updated ${id}${credentialsChanged ? ' (new credentials)' : ''}: ${entry.label}`);
+      return { ok: true, camera: { ...entry, auth: undefined } };
     }
 
     // A label change is cosmetic and can be applied live. New credentials only
@@ -186,5 +276,83 @@ export class Adoption {
     this.log.info('adopt',
       `updated ${id}${credentialsChanged ? ' (new credentials)' : ''}: ${entry.label}`);
     return { ok: true, camera: { ...entry, auth: undefined } };
+  }
+
+  /**
+   * Adds a PTZ camera found by add-by-IP.
+   *
+   * Same shape of guarantee as adopt(): the camera starts being controlled and
+   * the config records it, or neither happens.
+   *
+   * @param {{ip: string, vendor: string, model?: string, label?: string, id?: string,
+   *          username?: string, password?: string, port?: number, options?: object}} input
+   */
+  async addPtz(input) {
+    const ip = String(input.ip ?? '').trim();
+    if (!isHostAddress(ip)) return { ok: false, error: 'an IP address or host name is required' };
+    if (!input.vendor) return { ok: false, error: 'which kind of camera is it?' };
+    if (!this.ptz) return { ok: false, error: 'PTZ control is not running' };
+
+    const cfg = this.readConfig();
+    cfg.cameras ??= [];
+    if (cfg.cameras.some((c) => c.kind === 'ptz' && c.ip === ip)) {
+      return { ok: false, error: `a camera at ${ip} is already added` };
+    }
+    const taken = new Set(cfg.cameras.map((c) => c.id));
+    const id = input.id?.trim() || suggestId(input.model || input.vendor, ip.replace(/[^0-9A-Fa-f]/g, ''), taken);
+    if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
+
+    const entry = {
+      id,
+      kind: 'ptz',
+      vendor: String(input.vendor).toLowerCase(),
+      label: input.label?.trim() || input.model || id,
+      model: input.model || '',
+      ip,
+      ...(Number.isInteger(input.port) ? { port: input.port } : {}),
+      auth: {
+        username: input.username?.trim() ?? '',
+        password: input.password ?? '',
+      },
+      ...(input.options && typeof input.options === 'object' ? { options: input.options } : {}),
+      ...(typeof input.group === 'string' && input.group.trim() ? { group: input.group.trim().slice(0, 40) } : {}),
+    };
+
+    try {
+      cfg.cameras.push(entry);
+      this.writeConfig(cfg);
+    } catch (err) {
+      this.log.error('adopt', `config write failed, ${id} not added: ${err.message}`);
+      return { ok: false, error: `could not save config: ${err.message}` };
+    }
+    try {
+      this.ptz.add(entry);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    this.log.info('adopt', `added ${entry.vendor} ${entry.model || 'PTZ'} at ${ip} as "${entry.label}" (${id})`);
+    return { ok: true, camera: { ...entry, auth: undefined } };
+  }
+
+  /**
+   * The order cameras appear in, everywhere: panel, multiview, Companion,
+   * the SKAARHOJ camera buttons. Ids given come first, in that order; any
+   * camera not named keeps its place after them.
+   */
+  reorder(ids) {
+    if (!Array.isArray(ids)) return { ok: false, error: 'ids must be a list' };
+    const cfg = this.readConfig();
+    const cams = cfg.cameras ?? [];
+    const byId = new Map(cams.map((c) => [c.id, c]));
+    const first = ids.map((id) => byId.get(id)).filter(Boolean);
+    const named = new Set(first.map((c) => c.id));
+    cfg.cameras = [...first, ...cams.filter((c) => !named.has(c.id))];
+    try {
+      this.writeConfig(cfg);
+    } catch (err) {
+      return { ok: false, error: `could not save config: ${err.message}` };
+    }
+    this.log.info('adopt', `camera order: ${cfg.cameras.map((c) => c.id).join(', ')}`);
+    return { ok: true, order: cfg.cameras.map((c) => c.id) };
   }
 }

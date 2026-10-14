@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { StateModel } from '../src/state.js';
 import { JsonStore } from '../src/store.js';
 import {
-  Presets, Gangs, matchFrom, capture, applyValues, rampPath, PRESET_PROPS, PROP_GROUPS,
+  Presets, Gangs, matchFrom, capture, applyValues, rampPath, UndoHistory,
+  PRESET_PROPS, PROP_GROUPS,
 } from '../src/control.js';
 
 const quietLog = {
@@ -364,4 +365,128 @@ test('recall groups only name properties presets actually store', () => {
       assert.ok(PRESET_PROPS.includes(prop), `${name}.${prop} is not captured in presets`);
     }
   }
+});
+
+// --- undo -------------------------------------------------------------------
+
+test('undo returns the value a property held before the change', () => {
+  const undo = new UndoHistory();
+  undo.record('cam1', 'fNumber', 400, 800);
+  const entry = undo.popLast('cam1');
+  assert.equal(entry.prop, 'fNumber');
+  assert.equal(entry.from, 400);
+  assert.equal(undo.popLast('cam1'), null, 'the entry must be consumed');
+});
+
+test('a ramp collapses to one undo, back to where it started', () => {
+  // A two-second recall sends about twenty writes per property. Recording each
+  // would make undo step back a single ramp increment, which is useless.
+  const undo = new UndoHistory();
+  const start = Date.now();
+  for (let i = 0; i < 20; i++) {
+    undo.record('cam1', 'fNumber', 400 + i * 20, 400 + (i + 1) * 20, start + i * 50);
+  }
+  assert.equal(undo.summary().cam1.depth, 1);
+  const entry = undo.popLast('cam1');
+  assert.equal(entry.from, 400, 'undo must reach the pre-ramp value');
+  assert.equal(entry.to, 800);
+});
+
+test('changes further apart than the coalescing window stay separate', () => {
+  const undo = new UndoHistory({ coalesceMs: 1000 });
+  const t = Date.now();
+  undo.record('cam1', 'fNumber', 400, 560, t);
+  undo.record('cam1', 'fNumber', 560, 800, t + 5000);
+  assert.equal(undo.summary().cam1.depth, 2);
+  assert.equal(undo.popLast('cam1').from, 560);
+  assert.equal(undo.popLast('cam1').from, 400);
+});
+
+test('a write with no known previous value is not recorded', () => {
+  // Storing it would give undo a null to write back to the camera.
+  const undo = new UndoHistory();
+  assert.equal(undo.record('cam1', 'fNumber', undefined, 800), null);
+  assert.equal(undo.record('cam1', 'fNumber', null, 800), null);
+  assert.equal(undo.popLast('cam1'), null);
+});
+
+test('a write that changed nothing is not recorded', () => {
+  const undo = new UndoHistory();
+  assert.equal(undo.record('cam1', 'fNumber', 400, 400), null);
+  assert.equal(undo.popLast('cam1'), null);
+});
+
+test('recording is suspended during an undo, so undo is not a toggle', () => {
+  const undo = new UndoHistory();
+  undo.record('cam1', 'fNumber', 400, 800);
+  const entry = undo.popLast('cam1');
+
+  undo.suspended = true;
+  undo.record('cam1', 'fNumber', 800, entry.from);
+  undo.suspended = false;
+
+  assert.equal(undo.popLast('cam1'), null,
+    'the undo write must not become a new undoable change');
+});
+
+test('revert goes back to the mark, not to the last nudge', () => {
+  // Three iris nudges after a recall must revert to where the recall left it.
+  const undo = new UndoHistory();
+  const t = Date.now();
+  undo.record('cam1', 'fNumber', 280, 400, t);        // before the recall
+  undo.mark('cam1', 'scene "Interview"', t + 100);
+  undo.record('cam1', 'fNumber', 400, 560, t + 200);
+  undo.record('cam1', 'fNumber', 560, 630, t + 5000);
+  undo.record('cam1', 'colorTemp', 5600, 3200, t + 6000);
+
+  const found = undo.popToMark('cam1');
+  assert.equal(found.mark.label, 'scene "Interview"');
+  assert.equal(found.values.fNumber, 400, 'must take the earliest from, not the latest');
+  assert.equal(found.values.colorTemp, 5600);
+
+  // What came before the mark survives, and is still individually undoable.
+  assert.equal(undo.popLast('cam1').from, 280);
+});
+
+test('a ramp does not fold across a mark', () => {
+  // Otherwise a nudge made just after a recall would rewrite the recall's own
+  // entry, and reverting would land on the nudge rather than before the recall.
+  const undo = new UndoHistory({ coalesceMs: 10_000 });
+  const t = Date.now();
+  undo.record('cam1', 'fNumber', 280, 400, t);
+  undo.mark('cam1', 'preset "Wide"', t + 10);
+  undo.record('cam1', 'fNumber', 400, 560, t + 20);
+
+  assert.equal(undo.summary().cam1.depth, 2);
+  assert.equal(undo.popToMark('cam1').values.fNumber, 400);
+});
+
+test('revert with no mark reports nothing rather than reverting everything', () => {
+  const undo = new UndoHistory();
+  undo.record('cam1', 'fNumber', 400, 800);
+  assert.equal(undo.popToMark('cam1'), null);
+  assert.equal(undo.summary().cam1.depth, 1, 'history must be left alone');
+});
+
+test('history is bounded', () => {
+  const undo = new UndoHistory({ limit: 5, coalesceMs: 0 });
+  for (let i = 0; i < 50; i++) undo.record('cam1', `p${i}`, i, i + 1);
+  assert.equal(undo.summary().cam1.depth, 5);
+});
+
+test('history is per camera', () => {
+  const undo = new UndoHistory();
+  undo.record('cam1', 'fNumber', 400, 800);
+  undo.record('cam2', 'colorTemp', 5600, 3200);
+  assert.equal(undo.popLast('cam1').prop, 'fNumber');
+  assert.equal(undo.popLast('cam2').prop, 'colorTemp');
+});
+
+test('a camera that drops loses its history', () => {
+  // The values it held before the outage are not somewhere it can be put back
+  // to; it may have been power-cycled since.
+  const undo = new UndoHistory();
+  undo.record('cam1', 'fNumber', 400, 800);
+  undo.forget('cam1');
+  assert.equal(undo.popLast('cam1'), null);
 });

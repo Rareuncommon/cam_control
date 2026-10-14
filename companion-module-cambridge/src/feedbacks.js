@@ -6,6 +6,8 @@
 // pressed is worth more than any action here.
 
 import { combineRgb } from '@companion-module/base';
+import { buildPtzFeedbacks } from './ptz.js';
+import { buildSelectionFeedbacks } from './select.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -15,7 +17,10 @@ const GREEN = combineRgb(40, 170, 80);
 const GREY = combineRgb(70, 70, 70);
 
 export function buildFeedbacks(self) {
-  const cameraChoices = self.cameraChoices();
+  // Exposure and record feedbacks mean nothing on a PTZ head; connection,
+  // tally and alarm feedbacks work on any camera.
+  const cameraChoices = self.cameraChoices('sony');
+  const anyChoices = self.cameraChoices();
   const cameraField = (extra = {}) => ({
     type: 'dropdown',
     id: 'camera',
@@ -24,8 +29,9 @@ export function buildFeedbacks(self) {
     choices: cameraChoices,
     ...extra,
   });
+  const anyCameraField = () => cameraField({ choices: anyChoices, default: anyChoices[0]?.id ?? '' });
 
-  return {
+  const sony = {
     recording: {
       name: 'Camera is recording',
       type: 'boolean',
@@ -68,7 +74,7 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: GREY, color: WHITE },
       options: [
-        cameraField(),
+        anyCameraField(),
         {
           type: 'dropdown', id: 'state', label: 'Is in state', default: 'connected',
           choices: [
@@ -102,7 +108,73 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: AMBER, color: BLACK },
       options: [],
-      callback: () => !self.camdConnected,
+      // At a venue with only PTZ heads there is no camd to be unreachable.
+      callback: () => self.camdUsed && !self.camdConnected,
+    },
+
+    // --- shoot alarms ---
+    // Evaluated by CamBridge and shipped with the state, so a Stream Deck key
+    // and the panel banner cannot disagree about whether a card is nearly full.
+
+    cameraAlarm: {
+      name: 'Camera has an alarm (card, battery, dropped record)',
+      type: 'boolean',
+      defaultStyle: { bgcolor: RED, color: WHITE },
+      options: [
+        anyCameraField(),
+        {
+          type: 'dropdown', id: 'level', label: 'At least', default: 'warn',
+          choices: [
+            { id: 'warn', label: 'Warning or worse' },
+            { id: 'critical', label: 'Critical only' },
+          ],
+        },
+        {
+          type: 'dropdown', id: 'code', label: 'Of kind', default: 'any',
+          choices: [
+            { id: 'any', label: 'Any alarm' },
+            { id: 'media', label: 'Card running out' },
+            { id: 'battery', label: 'Battery low' },
+            { id: 'recordDropped', label: 'Stopped recording on its own' },
+            { id: 'recordFailed', label: 'Recording failed' },
+            { id: 'offline', label: 'Offline' },
+          ],
+        },
+      ],
+      callback: (fb) => {
+        const list = self.alarmsByCamera?.[fb.options.camera] ?? [];
+        return list.some((a) =>
+          (fb.options.code === 'any' || a.code === fb.options.code)
+          && (fb.options.level !== 'critical' || a.level === 'critical'));
+      },
+    },
+
+    anyAlarm: {
+      name: 'Any camera has an alarm',
+      type: 'boolean',
+      defaultStyle: { bgcolor: RED, color: WHITE },
+      options: [
+        {
+          type: 'dropdown', id: 'level', label: 'At least', default: 'critical',
+          choices: [
+            { id: 'warn', label: 'Warning or worse' },
+            { id: 'critical', label: 'Critical only' },
+          ],
+        },
+      ],
+      callback: (fb) => (self.alarms ?? []).some(
+        (a) => fb.options.level !== 'critical' || a.level === 'critical'),
+    },
+
+    partiallyRolling: {
+      name: 'Some but not all cameras are rolling',
+      // The state nobody wants and everybody has been in: two cameras rolling,
+      // one not, and no way to see it without checking each button. Amber
+      // because red already means recording.
+      type: 'boolean',
+      defaultStyle: { bgcolor: AMBER, color: BLACK },
+      options: [],
+      callback: () => !!self.roll?.some,
     },
 
     propValue: {
@@ -158,7 +230,7 @@ export function buildFeedbacks(self) {
       type: 'boolean',
       defaultStyle: { bgcolor: RED, color: WHITE },
       options: [
-        cameraField(),
+        anyCameraField(),
         {
           type: 'dropdown', id: 'bus', label: 'Bus', default: 'program',
           choices: [
@@ -185,4 +257,6 @@ export function buildFeedbacks(self) {
       callback: (fb) => !!self.gangs?.[fb.options.gang || 'main']?.enabled,
     },
   };
+
+  return { ...sony, ...buildPtzFeedbacks(self), ...buildSelectionFeedbacks(self) };
 }

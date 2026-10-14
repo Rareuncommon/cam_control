@@ -333,3 +333,138 @@ test('recording variable distinguishes failed from idle', () => {
   assert.equal(values.b_recording, 'FAILED');
   assert.equal(values.recording_count, 1);
 });
+
+// --- shoot alarms -----------------------------------------------------------
+
+/** The envelope cambridge actually pushes: state plus what it derived from it. */
+function sampleFrame(over = {}) {
+  return {
+    view: sampleView(over.view ?? {}),
+    alarms: over.alarms ?? [],
+    alarmsByCamera: over.alarmsByCamera ?? {},
+    alarmSummary: over.alarmSummary ?? null,
+    roll: over.roll ?? null,
+    undo: over.undo ?? {},
+  };
+}
+
+test('a bare view is still accepted, so a stale server does not blank the panel', () => {
+  // /api/state used to return just the view. Handling both shapes means a
+  // module updated ahead of its server keeps working rather than showing
+  // nothing at all.
+  const { inst, captured } = makeInstance();
+  inst.applyState(sampleView());
+  assert.equal(captured.variables.camera_count, 2);
+  assert.equal(inst.alarms.length, 0);
+});
+
+test('alarms from the envelope drive the per-camera feedback', () => {
+  const { inst, captured } = makeInstance();
+  inst.applyState(sampleFrame({
+    alarms: [{ level: 'critical', cameraId: 'fx3', label: 'Wide', code: 'media',
+               message: 'card has 3 min left' }],
+    alarmsByCamera: {
+      fx3: [{ level: 'critical', cameraId: 'fx3', label: 'Wide', code: 'media',
+              message: 'card has 3 min left' }],
+    },
+  }));
+
+  const fb = captured.feedbacks.cameraAlarm;
+  assert.ok(fb, 'the alarm feedback must be registered');
+  assert.equal(fb.callback({ options: { camera: 'fx3', level: 'warn', code: 'any' } }), true);
+  assert.equal(fb.callback({ options: { camera: 'fx3', level: 'critical', code: 'media' } }), true);
+  // A key watching for a low battery must not light because a card is low.
+  assert.equal(fb.callback({ options: { camera: 'fx3', level: 'warn', code: 'battery' } }), false);
+  // Nor must a camera with no alarms at all.
+  assert.equal(fb.callback({ options: { camera: 'fx30-a', level: 'warn', code: 'any' } }), false);
+});
+
+test('a warning does not satisfy a critical-only feedback', () => {
+  const { inst, captured } = makeInstance();
+  inst.applyState(sampleFrame({
+    alarms: [{ level: 'warn', cameraId: 'fx3', label: 'Wide', code: 'battery',
+               message: 'battery is at 25%' }],
+    alarmsByCamera: {
+      fx3: [{ level: 'warn', cameraId: 'fx3', label: 'Wide', code: 'battery',
+              message: 'battery is at 25%' }],
+    },
+  }));
+  const any = captured.feedbacks.anyAlarm;
+  assert.equal(any.callback({ options: { level: 'warn' } }), true);
+  assert.equal(any.callback({ options: { level: 'critical' } }), false);
+});
+
+test('partially rolling lights only when some but not all cameras are rolling', () => {
+  const { inst, captured } = makeInstance();
+  const fb = () => captured.feedbacks.partiallyRolling.callback({ options: {} });
+
+  inst.applyState(sampleFrame({ roll: { total: 3, rolling: 2, all: false, some: true, idle: false } }));
+  assert.equal(fb(), true);
+
+  inst.applyState(sampleFrame({ roll: { total: 3, rolling: 3, all: true, some: false, idle: false } }));
+  assert.equal(fb(), false, 'all three rolling is the good state, not a warning');
+
+  inst.applyState(sampleFrame({ roll: { total: 3, rolling: 0, all: false, some: false, idle: true } }));
+  assert.equal(fb(), false, 'nothing rolling is idle, not a fault');
+});
+
+test('alarm and roll variables read as a human would say them', () => {
+  const { inst, captured } = makeInstance();
+  inst.applyState(sampleFrame({
+    alarms: [{ level: 'critical', cameraId: 'fx3', label: 'Wide', code: 'media',
+               message: 'card has 3 min left' }],
+    alarmsByCamera: {
+      fx3: [{ level: 'critical', cameraId: 'fx3', label: 'Wide', code: 'media',
+              message: 'card has 3 min left' }],
+    },
+    roll: { total: 3, rolling: 2, all: false, some: true, idle: false },
+  }));
+
+  assert.equal(captured.variables.rolling, '2 of 3');
+  assert.equal(captured.variables.alarm_count, 1);
+  assert.equal(captured.variables.alarm, 'Wide card has 3 min left');
+  assert.equal(captured.variables[`${varId('fx3')}_alarm`], 'card has 3 min left');
+  // A camera with no alarm must read empty, not carry the other camera's.
+  assert.equal(captured.variables[`${varId('fx30-a')}_alarm`], '');
+});
+
+test('card time is shown as a clock, and as an em dash when unreported', () => {
+  const values = buildVariableValues([
+    { id: 'a', label: 'A', state: 'connected', status: { mediaSlot1Sec: 754 }, properties: {} },
+    { id: 'b', label: 'B', state: 'connected', status: { mediaSlot1Sec: -1 }, properties: {} },
+    { id: 'c', label: 'C', state: 'connected', status: { mediaSlot1Sec: 7325 }, properties: {} },
+  ], {});
+  assert.equal(values.a_card, '12:34');
+  // Not "0:00" — that reads as a full card rather than an unknown one.
+  assert.equal(values.b_card, '—');
+  assert.equal(values.c_card, '2:02:05');
+});
+
+test('elapsed record time counts from the start the server sent', () => {
+  const now = 1_000_000;
+  const values = buildVariableValues([
+    { id: 'a', label: 'A', state: 'connected', recordStartedAt: now - 95_000,
+      status: { recording: true }, properties: {} },
+    { id: 'b', label: 'B', state: 'connected', recordStartedAt: null,
+      status: { recording: false }, properties: {} },
+  ], { now });
+  assert.equal(values.a_rectime, '1:35');
+  assert.equal(values.b_rectime, '');
+});
+
+test('undo actions are registered and target the right endpoints', () => {
+  const { inst, captured } = makeInstance();
+  const calls = [];
+  inst.api = { request: (method, path) => { calls.push(`${method} ${path}`); return { ok: true }; } };
+  inst.applyState(sampleFrame());
+
+  captured.actions.undo.callback({ options: { camera: 'fx3' } });
+  captured.actions.undoRecall.callback({ options: { camera: 'fx3' } });
+  captured.actions.acknowledge.callback({ options: { camera: 'fx3' } });
+
+  assert.deepEqual(calls, [
+    'POST /api/cameras/fx3/undo',
+    'POST /api/cameras/fx3/revert',
+    'POST /api/cameras/fx3/acknowledge',
+  ]);
+});

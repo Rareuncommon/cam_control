@@ -45,12 +45,18 @@
     "enabled": false,
     "host": "172.16.16.10",
     "port": 9910,
-    "$comment_mapping": "Which ATEM input each camera is plugged into, as numbered on the switcher.",
+    "$comment_mapping": "Which ATEM input each camera is plugged into, as numbered on the switcher. Used by both tally and Link.",
     "mapping": {
       "cam1": 1,
       "cam2": 2,
       "cam3": 3
-    }
+    },
+    "$comment_link": "ATEM Link: let a Blackmagic hardware panel or the Camera page drive Sony exposure. Still switcher-to-camera only — CamBridge never sends the switcher anything. OFF by default because the decoder's packet layout has not yet been confirmed against real hardware.",
+    "link": false,
+    "$comment_logRaw": "Capture mode. Logs every camera-control block the switcher sends, as hex next to how CamBridge read it, without acting on any of it. Turn this on first, move one control at a time on the panel, and check the two agree before setting link true.",
+    "logRaw": false,
+    "$comment_coalesceMs": "A panel wheel emits dozens of positions a second; only the newest is worth sending. Raise if a camera still struggles to keep up.",
+    "coalesceMs": 120
   },
 
   "visca": {
@@ -64,7 +70,48 @@
       "cam1": 1,
       "cam2": 2,
       "cam3": 3
-    }
+    },
+    "$comment_allow": "Controller addresses (or blocks) allowed to send commands. VISCA has no credentials and the PIN does not apply to it; empty accepts any host and says so in the log.",
+    "allow": [],
+    "$comment_cameraPorts": "A port per camera, for more than seven cameras or controllers that pick a camera by IP and port: { \"stage-left\": 52401 }.",
+    "cameraPorts": {},
+    "$comment_allowPresetStore": "Let a controller store over or delete a PTZ head's own presets. Recall always works.",
+    "allowPresetStore": false,
+    "$comment_udpHoldMs": "How long a UDP controller's PTZ move lasts without a repeat. TCP controllers are released when they disconnect.",
+    "udpHoldMs": 10000
+  },
+
+  "ptz": {
+    "$comment": "PTZ heads (Panasonic, Sony, Canon, PTZOptics) — see docs/ptz.md. The defaults suit most venues; these are the ones worth knowing.",
+    "$comment_deadmanMs": "A move not refreshed for this long is stopped.",
+    "deadmanMs": 500,
+    "$comment_tallyFromAtem": "Light the cameras' own tally lamps from the switcher. Leave off if Reactor already drives them.",
+    "tallyFromAtem": false
+  },
+
+  "skaarhoj": {
+    "$comment": "SKAARHOJ panel. 'reactor' (default): Reactor drives the cameras and CamBridge follows. 'drive': CamBridge drives the panel over Raw Panel — switch the panel to Raw Panel Mode first. See docs/skaarhoj.md.",
+    "mode": "reactor",
+    "host": "",
+    "port": 9923,
+    "mapping": {}
+  },
+
+  "alarms": {
+    "$comment": "When to warn about a card filling or a battery running down. Chosen against how long it takes to act, not round numbers: five minutes of card is about the time to notice, swap it and get back.",
+    "batteryWarnPct": 30,
+    "batteryCriticalPct": 15,
+    "mediaWarnSec": 900,
+    "mediaCriticalSec": 300
+  },
+
+  "auth": {
+    "$comment": "Who can control the cameras. With both PINs null the panel is OPEN — anyone on this network has full control and can read the camera passwords. Set a PIN from the Setup tab rather than editing this by hand; PINs are stored salted and hashed and never in the clear.",
+    "operatorPin": null,
+    "adminPin": null,
+    "$comment_roles": "Operators can drive every camera. Admin is needed for what outlasts a shoot: adopting, forgetting or re-credentialing a camera, and quitting the app. With no adminPin set, one PIN means one level of access.",
+    "$comment_tokens": "Machine clients — Bitfocus Companion, scripts — send 'Authorization: Bearer <token>' instead of a PIN, because they cannot answer a prompt. Map each token to the role it carries. Treat these like passwords.",
+    "tokens": {}
   },
 
   "cameras": [
@@ -90,6 +137,20 @@
         "password": "REPLACE_ME"
       },
       "fingerprint": ""
+    },
+    {
+      "$comment": "A PTZ head. Normally added from Setup (add-by-IP or bulk add), which writes this for you. vendor: panasonic | sony | canon | ptzoptics.",
+      "id": "stage-left",
+      "kind": "ptz",
+      "vendor": "panasonic",
+      "label": "Stage left",
+      "ip": "192.0.2.21",
+      "group": "Stage",
+      "auth": {
+        "username": "REPLACE_ME",
+        "password": "REPLACE_ME"
+      },
+      "options": {}
     },
     {
       "id": "cam3",

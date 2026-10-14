@@ -75,12 +75,25 @@ export class CamdClient extends EventEmitter {
       this.emit('event', payload);
     });
 
-    ws.addEventListener('error', () => {
-      // The close handler does the reconnect; an error alone is not actionable and
-      // Node emits both.
-    });
-
-    ws.addEventListener('close', () => {
+    // Both handlers go through here, and it runs once per socket.
+    //
+    // This used to reschedule only from 'close', on the belief that Node emits
+    // both. It does not: a socket that fails to *establish* — ECONNREFUSED,
+    // which is exactly what a restarting camd looks like — emits 'error' and
+    // no 'close' at all. So the first failed retry left reconnectTimer null
+    // with nothing scheduled, and cambridge stayed disconnected until someone
+    // restarted it by hand. HTTP kept working the whole time, so /api/health
+    // reported camd reachable while the panel showed every camera offline.
+    //
+    // That is the precise scenario this client exists for: camd restarting
+    // under launchd while cambridge keeps running.
+    let handled = false;
+    const down = (reason) => {
+      if (handled) return;
+      handled = true;
+      // A newer socket may already have replaced this one; its own handlers own
+      // the reconnect from here.
+      if (this.ws !== ws) return;
       const wasConnected = this.connected;
       this.connected = false;
       this.ws = null;
@@ -88,8 +101,11 @@ export class CamdClient extends EventEmitter {
         this.log('warn', 'camd connection lost');
         this.emit('camdDisconnected');
       }
-      this.#scheduleReconnect('socket closed');
-    });
+      this.#scheduleReconnect(reason);
+    };
+
+    ws.addEventListener('error', () => down('socket error'));
+    ws.addEventListener('close', () => down('socket closed'));
   }
 
   #scheduleReconnect(reason) {

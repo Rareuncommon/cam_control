@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AtemTally, tallyForCameras } from '../src/atem.js';
-import { ViscaServer } from '../src/visca.js';
+import { ViscaServer, matchesAllow } from '../src/visca.js';
 import { StateModel } from '../src/state.js';
 
 // --- ATEM -------------------------------------------------------------------
@@ -288,4 +288,171 @@ test('VISCA addresses fall back to camera order when nothing is mapped', () => {
   assert.equal(visca.cameraFor(1), 'a');
   assert.equal(visca.cameraFor(2), 'b');
   assert.equal(visca.cameraFor(3), null);
+});
+
+// --- VISCA forwarding to PTZ heads ---------------------------------------------
+
+function ptzViscaRig() {
+  const state = new StateModel();
+  state.replaceAll([{ id: 'canon', label: 'Canon', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  const entries = {
+    home: { id: 'homeAction', role: 'home', type: 'action' },
+    onePushAf: { id: 'afOnce', role: 'onePushAf', type: 'action' },
+    focusMode: { id: 'fm', role: 'focusMode', type: 'enum', autoValue: 'auto', manualValue: 'manual' },
+  };
+  const ptz = {
+    move: (id, v, o) => { calls.push(['move', id, v, o]); return { ok: true }; },
+    preset: async (id, op, n) => { calls.push(['preset', id, op, n]); return { ok: true }; },
+    action: async (id, e) => { calls.push(['action', id, e]); return { ok: true }; },
+    write: async (id, e, v) => { calls.push(['write', id, e, v]); return { ok: true }; },
+    entryByRole: (id, role) => entries[role] ?? null,
+    presetBase: () => 1,
+    releaseSource: (s) => calls.push(['release', s]),
+  };
+  const server = new ViscaServer({ state, ptz, applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  return { server, calls };
+}
+
+const COMPLETION_REPLY = [0x90, 0x51, 0xff];
+
+test('VISCA pan/tilt drives a PTZ head instead of being refused', async () => {
+  const { server, calls } = ptzViscaRig();
+  const tcp = { id: 'visca-tcp:x', tcp: true };
+  // Pan-tiltDrive: speed 0x0c both, right + up.
+  const r = await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x0c, 0x0c, 0x02, 0x01, 0xff]), tcp);
+  assert.deepEqual([...r.at(-1)], COMPLETION_REPLY);
+  const [, id, v, o] = calls[0];
+  assert.equal(id, 'canon');
+  assert.equal(v.pan, 0.5);
+  assert.equal(v.tilt, 0.5);
+  assert.deepEqual(o, { source: 'visca-tcp:x', latch: true });
+
+  // Stop, left/down, and a UDP controller's move is held, not latched.
+  await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x18, 0x01, 0x01, 0x02, 0xff]), { id: 'u', tcp: false });
+  assert.deepEqual(calls[1][2], { pan: -1, tilt: -1 / 0x18 });
+  assert.equal(calls[1][3].holdMs, 10_000);
+  await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff]), tcp);
+  assert.deepEqual(calls[2][2], { pan: 0, tilt: 0 });
+});
+
+test('VISCA zoom, focus, home, one-push and memory reach a PTZ head', async () => {
+  const { server, calls } = ptzViscaRig();
+  const send = (...b) => server.handlePacket(Buffer.from([0x81, 0x01, ...b, 0xff]), { id: 't', tcp: true });
+  await send(0x04, 0x07, 0x27);          // zoom tele, speed 7 = full
+  await send(0x04, 0x07, 0x30);          // zoom wide, speed 0 = slowest
+  await send(0x04, 0x07, 0x00);          // zoom stop
+  await send(0x04, 0x08, 0x02);          // focus far, standard
+  await send(0x06, 0x04);                // home
+  await send(0x04, 0x18, 0x01);          // one-push AF
+  await send(0x04, 0x38, 0x03);          // focus manual
+  await send(0x04, 0x3f, 0x02, 0x04);    // recall memory slot 4 -> preset 5
+  assert.deepEqual(calls.map((c) => c.slice(0, 4)), [
+    ['move', 'canon', { zoom: 1 }, { source: 't', latch: true }],
+    ['move', 'canon', { zoom: -0.125 }, { source: 't', latch: true }],
+    ['move', 'canon', { zoom: 0 }, { source: 't', latch: true }],
+    ['move', 'canon', { focus: 0.5 }, { source: 't', latch: true }],
+    ['action', 'canon', 'homeAction'],
+    ['action', 'canon', 'afOnce'],
+    ['write', 'canon', 'fm', 'manual'],
+    ['preset', 'canon', 'recall', 5],
+  ]);
+});
+
+test('a camera with its own VISCA port is that camera whatever address the packet carries', async () => {
+  const { createSocket } = await import('node:dgram');
+  const state = new StateModel();
+  state.replaceAll([
+    { id: 'one', label: 'One', state: 'connected' },
+    { id: 'two', label: 'Two', state: 'connected' },
+  ], null, 'ptz');
+  const calls = [];
+  const ptz = {
+    move: (id, v) => { calls.push([id, v]); return { ok: true }; },
+    preset: async () => ({ ok: true }), action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1, releaseSource: () => {},
+  };
+  const base = 41000 + Math.floor(Math.random() * 2000);
+  const server = new ViscaServer({ state, ptz, port: base, tcp: false, cameraPorts: { two: base + 1 },
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  await server.start();
+  const client = createSocket('udp4');
+  try {
+    // Each command is answered twice — ACK, then Completion — so wait for both.
+    const send = (port) => new Promise((resolve) => {
+      let n = 0;
+      const on = () => { if (++n === 2) { client.off('message', on); resolve(); } };
+      client.on('message', on);
+      // Address 1 on both ports: on the shared port that is the first camera,
+      // on camera two's own port it is camera two.
+      client.send(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x18, 0x18, 0x02, 0x03, 0xff]), port, '127.0.0.1');
+    });
+    await send(base);
+    await send(base + 1);
+    assert.deepEqual(calls.map((c) => c[0]), ['one', 'two']);
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});
+
+test('VISCA over TCP: a stop split across chunks, and a drive and stop in one chunk, both arrive', async () => {
+  const net = await import('node:net');
+  const state = new StateModel();
+  state.replaceAll([{ id: 'one', label: 'One', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  const ptz = {
+    move: (id, v, o) => { calls.push(v); return { ok: true }; },
+    preset: async () => ({ ok: true }), action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1, releaseSource: () => {},
+  };
+  const port = 43000 + Math.floor(Math.random() * 2000);
+  const server = new ViscaServer({ state, ptz, port, tcp: true,
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  await server.start();
+  const sock = net.connect(port, '127.0.0.1');
+  await new Promise((r) => sock.once('connect', r));
+  try {
+    const drive = [0x81, 0x01, 0x06, 0x01, 0x10, 0x10, 0x01, 0x03, 0xff];
+    const stop = [0x81, 0x01, 0x06, 0x01, 0x10, 0x10, 0x03, 0x03, 0xff];
+    sock.write(Buffer.from([...drive, ...stop]));          // coalesced
+    await new Promise((r) => setTimeout(r, 100));
+    sock.write(Buffer.from(drive));
+    await new Promise((r) => setTimeout(r, 50));
+    sock.write(Buffer.from(stop.slice(0, 5)));             // split
+    await new Promise((r) => setTimeout(r, 50));
+    sock.write(Buffer.from(stop.slice(5)));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(calls.map((v) => v.pan === 0 ? 'stop' : 'drive'), ['drive', 'stop', 'drive', 'stop']);
+  } finally {
+    sock.destroy();
+    await server.stop();
+  }
+});
+
+test('VISCA refuses controllers outside the allowlist, and preset store unless enabled', async () => {
+  const state = new StateModel();
+  state.replaceAll([{ id: 'one', label: 'One', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  const ptz = {
+    move: () => ({ ok: true }), preset: async (id, op, n) => { calls.push([op, n]); return { ok: true }; },
+    action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1, releaseSource: () => {},
+  };
+  const server = new ViscaServer({ state, ptz, allow: ['192.0.2.0/24'],
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  const p = { id: 't', tcp: true };
+  const store = await server.handlePacket(Buffer.from([0x81, 0x01, 0x04, 0x3f, 0x01, 0x02, 0xff]), p);
+  assert.deepEqual([...store.at(-1)], [0x90, 0x61, 0x41, 0xff], 'store refused');
+  await server.handlePacket(Buffer.from([0x81, 0x01, 0x04, 0x3f, 0x02, 0x02, 0xff]), p);
+  assert.deepEqual(calls, [['recall', 3]], 'recall still works');
+});
+
+test('the VISCA allowlist matches addresses and blocks, including IPv4-mapped forms', () => {
+  assert.equal(matchesAllow('192.0.2.7', ['192.0.2.0/24']), true);
+  assert.equal(matchesAllow('::ffff:192.0.2.7', ['192.0.2.0/24']), true);
+  assert.equal(matchesAllow('198.51.100.7', ['192.0.2.0/24']), false);
+  assert.equal(matchesAllow('192.0.2.7', ['192.0.2.7']), true);
+  assert.equal(matchesAllow('192.0.2.8', ['192.0.2.7']), false);
+  assert.equal(matchesAllow('192.0.2.8', ['nonsense', '192.0.2.8/32']), true);
 });

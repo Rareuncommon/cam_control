@@ -38,7 +38,11 @@ EOF
   exit 1
 fi
 
-if [[ ! -x ./camd/build/camd ]]; then
+# PTZ-only venues have no Sony bodies and so no daemon; the server decides
+# (camdNeeded in venue.js) and this asks it rather than keeping a copy of the rule.
+NEED_CAMD="$(node "${REPO_ROOT}/cambridge/src/venue.js" "${CONFIG}" 2>/dev/null || echo yes)"
+
+if [[ "${NEED_CAMD}" == yes && ! -x ./camd/build/camd ]]; then
   echo "camd is not built. Run: cmake -S camd -B camd/build && cmake --build camd/build" >&2
   exit 1
 fi
@@ -53,7 +57,9 @@ read -r CAMD_PORT CAMBRIDGE_PORT <<<"$(
 )"
 
 busy() { lsof -ti:"$1" >/dev/null 2>&1; }
-for port_name in "${CAMD_PORT}:camd" "${CAMBRIDGE_PORT}:cambridge"; do
+PORT_NAMES=("${CAMBRIDGE_PORT}:cambridge")
+[[ "${NEED_CAMD}" == yes ]] && PORT_NAMES+=("${CAMD_PORT}:camd")
+for port_name in "${PORT_NAMES[@]}"; do
   port="${port_name%%:*}"; name="${port_name##*:}"
   if busy "${port}"; then
     echo "Port ${port} (${name}) is already in use." >&2
@@ -75,32 +81,36 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-echo "Starting camd${CAMD_ARGS[*]+ ${CAMD_ARGS[*]}}…"
-./camd/build/camd --config "${CONFIG}" ${CAMD_ARGS[@]+"${CAMD_ARGS[@]}"} &
-CAMD_PID=$!
+if [[ "${NEED_CAMD}" == yes ]]; then
+  echo "Starting camd${CAMD_ARGS[*]+ ${CAMD_ARGS[*]}}…"
+  ./camd/build/camd --config "${CONFIG}" ${CAMD_ARGS[@]+"${CAMD_ARGS[@]}"} &
+  CAMD_PID=$!
 
-# Wait for camd to answer before starting the UI, so the browser never opens
-# onto a "camd unreachable" banner that is really just a startup race.
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
-    break
-  fi
-  if ! kill -0 "${CAMD_PID}" 2>/dev/null; then
-    echo "camd exited during startup — see the output above." >&2
+  # Wait for camd to answer before starting the UI, so the browser never opens
+  # onto a "camd unreachable" banner that is really just a startup race.
+  for _ in $(seq 1 50); do
+    if curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
+      break
+    fi
+    if ! kill -0 "${CAMD_PID}" 2>/dev/null; then
+      echo "camd exited during startup — see the output above." >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+
+  if ! curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
+    echo "camd did not become healthy within 10s." >&2
     exit 1
   fi
-  sleep 0.2
-done
-
-if ! curl -fsS "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1; then
-  echo "camd did not become healthy within 10s." >&2
-  exit 1
+  echo "camd is up on 127.0.0.1:${CAMD_PORT}"
+else
+  echo "PTZ cameras only — camd is not needed and not started."
 fi
-echo "camd is up on 127.0.0.1:${CAMD_PORT}"
 
 node cambridge/src/server.js --config "${CONFIG}" &
 CAMBRIDGE_PID=$!
 
 echo
-echo "Ctrl-C stops both."
+[[ "${NEED_CAMD}" == yes ]] && echo "Ctrl-C stops both." || echo "Ctrl-C stops it."
 wait
