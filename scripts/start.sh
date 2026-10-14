@@ -94,6 +94,22 @@ camd_health() {
     "http://127.0.0.1:${CAMD_PORT}/health" >/dev/null 2>&1
 }
 
+# With no cameras yet camd is optional, and a camd that cannot run here — built
+# without the Sony SDK, which CMake does by itself when the SDK is absent — is
+# the same as one not built: CamBridge starts without it instead of refusing.
+camd_unavailable() {
+  if [[ "${CAMD_MODE}" == optional ]]; then
+    [[ -n "${CAMD_PID:-}" ]] && kill "${CAMD_PID}" 2>/dev/null
+    CAMD_PID=""
+    NEED_CAMD=no
+    export CAMBRIDGE_CAMD=off
+    echo "camd could not start ($1) — starting without it, as no Sony bodies are configured."
+    return 0
+  fi
+  echo "camd $1." >&2
+  exit 1
+}
+
 if [[ "${NEED_CAMD}" == yes ]]; then
   echo "Starting camd${CAMD_ARGS[*]+ ${CAMD_ARGS[*]}}…"
   ./camd/build/camd --config "${CONFIG}" ${CAMD_ARGS[@]+"${CAMD_ARGS[@]}"} &
@@ -101,22 +117,19 @@ if [[ "${NEED_CAMD}" == yes ]]; then
 
   # Wait for camd to answer before starting the UI, so the browser never opens
   # onto a "camd unreachable" banner that is really just a startup race.
+  camd_state=starting
   for _ in $(seq 1 50); do
-    if camd_health; then
-      break
-    fi
-    if ! kill -0 "${CAMD_PID}" 2>/dev/null; then
-      echo "camd exited during startup — see the output above." >&2
-      exit 1
-    fi
+    if camd_health; then camd_state=up; break; fi
+    if ! kill -0 "${CAMD_PID}" 2>/dev/null; then camd_state=exited; break; fi
     sleep 0.2
   done
-
-  if ! camd_health; then
-    echo "camd did not become healthy within 10s." >&2
-    exit 1
+  if [[ "${camd_state}" == up ]] || camd_health; then
+    echo "camd is up on 127.0.0.1:${CAMD_PORT}"
+  elif [[ "${camd_state}" == exited ]]; then
+    camd_unavailable "exited during startup — see the output above"
+  else
+    camd_unavailable "did not become healthy within 10s"
   fi
-  echo "camd is up on 127.0.0.1:${CAMD_PORT}"
 elif [[ "${CAMD_MODE}" == optional ]]; then
   echo "No Sony bodies configured and camd is not built — starting without it."
   echo "PTZ, stills and cinema cameras need nothing more; Sony bodies need camd (docs/install.md)."

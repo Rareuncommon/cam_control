@@ -39,7 +39,13 @@ Still open from that work:
    and reports an unconfirmed one by name.)
 3. **USB stills** need gphoto2 and a helper built per Mac; the DMG does not
    carry them ([stills-cinema-control.md](stills-cinema-control.md)).
-4. Hardware acceptance for everything beyond the FX3/FX30 rig.
+4. **Blackmagic credentials** go out with every request, by default over plain
+   HTTP, before the camera's product name is checked — so whatever answers at
+   that address receives them. HTTPS will likely meet a self-signed
+   certificate the adapter does not accept. Decide how these cameras should
+   authenticate (many need none on a closed network) before storing passwords
+   for them.
+5. Hardware acceptance for everything beyond the FX3/FX30 rig.
 
 ## 2026-09-12 stills and cinema expansion
 

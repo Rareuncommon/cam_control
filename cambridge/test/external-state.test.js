@@ -144,3 +144,102 @@ test('with PTZ heads and a Blackmagic body: patches carry only the changed camer
   await call('POST', '/api/record-all', { start: false });
   assert.equal(sim.state.recording, false);
 });
+
+test('an unusable stills/cinema entry is refused on add, and skipped (not fatal) at start-up', async (t) => {
+  resetFakeHeads();
+  const { createServer } = await import('node:http');
+  const { once } = await import('node:events');
+  const { readFileSync } = await import('node:fs');
+  // Something at the camera's address that reports a 300-character product name.
+  const longName = `Blackmagic ${'X'.repeat(300)}`;
+  const sim = createServer((req, res) => {
+    const path = req.url.replace('/control/api/v1', '');
+    const data = { '/system/product': { productName: longName }, '/transports/0/record': { recording: false } }[path];
+    if (!data) { res.writeHead(404); res.end(); return; }
+    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(data));
+  });
+  sim.listen(0, '127.0.0.1'); await once(sim, 'listening');
+  const dir = mkdtempSync(join(tmpdir(), 'cambridge-external-bad-'));
+  const configPath = join(dir, 'cambridge.json');
+  const head = { id: 'wide', kind: 'ptz', vendor: 'fake', label: 'Wide', ip: 'fake-ext-bad' };
+  writeFileSync(configPath, JSON.stringify({
+    cambridge: { bind: '127.0.0.1', port: 0 }, logging: { dir: join(dir, 'logs'), level: 'error' }, cameras: [head],
+  }));
+  let app = createApp({ configPath });
+  const { port } = await app.start();
+  t.after(async () => { await app?.stop(); sim.close(); rmSync(dir, { recursive: true, force: true }); });
+  const r = await fetch(`http://127.0.0.1:${port}/api/external/cameras`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'ext-bm', provider: 'blackmagic-rest', host: '127.0.0.1', port: sim.address().port }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /identity CamBridge cannot store/);
+  assert.equal(JSON.parse(readFileSync(configPath, 'utf8')).external?.cameras?.length ?? 0, 0, 'nothing saved');
+  await app.stop(); app = null;
+
+  // A hand-edited entry that does not validate: the rest still starts.
+  writeFileSync(configPath, JSON.stringify({
+    cambridge: { bind: '127.0.0.1', port: 0 }, logging: { dir: join(dir, 'logs'), level: 'error' }, cameras: [head],
+    external: { cameras: [{ id: 'ext-typo', provider: 'blackmagic-rest', host: '127.0.0.1', port: '80' }] },
+  }));
+  app = createApp({ configPath });
+  await app.start();
+  assert.equal(app.external.has('ext-typo'), false);
+  await until(() => app.state.get('wide')?.state === 'connected');
+  assert.equal(JSON.parse(readFileSync(configPath, 'utf8')).external.cameras.length, 1, 'the entry is left for someone to correct');
+});
+
+test('a Sony body whose recording failed still counts against "all rolling"', async () => {
+  const { rollState } = await import('../src/takelog.js');
+  const roll = rollState([
+    { id: 'a', kind: 'cine', state: 'connected', status: { recording: true }, capabilities: { record: { available: true } } },
+    // Recording FAILED: the Sony record capability goes false, but this is
+    // the camera "all rolling" must not forget.
+    { id: 'b', kind: 'cine', state: 'connected', status: { recording: false, recordingState: 2 }, capabilities: { record: { available: false } } },
+    { id: 'c', kind: 'external', state: 'connected', status: { recording: null }, capabilities: { record: { available: false } } },
+  ]);
+  assert.equal(roll.total, 2, 'the stills body that cannot record is left out; the failed Sony body is not');
+  assert.equal(roll.all, false);
+});
+
+test('a stills/cinema camera keeps its tally, logs its takes and raises a dropped recording', () => {
+  const state = new StateModel();
+  state.applyExternal([cinema()]);
+  state.get('ext-a').tally = { program: true, preview: false };
+
+  state.applyExternal([cinema({ status: { recording: true, recordingState: 1, battery: -1 } })]);
+  const cam = state.get('ext-a');
+  assert.deepEqual(cam.tally, { program: true, preview: false }, 'an update keeps the switcher tally');
+  assert.ok(cam.recordStartedAt, 'the record timer starts');
+  assert.equal(state.takes.length, 1);
+
+  // It stops without anyone asking: a full card, a camera that gave up.
+  state.applyExternal([cinema({ status: { recording: false, recordingState: 0, battery: -1 } })]);
+  assert.equal(state.get('ext-a').status.recordDropped, true);
+  assert.equal(state.takes[0].dropped, true);
+
+  // Started again, then stopped from CamBridge: not a drop.
+  state.applyExternal([cinema({ status: { recording: true, recordingState: 1, battery: -1 } })]);
+  state.markRecordIntent('ext-a', 'stop');
+  state.applyExternal([cinema({ status: { recording: false, recordingState: 0, battery: -1 } })]);
+  assert.equal(state.get('ext-a').status.recordDropped, false);
+  assert.equal(state.takes.at(-1).dropped, false);
+});
+
+test('a background status poll that changes nothing sends nothing', async () => {
+  const { ExternalManager } = await import('../src/external/manager.js');
+  let saved = { cameras: [], external: { cameras: [{ id: 'ext-a', provider: 'blackmagic-rest', host: '127.0.0.1', port: 80 }] } };
+  const snap = { productName: 'Blackmagic PYXIS 6K', recording: false, canRecord: true, controls: [] };
+  const adapter = { snapshot: async () => { await sleep(30); return structuredClone(snap); } };
+  const manager = new ExternalManager({ adoption: { readConfig: () => structuredClone(saved), writeConfig: (c) => { saved = c; } }, factory: () => adapter });
+  const state = new StateModel();
+  manager.on('change', () => state.applyExternal(manager.view()));
+  state.applyExternal(manager.view());
+  await manager.action('ext-a', 'status');           // first contact: offline -> connected
+  const events = [];
+  state.on('change', (c) => events.push(c));
+  for (let i = 0; i < 3; i++) await manager.action('ext-a', 'status');
+  assert.deepEqual(events, [], 'three unchanged polls, no updates');
+  // And a command arriving during a poll waits for it rather than failing.
+  const poll = manager.action('ext-a', 'status');
+  await assert.doesNotReject(manager.action('ext-a', 'refresh'));
+  await poll;
+});

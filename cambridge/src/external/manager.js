@@ -20,10 +20,16 @@ export function validateExternal(input) {
   return { ...c, host: input.host, port, https: input.https === true, username: input.username || '', password: input.password || '', ...(input.productName ? { productName: input.productName } : {}) };
 }
 export class ExternalManager extends EventEmitter {
-  constructor({ adoption, factory, discover = async () => parseDiscovery(await runGphoto(['--auto-detect'])) }) {
+  constructor({ adoption, factory, log = () => {}, discover = async () => parseDiscovery(await runGphoto(['--auto-detect'])) }) {
     super(); this.adoption = adoption; this.cameras = new Map(); this.discover = discover; this.closing = false; this.mutating = false;
     this.factory = factory || (c => c.provider === 'gphoto2' ? new GphotoCamera(c) : new BlackmagicCamera(c));
-    for (const c of adoption.readConfig().external?.cameras ?? []) this.install(validateExternal(c));
+    // One unusable saved entry is skipped and named, never fatal: it used to
+    // stop CamBridge starting at all, PTZ heads and Sony bodies included.
+    // The entry stays in the config for someone to correct.
+    for (const c of adoption.readConfig().external?.cameras ?? []) {
+      try { this.install(validateExternal(c)); }
+      catch (error) { log('error', `stills/cinema camera ${JSON.stringify(String(c?.id ?? '?').slice(0, 80))} skipped: ${error.message} — correct or remove it in the config`); }
+    }
   }
   install(config, snapshot) { const c = { config, adapter: this.factory(config), snapshot, state: snapshot ? 'connected' : 'offline', busy: false, tasks: new Set(), revision: 0 }; this.cameras.set(config.id, c); return c; }
   has(id) { return this.cameras.has(id); }
@@ -42,6 +48,10 @@ export class ExternalManager extends EventEmitter {
       const snapshot = await this.factory(config).snapshot();
       if (config.provider === 'gphoto2') { config.serial = snapshot.serial; if ([...this.cameras.values()].some(c => c.config.serial === config.serial)) throw new Error('USB camera serial already added'); }
       else { config.productName = snapshot.productName; config.model = snapshot.productName; }
+      // What the camera reported is held to the same rules as what is loaded
+      // at start-up, so a camera that answers with an unusable identity is
+      // refused now rather than saved and refused on every restart.
+      try { validateExternal(config); } catch (error) { throw new Error(`The camera reported an identity CamBridge cannot store (${error.message})`); }
       const latest = this.adoption.readConfig(); latest.external ??= {}; latest.external.cameras ??= []; latest.external.cameras.push(config);
       this.adoption.writeConfig(latest); this.install(config, snapshot); this.emit('change'); return this.view().find(c => c.id === config.id);
     } finally { this.mutating = false; }
@@ -54,7 +64,7 @@ export class ExternalManager extends EventEmitter {
   view() { return [...this.cameras.values()].map(c => ({ id: c.config.id, label: c.config.label, model: c.config.model, provider: c.config.provider, transport: c.config.provider === 'gphoto2' ? 'USB' : 'HTTP', ip: c.config.host ?? c.config.port,
     state: c.state, detail: c.error, properties: {}, status: { recording: c.snapshot?.recording ?? null, recordingState: c.snapshot?.recording === true ? 1 : c.snapshot?.recording === false ? 0 : -1, battery: -1, mediaSlot1Sec: -1, mediaSlot2Sec: -1 },
     capabilities: this.capabilities(c),
-    external: { controls: c.snapshot?.controls ?? [], busy: c.busy, verification: 'hardware-validation-pending' } })); }
+    external: { controls: c.snapshot?.controls ?? [], busy: c.busy && !c.polling, verification: 'hardware-validation-pending' } })); }
   capabilities(c) {
     const connected = c.state === 'connected';
     // USB settings/capture need the separate mutation helper (audit DC-6); say
@@ -73,7 +83,9 @@ export class ExternalManager extends EventEmitter {
     if (!['refresh', 'status', 'set', 'capture', 'recordStart', 'recordStop'].includes(action)) throw new RangeError('Action is unavailable for this camera');
     if (action === 'recordStop' && c.stopTask) return c.stopTask;
     if (c.busy && action !== 'recordStop') {
-      if (action === 'recordStart' && c.polling) { const queuedRevision = c.revision; await Promise.allSettled([...c.tasks]); if (c.revision !== queuedRevision) throw new Error('Queued Start superseded by a newer command'); return this.action(id, action, body); }
+      // A background status poll never refuses a command; the command waits
+      // for it. That is also why a poll does not show the camera as busy.
+      if (c.polling) { const queuedRevision = c.revision; await Promise.allSettled([...c.tasks]); if (c.revision !== queuedRevision) throw new Error('Queued Start superseded by a newer command'); return this.action(id, action, body); }
       throw new Error('Camera is busy; wait for the current command');
     }
     const rev = ++c.revision; c.busy = true; c.polling = action === 'status'; this.emit('change');

@@ -156,14 +156,24 @@ if [[ "${NEED_CAMD}" == yes ]]; then
         sleep 0.2
     done
 
-    if [[ "${healthy}" != true ]]; then
+    if [[ "${healthy}" == true ]]; then
+        say "camd healthy on ${CAMD_PORT}"
+    elif [[ "${CAMD_MODE}" == optional ]]; then
+        # No cameras yet, and a camd that cannot run here (built without the
+        # Sony SDK, which CMake does by itself when it is absent): start
+        # without it rather than refuse. PTZ, stills and cinema need none.
+        kill "${CAMD_PID}" 2>/dev/null
+        CAMD_PID=""
+        NEED_CAMD=no
+        export CAMBRIDGE_CAMD=off
+        say "camd could not start; no Sony bodies configured, so starting without it"
+    else
         alert "CamBridge could not start" \
           "The camera daemon did not start.
 
 This is usually the Sony SDK missing from vendor/CrSDK, or a configuration error. The log has the details."
         exit 1
     fi
-    say "camd healthy on ${CAMD_PORT}"
 else
     say "no Sony bodies — not starting camd"
 fi

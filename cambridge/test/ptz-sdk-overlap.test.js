@@ -66,3 +66,24 @@ test('a camd that still reports a PTZ head as its own cannot replace the head', 
   assert.notEqual(stage.detail, 'camd');
   assert.equal(app.state.get('cam1').kind, 'cine', 'the Sony body still arrives');
 });
+
+test('"ext-" ids are kept for stills and cinema cameras', async (t) => {
+  const { Adoption } = await import('../src/adopt.js');
+  const dir = mkdtempSync(join(tmpdir(), 'cambridge-ext-id-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const configPath = join(dir, 'cambridge.json');
+  writeFileSync(configPath, JSON.stringify({ cameras: [] }));
+  const log = { info() {}, warn() {}, error() {} };
+  const ptz = { add() {} };
+  // A camd that has discovered the Sony body being adopted.
+  const camd = { request: async (method, path) => (path === '/discovered'
+    ? { ok: true, body: { discovered: [{ mac: '00:11:22:33:44:66', model: 'ILME-FX3', ip: '192.0.2.61', accessAuthRequired: false }] } }
+    : { ok: true, body: {} }) };
+  const adoption = new Adoption(configPath, camd, log, ptz);
+  const r = await adoption.addPtz({ ip: '192.0.2.60', vendor: 'fake', id: 'ext-head' });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /"ext-"/);
+  const s = await adoption.adopt({ mac: '00:11:22:33:44:66', model: 'ILME-FX3', id: 'EXT-cam' });
+  assert.equal(s.ok, false);
+  assert.match(s.error, /"ext-"/);
+});

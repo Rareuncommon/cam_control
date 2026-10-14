@@ -77,8 +77,9 @@
     "cameraPorts": {},
     "$comment_allowPresetStore": "Let a controller store over or delete a PTZ head's own presets. Recall always works.",
     "allowPresetStore": false,
-    "$comment_udpHoldMs": "How long a UDP controller's PTZ move lasts without a repeat. TCP controllers are released when they disconnect.",
-    "udpHoldMs": 10000
+    "$comment_udpHoldMs": "How long a UDP controller's PTZ move lasts without a repeat. TCP controllers are released when they disconnect, and after tcpHoldMs without a repeat in case the link dies without closing.",
+    "udpHoldMs": 10000,
+    "tcpHoldMs": 60000
   },
 
   "ptz": {

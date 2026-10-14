@@ -215,6 +215,16 @@ export class StateModel extends EventEmitter {
 
   applyStatus(ev) {
     const cam = this.ensure(ev.cameraId);
+    this.#applyStatusTo(cam, ev);
+    this.emit('change', { type: 'statusUpdate', cameraId: ev.cameraId });
+  }
+
+  /**
+   * A camera's new status, with what follows from it: a take opened or
+   * closed, the record timer, and a recording that stopped without being
+   * asked to. Shared by every camera that records, whatever drives it.
+   */
+  #applyStatusTo(cam, ev) {
     const before = cam.status;
     const next = statusFrom(ev);
 
@@ -247,7 +257,6 @@ export class StateModel extends EventEmitter {
     }
 
     cam.status = next;
-    this.emit('change', { type: 'statusUpdate', cameraId: ev.cameraId });
   }
 
   #openTakeFor(cameraId) {
@@ -394,7 +403,7 @@ export class StateModel extends EventEmitter {
       if (existing && (existing.source ?? 'camd') !== 'external') continue;
       const signature = JSON.stringify(snap);
       if (existing?.externalSignature === signature) continue;
-      this.cameras.set(snap.id, {
+      const { status, ...fields } = {
         ...this.#fromSnapshot(snap, 'external'),
         kind: 'external',
         vendor: snap.provider === 'blackmagic-rest' ? 'blackmagic' : 'gphoto2',
@@ -403,9 +412,14 @@ export class StateModel extends EventEmitter {
         external: snap.external ?? null,
         properties: {},
         externalSignature: signature,
-      });
+      };
+      // Updated in place, so what is not in the view — tally from the
+      // switcher, the record timer — survives the camera's next poll.
+      const cam = existing ?? { tally: null };
+      Object.assign(cam, fields);
+      this.#applyStatusTo(cam, snap.status ?? {});
       if (existing) this.emit('change', { type: 'connectionState', cameraId: snap.id });
-      else reshaped = true;
+      else { this.cameras.set(snap.id, cam); reshaped = true; }
     }
     for (const [id, cam] of [...this.cameras]) {
       if (cam.source === 'external' && !seen.has(id)) { this.cameras.delete(id); reshaped = true; }

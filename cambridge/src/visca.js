@@ -143,8 +143,10 @@ const IRIS_STEP = 1;
 // terminator. Anything claiming more is not VISCA (audit CS5).
 const MAX_MESSAGE = 16;
 // Complete messages one TCP controller may have waiting for the camera. A
-// peer beyond this is not a controller, and is disconnected (audit CS5).
-const MAX_QUEUED = 32;
+// peer beyond this is not a controller, and is disconnected (audit CS5). Not
+// lower: a joystick repeating its drive at 25 Hz behind a slow preset recall
+// queues dozens, and cutting it off mid-shot would be the wrong failure.
+const MAX_QUEUED = 256;
 
 export class ViscaServer {
   /**
@@ -158,7 +160,7 @@ export class ViscaServer {
    * @param {(level: string, msg: string) => void} opts.log
    */
   constructor({ state, applyFn, actionFn, recallPreset, savePreset, mapping = {},
-    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 10_000,
+    bind = '0.0.0.0', port = 52381, tcp = true, log = () => {}, ptz = null, udpHoldMs = 10_000, tcpHoldMs = 60_000,
     cameraPorts = {}, allow = [], allowPresetStore = false }) {
     /**
      * Controller addresses allowed to send commands. Empty means any host —
@@ -200,10 +202,18 @@ export class ViscaServer {
     /**
      * How long a move from a UDP controller is held without a repeat. UDP has
      * no connection to watch, so a controller that crashes mid-move would
-     * otherwise leave the head moving for ever; TCP controllers latch instead
-     * and are released when their socket closes.
+     * otherwise leave the head moving for ever.
      */
     this.udpHoldMs = udpHoldMs;
+    /**
+     * The same for a TCP controller, which a held stick may leave silent for
+     * a long time. Its moves are released the moment its connection closes —
+     * but a pulled cable or a dead switch closes nothing, and a move held
+     * "until the socket closes" panned on with nobody able to stop it from the
+     * controller. So a TCP move also lapses after this long without a repeat,
+     * and the socket keeps TCP keepalive on so a dead peer is noticed sooner.
+     */
+    this.tcpHoldMs = tcpHoldMs;
     this.applyFn = applyFn;
     this.actionFn = actionFn;
     this.recallPreset = recallPreset;
@@ -274,6 +284,7 @@ export class ViscaServer {
             return;
           }
           l.sockets.add(socket);
+          socket.setKeepAlive(true, 2000);
           const peer = { id: `visca-tcp:${socket.remoteAddress}:${socket.remotePort}`, tcp: true, cameraId };
           let carry = Buffer.alloc(0);
           let chain = Promise.resolve();
@@ -305,8 +316,8 @@ export class ViscaServer {
             chain = chain.then(async () => {
               for (const m of messages) {
                 waiting -= 1;
-                // A controller already gone must not start a move: its moves
-                // latch, and the release for it has already been sent.
+                // A controller already gone must not start a move: the release
+                // for it has already been sent, so nothing would stop it early.
                 if (peer.closed) continue;
                 const reply = await this.#handleMessage(m, peer);
                 if (peer.closed) this.ptz?.releaseSource(peer.id);
@@ -599,7 +610,7 @@ export class ViscaServer {
    */
   async #ptzCommand(cam, bytes, peer, routeKey) {
     const [group, code, ...args] = bytes;
-    const hold = peer.tcp ? { source: peer.id, latch: true } : { source: peer.id, holdMs: this.udpHoldMs };
+    const hold = { source: peer.id, holdMs: peer.tcp ? this.tcpHoldMs : this.udpHoldMs };
     const moving = this.motionByRoute ??= new Map();
     const move = (v) => {
       // Remember where this controller's motion went while any axis moves,

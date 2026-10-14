@@ -213,7 +213,9 @@ class CambridgeInstance extends InstanceBase {
       ...c,
       state: 'unknown',
       tally: null,
-      status: { ...(c.status ?? {}), recording: false, recordingFailed: false, recordingState: -1 },
+      // Not "idle": nobody can see whether it is rolling. Null reads as unknown
+      // everywhere, and lights no record button.
+      status: { ...(c.status ?? {}), recording: null, recordingFailed: false, recordingState: -1 },
     }));
     this.roll = null;
     this.ptzCams = this.cameras.filter(isPtz);
