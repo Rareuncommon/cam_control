@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -90,6 +90,21 @@ test('the camd event socket follows camd.restPort unless camdUrl is set', () => 
     writeFileSync(configPath, JSON.stringify({ ...base, cambridge: { camdUrl: 'ws://127.0.0.1:19999/events' } }));
     app = createApp({ configPath });
     assert.equal(app.camd.wsUrl, 'ws://127.0.0.1:19999/events');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the launcher helpers run from a path with a space and through a symlink', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cambridge venue '));
+  try {
+    const link = join(dir, 'repo link');
+    symlinkSync(ROOT, link);
+    const target = join(dir, 'cambridge.json');
+    const venue = join(link, 'cambridge', 'src', 'venue.js');
+    execFileSync(process.execPath, [venue, '--init', target, EXAMPLE]);
+    assert.equal(execFileSync(process.execPath, [venue, target]).toString(), 'optional',
+      'it used to exit 0 having done nothing');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

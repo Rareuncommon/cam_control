@@ -29,7 +29,7 @@ import { evaluate as evaluateAlarms, summarise, byCamera, resolveThresholds, DEF
 import { report as takeReport, rollState } from './takelog.js';
 import { Auth, hashPin } from './auth.js';
 import { PtzSource } from './ptz/source.js';
-import { camdNeeded, isPtzEntry } from './venue.js';
+import { camdNeeded, isPtzEntry, isMainModule } from './venue.js';
 import { detect as detectPtz } from './ptz/detect.js';
 import { supported as supportedPtz } from './ptz/drivers/index.js';
 import { needsAdmin, roleEntry } from './ptz/schema.js';
@@ -283,7 +283,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
   // Stills bodies over USB and Blackmagic cinema cameras over REST: their own
   // manager, but the same state model, order and stream as every other camera.
-  const external = new ExternalManager({ adoption });
+  const external = new ExternalManager({ adoption, log: (level, msg) => log.write(level, 'external', msg) });
 
   const undo = new UndoHistory();
   const auth = new Auth(cfg.auth, (level, subject, msg) => log.write(level, subject, msg));
@@ -344,6 +344,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
    * the joystick would have been reported as a fault.
    */
   const runAction = async (cameraId, action, body) => {
+    // Marked before the camera is asked, for every camera that records, so a
+    // stop someone pressed is never mistaken for a recording that dropped.
+    if (!isPtz(cameraId)) {
+      if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
+      if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
+    }
     if (external.has(cameraId)) {
       try { return { ok: true, status: 200, body: await external.action(cameraId, action, body ?? {}) }; }
       catch (error) { return { ok: false, status: 409, body: { error: error.message } }; }
@@ -357,8 +363,6 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       }
       return ptz.action(cameraId, action, body);
     }
-    if (action === 'recordStart') state.markRecordIntent(cameraId, 'start');
-    if (action === 'recordStop') state.markRecordIntent(cameraId, 'stop');
     return camd.action(cameraId, action, body);
   };
 
@@ -464,6 +468,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       tcp: cfg.visca.tcp !== false,
       log: (level, msg) => log.write(level, 'visca', msg),
       udpHoldMs: cfg.visca.udpHoldMs ?? 10_000,
+      tcpHoldMs: cfg.visca.tcpHoldMs ?? 60_000,
       cameraPorts: cfg.visca.cameraPorts ?? {},
       allow: cfg.visca.allow ?? [],
       allowPresetStore: !!cfg.visca.allowPresetStore,
@@ -1880,7 +1885,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 }
 
 // Run directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const argIndex = process.argv.indexOf('--config');
   const configPath = argIndex > -1 ? process.argv[argIndex + 1] : './config/cambridge.json';
   const portIndex = process.argv.indexOf('--port');

@@ -104,7 +104,7 @@ export function buildVariableValues(cameras, {
     link: linkUp ? 'connected' : 'UNREACHABLE',
     cameras_down: cameras.filter((c) => c.state !== 'connected').map((c) => c.label || c.id).join(', '),
     tally_program: cameras.filter((c) => c.tally?.program).map((c) => c.label || c.id).join(', '),
-    rolling: roll ? `${roll.rolling} of ${roll.total}` : `0 of ${connected}`,
+    rolling: !linkUp ? 'unknown' : roll ? `${roll.rolling} of ${roll.total}` : `0 of ${connected}`,
     alarm_count: alarms.length,
     // Alarms arrive most severe first, so the head is the one to show.
     alarm: alarms.length ? `${alarms[0].label} ${alarms[0].message}` : '',

@@ -120,7 +120,8 @@ differently:
   second.
 - **Latched sources.** A SKAARHOJ joystick held still, or a VISCA controller
   over TCP, does not refresh. Its moves are latched, and released the moment its
-  connection closes.
+  connection closes — or, since a pulled cable closes nothing, when the
+  SKAARHOJ heartbeat stops or a VISCA move goes 60 s without a repeat.
 - **Stops never wait.** A stop does not wait behind a settings read.
 - **Stops are confirmed.** A stop counts only when the camera has taken it.
   Until then the head is shown as moving and the stop keeps being sent.

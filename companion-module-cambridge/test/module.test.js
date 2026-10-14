@@ -513,6 +513,8 @@ test('CS7: losing CamBridge clears live claims instead of freezing them', async 
   assert.equal(captured.feedbacks.linkDown.callback({ options: {} }), true);
   assert.notEqual(captured.variables.daemon, 'connected');
   assert.equal(captured.variables.link, 'UNREACHABLE');
+  assert.equal(captured.variables.fx3_recording, 'unknown', 'not "idle" for a camera nobody can see');
+  assert.equal(captured.variables.rolling, 'unknown');
   // The last known values are kept, labelled as such, for whoever wants them.
   assert.equal(inst.lastKnown?.cameras?.find((c) => c.id === 'fx3')?.status?.recording, true);
   calls.length = 0;

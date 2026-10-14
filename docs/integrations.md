@@ -278,8 +278,10 @@ drives every head through the same deadman and logging as the panel.
 
 Motion from a controller is held safely:
 
-- **Over TCP**, a move is latched until the controller sends its stop, and is
-  released the moment its connection closes.
+- **Over TCP**, a move lasts until the controller sends its stop, and is
+  released the moment its connection closes. A pulled cable closes nothing, so
+  it also lapses after `tcpHoldMs` (default 60 s) unless the controller repeats
+  it, and TCP keepalive notices a dead controller sooner where the OS allows.
 - **Over UDP** there is no connection to watch, so a move is held for
   `udpHoldMs` (default 10 s) unless the controller repeats it.
 
@@ -304,6 +306,7 @@ between.
 | `cameraPorts` | a port per camera. A VISCA address is three bits, so the shared port can tell at most seven cameras apart — and VISCA-over-IP controllers choose a camera by IP and port anyway. Add CamBridge to the controller once per camera, at this machine's address and that camera's port |
 | `allowPresetStore` | lets a controller store over or delete a head's own presets. Off by default; recall always works |
 | `udpHoldMs` | how long a UDP controller's move lasts without a repeat |
+| `tcpHoldMs` | the same for a TCP controller (default 60000), in case its link dies without closing |
 
 ### What still needs real hardware
 

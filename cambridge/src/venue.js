@@ -3,7 +3,8 @@
 // Its own module, with no side effects, because the launch scripts ask it too:
 // importing server.js to ask a question would start a server.
 
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /** A config entry is a PTZ camera when it says so. Everything else is camd's. */
 export function isPtzEntry(entry) {
@@ -56,10 +57,26 @@ export function starterConfig(exampleText) {
   return `${JSON.stringify(cfg, null, 2)}\n`;
 }
 
+/**
+ * Whether the module at `metaUrl` is the script node was asked to run.
+ *
+ * Compared as real paths: `file://${argv[1]}` misses a path with a space (the
+ * URL has %20) and one reached through a symlink, and either way the script
+ * did nothing and exited 0 — the worst way for a launcher step to fail.
+ */
+export function isMainModule(metaUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
 // For the launchers:
 //   node cambridge/src/venue.js <config>                    prints yes, no or optional
 //   node cambridge/src/venue.js --init <config> <example>   writes a starter config
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   const fs = await import('node:fs');
   if (process.argv[2] === '--init') {
     const [, , , target, example] = process.argv;

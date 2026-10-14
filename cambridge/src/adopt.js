@@ -50,6 +50,13 @@ export function normaliseMac(input) {
   return hex.match(/../g).join(':');
 }
 
+/**
+ * Stills and cinema cameras live in their own list with "ext-" ids. A Sony body
+ * or PTZ head given one would share an id with one of them: one card, two
+ * cameras, and actions going to whichever the router checks first.
+ */
+const RESERVED_ID = /^ext-/i;
+
 export function cameraIdentity(camera) {
   const mac = normaliseMac(camera?.mac);
   if (mac) return `mac:${mac}`;
@@ -198,6 +205,7 @@ export class Adoption {
     const id = input.id?.trim() || suggestId(input.model, mac || deviceId, taken);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(id)) return { ok: false, error: 'invalid camera id' };
     if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
+    if (RESERVED_ID.test(id)) return { ok: false, error: 'camera ids starting "ext-" are for stills and cinema cameras' };
 
     const entry = {
       id,
@@ -379,6 +387,7 @@ export class Adoption {
     const taken = new Set(cfg.cameras.map((c) => c.id));
     const id = input.id?.trim() || suggestId(input.model || input.vendor, ip.replace(/[^0-9A-Fa-f]/g, ''), taken);
     if (taken.has(id)) return { ok: false, error: `camera id "${id}" is already in use` };
+    if (RESERVED_ID.test(id)) return { ok: false, error: 'camera ids starting "ext-" are for stills and cinema cameras' };
 
     const entry = {
       id,

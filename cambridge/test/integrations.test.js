@@ -326,9 +326,9 @@ test('VISCA pan/tilt drives a PTZ head instead of being refused', async () => {
   assert.equal(id, 'canon');
   assert.equal(v.pan, 0.5);
   assert.equal(v.tilt, 0.5);
-  assert.deepEqual(o, { source: 'visca-tcp:x', latch: true });
+  assert.deepEqual(o, { source: 'visca-tcp:x', holdMs: 60_000 });
 
-  // Stop, left/down, and a UDP controller's move is held, not latched.
+  // Stop, left/down, and a UDP controller's move is held for less.
   await server.handlePacket(Buffer.from([0x81, 0x01, 0x06, 0x01, 0x18, 0x01, 0x01, 0x02, 0xff]), { id: 'u', tcp: false });
   assert.deepEqual(calls[1][2], { pan: -1, tilt: -1 / 0x18 });
   assert.equal(calls[1][3].holdMs, 10_000);
@@ -348,10 +348,10 @@ test('VISCA zoom, focus, home, one-push and memory reach a PTZ head', async () =
   await send(0x04, 0x38, 0x03);          // focus manual
   await send(0x04, 0x3f, 0x02, 0x04);    // recall memory slot 4 -> preset 5
   assert.deepEqual(calls.map((c) => c.slice(0, 4)), [
-    ['move', 'canon', { zoom: 1 }, { source: 't', latch: true }],
-    ['move', 'canon', { zoom: -0.125 }, { source: 't', latch: true }],
-    ['move', 'canon', { zoom: 0 }, { source: 't', latch: true }],
-    ['move', 'canon', { focus: 0.5 }, { source: 't', latch: true }],
+    ['move', 'canon', { zoom: 1 }, { source: 't', holdMs: 60_000 }],
+    ['move', 'canon', { zoom: -0.125 }, { source: 't', holdMs: 60_000 }],
+    ['move', 'canon', { zoom: 0 }, { source: 't', holdMs: 60_000 }],
+    ['move', 'canon', { focus: 0.5 }, { source: 't', holdMs: 60_000 }],
     ['action', 'canon', 'homeAction'],
     ['action', 'canon', 'afOnce'],
     ['write', 'canon', 'fm', 'manual'],
