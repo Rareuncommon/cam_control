@@ -828,17 +828,35 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     }
   });
 
+  // A camd built before it learned to skip PTZ entries loads every camera in
+  // the config, PTZ heads included, and reports them as its own. Whatever it
+  // says under a PTZ head's id is ignored: taken at its word, it would replace
+  // the head in the panel with a Sony body claimed by address or model.
+  let warnedPtzFromCamd = false;
+  const fromCamdAboutPtz = (id) => {
+    if (!id || !isPtz(id)) return false;
+    if (!warnedPtzFromCamd) {
+      warnedPtzFromCamd = true;
+      log.warn('camd', `camd reports PTZ head "${id}" as a Sony camera — ignored. `
+        + 'Rebuild camd (cmake --build camd/build) so it leaves PTZ heads alone.');
+    }
+    return true;
+  };
+
   camd.on('event', async (ev) => {
+    if (fromCamdAboutPtz(ev.cameraId)) return;
     switch (ev.event) {
-      case 'hello':
-        state.replaceAll(ev.cameras ?? [], ev.backend, 'camd');
+      case 'hello': {
+        const sony = (ev.cameras ?? []).filter((c) => !fromCamdAboutPtz(c.id));
+        state.replaceAll(sony, ev.backend, 'camd');
         // A pin camd made while this service was not listening still has to
         // reach the config.
-        for (const c of ev.cameras ?? []) {
+        for (const c of sony) {
           if (c.hostKey === 'pinnedFirstUse' && c.fingerprint) await adoption.pinFingerprint(c.id, c.fingerprint);
         }
         await refreshAllProperties();
         break;
+      }
       case 'connectionState':
         // Trust on first use: camd pinned the host key this body presented on
         // its first connection. Persist it with the camera so a restart keeps
@@ -877,6 +895,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   });
 
   async function refreshProperties(cameraId) {
+    // Stills and cinema cameras carry their controls in their own view.
+    if (external.has(cameraId)) return;
     const res = isPtz(cameraId)
       ? await ptz.getProperties(cameraId)
       : await camd.getProperties(cameraId);
@@ -895,7 +915,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     if (!camdUsed) return;
     const res = await camd.listCameras();
     if (res.ok && res.body?.cameras) {
-      state.replaceAll(res.body.cameras, null, 'camd');
+      state.replaceAll(res.body.cameras.filter((c) => !fromCamdAboutPtz(c.id)), null, 'camd');
       await refreshAllProperties();
     }
   }

@@ -149,6 +149,14 @@ bool Config::loadString(const std::string& text, Config& result,
                 errors.push_back(where + " must be an object");
                 continue;
             }
+            // The same file lists PTZ heads ("kind": "ptz"), which CamBridge
+            // drives itself over their own protocols. They are not Sony SDK
+            // cameras and must never become workers here: one with an IP or a
+            // model would claim whatever Sony body matched it — a BRC-AM7 is
+            // both — and hand that body the PTZ head's credentials.
+            const std::string kind = c["kind"].asString();
+            if (!kind.empty() && kind != "sony" && kind != "cine") continue;
+
             CameraConfig cc;
             cc.id = c["id"].asString();
             cc.label = c["label"].asString();
