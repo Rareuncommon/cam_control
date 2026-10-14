@@ -1222,11 +1222,15 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         if (!d.ok) return sendJson(res, 502, d.body ?? { error: 'camd unreachable' });
         const adopted = adoption.adopted();
         const byIdentity = new Map(adopted.map((c) => [cameraIdentity(c), c]).filter(([key]) => key));
+        // A BRC-AM7 or FR7 is both an SDK camera and a PTZ head. One already
+        // added as a head is shown as added: adopting it through the SDK as
+        // well would put two sets of controls on one camera.
+        const ptzByIp = new Map(adopted.filter(isPtzEntry).map((c) => [c.ip, c]));
         const takenIds = new Set(adopted.map((c) => c.id));
         const list = (d.body?.discovered ?? []).map((cam) => {
           const mac = normaliseMac(cam.mac);
           const identity = cameraIdentity(cam);
-          const owner = identity ? byIdentity.get(identity) : null;
+          const owner = (identity ? byIdentity.get(identity) : null) ?? (cam.ip ? ptzByIp.get(cam.ip) : null) ?? null;
           return {
             ...cam,
             identity,
@@ -1260,6 +1264,11 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/adopt' && req.method === 'POST') {
         const body = await readBody(req);
         if (!cameraIdentity(body)) return sendJson(res, 400, { error: 'a discovered MAC or SDK device ID is required' });
+        const head = body.ip && adoption.adopted().find((c) => isPtzEntry(c) && c.ip === body.ip);
+        if (head) {
+          return sendJson(res, 409, { ok: false,
+            error: `${body.ip} is already added as the PTZ head "${head.label}"; control it there` });
+        }
         const result = await adoption.adopt(body);
         if (result.ok) { syncMeta(); await refreshEverything(); }
         return sendJson(res, result.ok ? 201 : 409, result);

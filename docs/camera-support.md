@@ -79,14 +79,17 @@ FX6 variants are represented by one canonical profile with FX6V/FX6T aliases.
 - Live view and autofocus availability cannot be inferred from a model name;
   their command/frame results remain authoritative. Point focus also needs real
   coordinate validation. Still-photo cameras may require movie mode to record.
-- FR7 and BRC-AM7 SDK entries cover shared camera controls. Network PTZ is now
-  a separate adapter: see [PTZ movement](ptz-control.md) for profiles, setup and
-  validation limits. Media transfer remains unimplemented.
+- FR7 and BRC-AM7 SDK entries cover shared camera controls through the SDK.
+  CamBridge also drives the BRC-AM7 — and other Sony remote cameras, Panasonic,
+  Canon and PTZOptics heads — directly as a PTZ head, with pan/tilt/zoom,
+  presets, Auto Framing and the camera's full settings: see [PTZ cameras](ptz.md).
+  Add a head one way, not both. Setup shows an SDK-discovered camera at a PTZ
+  head's address as already added. Media transfer remains unimplemented.
 - SDK device IDs are opaque connection bindings, not portable serial numbers.
   If changing ports, hosts or firmware changes an ID, rediscover and explicitly
   re-adopt that camera. The application must never guess by model instead.
-- Canon and Panasonic network PTZ have movement adapters. Non-Sony USB stills
-  and Blackmagic cinema cameras now have [separate adapters](stills-cinema-control.md).
+- Non-Sony USB stills and Blackmagic cinema cameras have
+  [separate adapters](stills-cinema-control.md).
   Generic UVC camera control remains outside this implementation.
 
 ## Reproducible checks

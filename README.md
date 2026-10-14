@@ -1,23 +1,34 @@
 # CamBridge
 
-Multi-camera control through Sony Camera Remote SDK and multi-brand network
-PTZ movement, with network and USB connection identities. The camera catalog covers all 32 models listed for SDK
-2.02, including Alpha, Cinema Line, professional camcorders, PTZ, ZV and RX.
-Controls are discovered from each connected body, lens and camera mode.
-Network PTZ adds 49 named profiles across Sony, Canon, Panasonic, BirdDog,
-PTZOptics and AVer, plus four generic adapters: hold-to-move pan/tilt/zoom,
-Stop, Home and native camera presets. See [PTZ setup and limits](docs/ptz-control.md).
-Stills/cinema support adds 416 libgphoto2 USB profiles (including regional aliases)
-and 12 Blackmagic REST profiles, with native exposure controls, guarded still
-capture and Blackmagic recording/readback. See [stills/cinema setup](docs/stills-cinema-control.md).
+Multi-camera control for a studio, from one web panel — on a laptop, an iPad,
+a Stream Deck or a hardware camera panel. Built in-house; internal use only,
+not for redistribution, and Sony's SDK redistribution terms still apply.
 
-**Hardware baseline:** 1× ILME-FX3 and 2× ILME-FX30, wired Ethernet, Apple Silicon
-Mac. The 30 additional model profiles await real-camera acceptance; adding a
-profile is not a claim that every feature works on that model.
+- **Sony bodies** through Sony's Camera Remote SDK. The catalog covers the 32
+  models listed for SDK 2.02 — Alpha, Cinema Line, camcorders, PTZ, ZV and
+  RX — over Ethernet or USB, and the controls shown come from what each
+  connected body, lens and mode reports.
+  See [camera support](docs/camera-support.md).
+- **PTZ heads** — Panasonic AW-UE160, Sony BRC-AM7, Canon CR-N500 and
+  PTZOptics Move SE, plus other models from those makes — driven over their
+  own protocols, with everything their web pages offer, their presets, and
+  motion that stops when its controller goes away. Built for dozens of heads,
+  with SKAARHOJ and Companion. They need no Sony SDK and no daemon.
+  See [PTZ cameras](docs/ptz.md).
+- **Stills and cinema cameras**: 416 libgphoto2 USB profiles (including
+  regional aliases) and 12 Blackmagic REST profiles, with native exposure
+  controls, guarded still capture and Blackmagic recording.
+  See [stills and cinema](docs/stills-cinema-control.md).
+
+**Hardware baseline:** 1× ILME-FX3 and 2× ILME-FX30, wired Ethernet, Apple
+Silicon Mac. Everything beyond those three bodies — the other Sony profiles,
+the PTZ drivers, the stills and cinema adapters — is tested against
+simulators built from the makers' documents and still needs real-camera
+acceptance. Adding a profile is not a claim that every feature works on that
+model.
 
 **Compatibility and future Wordtandem integration:**
 [`docs/camera-support.md`](docs/camera-support.md).
-Internal studio use; Sony SDK redistribution terms still apply.
 
 ---
 
@@ -34,7 +45,9 @@ What only real cameras can settle is listed in
 
 **Setting up a Mac?** Start at [`docs/setup.md`](docs/setup.md) — it points you
 at the DMG (five minutes, nothing to install) or the full source build
-([`docs/install.md`](docs/install.md)), and covers camera setup. Use access credentials when the camera requires them;
+([`docs/install.md`](docs/install.md)), and covers camera setup. A Mac for PTZ
+heads alone needs only Node and a clone: see the short path at the top of
+[`docs/install.md`](docs/install.md). Use access credentials when the camera requires them;
 keep Access Authentication enabled for the existing FX3/FX30 network rig.
 
 ```sh
@@ -111,6 +124,8 @@ hardware to confirm: [`docs/integrations.md`](docs/integrations.md).
 | 6+ | Bitfocus Companion module | ✅ built and verified end to end |
 | 6+ | ATEM tally, VISCA server, gamepad | built; **tally and VISCA need your hardware to confirm** |
 | 6+ | Q-SYS | backlog, not built |
+| — | PTZ heads (four makes), SKAARHOJ drive mode, scale to dozens of heads | built; tested against protocol simulators; **on-site checks outstanding** ([ptz.md](docs/ptz.md)) |
+| — | Sony portfolio and USB adoption, stills and cinema cameras, 2026-09-23 audit fixes | built; **Sony adapter changes need compiling against the SDK, and hardware acceptance** |
 
 Phases 1–5 were built in one pass at your request, rather than gated one at a
 time. The hardware acceptance tests still gate calling them *done* — see

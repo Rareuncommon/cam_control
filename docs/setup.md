@@ -6,6 +6,7 @@ Two ways in. Pick one.
 |---|---|---|
 | **[The DMG](#a--the-dmg)** | Putting CamBridge on a machine that just needs to run it | ~5 minutes |
 | **[From source](install.md)** | Building the DMG, or developing | ~45 minutes, once |
+| **[PTZ heads only](install.md#ptz-heads-only-the-short-path)** | A Mac that drives PTZ heads (or Blackmagic cinema cameras) and no Sony bodies | ~15 minutes, no SDK |
 
 Someone has to do the source install once, on one Mac, to produce the DMG. After
 that every other machine gets the DMG.

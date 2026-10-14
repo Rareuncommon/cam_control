@@ -4,6 +4,43 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-10-14 Codex branch merged; one PTZ system
+
+`codex/stills-cinema-cameras` (12–23 September) is merged into `main`, with
+each of its commits kept: the Sony portfolio and USB adoption, stills and
+cinema cameras, and the 2026-09-23 audit fixes (DC-1, DC-2, DC-4, DC-6, DC-9,
+DC-10, DC-11, CS1–CS9). The merge commit's message records how every overlap
+was resolved.
+
+- **One PTZ system.** The branch's movement-only PTZ layer (`ptz/manager.js`,
+  its catalog, Panasonic client, panel card, Companion pulses and the
+  `/api/ptz/*` routes it shared names with) was dropped for the drivers in
+  [ptz.md](ptz.md), which cover the same makes in full. The sections below
+  that describe it are history. Its AVer and BirdDog profiles are not on
+  `main`; they are in `origin/codex/stills-cinema-cameras:cambridge/src/ptz/catalog.json`
+  if those makes are wanted later, as drivers on the current contract.
+- **Stills and cinema cameras** are in the state model as their own source,
+  so they share the camera order, alarms and change-only stream.
+- **A BRC-AM7 or FR7** can be an SDK camera or a PTZ head; once added as a
+  head, SDK adoption of the same address is refused.
+- **First run without camd.** A config with no cameras starts camd only if it
+  is built; a Mac for PTZ heads or cinema cameras alone needs no SDK, no build
+  and no config edit ([install.md](install.md#ptz-heads-only-the-short-path)).
+
+Still open from that work:
+
+1. **Compile the Sony adapter against SDK 2.02** on the Mac. Host-key pinning,
+   connection confirmation and USB adoption changed `sony_backend.cpp`, which
+   has only been compiled with the SDK switched off.
+2. **The audit document is not in the repo.** Commits cite DC-1, 2, 4, 5, 6,
+   9, 10, 11 and CS1–CS9; nothing cites DC-3, DC-7 or DC-8. Check the
+   original audit for whether those are open. (DC-5, honest PTZ outcomes, was
+   written for the dropped PTZ layer; the PTZ system on `main` confirms stops
+   and reports an unconfirmed one by name.)
+3. **USB stills** need gphoto2 and a helper built per Mac; the DMG does not
+   carry them ([stills-cinema-control.md](stills-cinema-control.md)).
+4. Hardware acceptance for everything beyond the FX3/FX30 rig.
+
 ## 2026-09-12 stills and cinema expansion
 
 Added 416 production libgphoto2 USB profiles (including regional/driver aliases)
@@ -33,11 +70,14 @@ camera and licensed-SDK acceptance remain outstanding.
 
 ## 2026-09-12 multi-brand PTZ movement update
 
+*Superseded: this PTZ layer was dropped when the branch was merged (see
+2026-10-14 above). Kept as the record of what was built.*
+
 Network PTZ is implemented in the Node service, independent of camd: Sony-framed
 VISCA UDP, raw VISCA TCP/UDP and authenticated Panasonic AW HTTP. The catalog
 contains 49 named profiles across six brands and four generic profiles. Combined
 with the SDK catalog, Companion lists 80 distinct models. See
-[ptz-control.md](ptz-control.md) for setup, model sources, API contracts and limits.
+`docs/ptz-control.md` on the Codex branch for setup, model sources, API contracts and limits.
 
 The panel adds hold-to-move pan/tilt/zoom, Stop, Home and native presets. Movement
 sessions have short leases, stale-command rejection and bounded Stop retries;
