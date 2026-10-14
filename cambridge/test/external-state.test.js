@@ -243,3 +243,44 @@ test('a background status poll that changes nothing sends nothing', async () => 
   await assert.doesNotReject(manager.action('ext-a', 'refresh'));
   await poll;
 });
+
+test('a stills/cinema camera that drops off mid-take is unknown, not a dropped recording', async () => {
+  // Codex review on PR #3: an offline view carries recording: null, and
+  // reading that as "stopped" logged the take as dropped and, once the camera
+  // came back idle, raised "stopped recording on its own" for an outage.
+  const { evaluate } = await import('../src/alarms.js');
+  const state = new StateModel();
+  const rolling = { recording: true, recordingState: 1, battery: -1 };
+  state.applyExternal([cinema()]);
+  state.applyExternal([cinema({ status: rolling })]);
+  assert.equal(state.takes.length, 1);
+
+  // The status poll fails: the manager reports it offline with nothing known.
+  state.applyExternal([cinema({ state: 'offline', detail: 'timed out',
+    status: { recording: null, recordingState: -1, battery: -1 }, capabilities: { record: { available: false } } })]);
+  let cam = state.get('ext-a');
+  assert.equal(state.takes[0].dropped, null, 'the take is closed as unknown');
+  assert.notEqual(state.takes[0].endedAt, null);
+  assert.equal(cam.status.recordDropped, false);
+  assert.equal(cam.recordStartedAt, null);
+
+  // Back, and idle: nothing to say about a recording nobody could see end.
+  state.applyExternal([cinema()]);
+  cam = state.get('ext-a');
+  assert.equal(cam.status.recordDropped, false);
+  const alarms = evaluate([state.cameraView('ext-a')]);
+  assert.ok(!alarms.some((a) => a.code === 'recordDropped'), `no false alarm (${alarms.map((a) => a.code)})`);
+
+  // Connected but answering without a recording state, mid-take: the same.
+  state.applyExternal([cinema({ status: rolling })]);
+  assert.equal(state.takes.length, 2, 'rolling again opens a fresh take');
+  state.applyExternal([cinema({ status: { recording: null, recordingState: -1, battery: -1 } })]);
+  assert.equal(state.takes[1].dropped, null);
+  assert.equal(state.get('ext-a').status.recordDropped, false);
+
+  // And a real unasked stop is still a drop.
+  state.applyExternal([cinema({ status: rolling })]);
+  state.applyExternal([cinema()]);
+  assert.equal(state.takes.at(-1).dropped, true);
+  assert.equal(state.get('ext-a').status.recordDropped, true);
+});

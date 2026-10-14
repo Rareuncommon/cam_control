@@ -417,7 +417,17 @@ export class StateModel extends EventEmitter {
       // switcher, the record timer — survives the camera's next poll.
       const cam = existing ?? { tally: null };
       Object.assign(cam, fields);
-      this.#applyStatusTo(cam, snap.status ?? {});
+      if (snap.state === 'connected' && typeof snap.status?.recording === 'boolean') {
+        this.#applyStatusTo(cam, snap.status);
+      } else {
+        // Unreachable, or answering without a recording state: whether it is
+        // still rolling is unknown, which is not the same as stopped. Calling
+        // it a stop logged the take as dropped and, once the camera came back
+        // idle, raised "stopped recording on its own" for an outage. Close
+        // the take as unknown, as a camd camera that drops does.
+        this.#closeTakeUnknown(cam);
+        cam.status = { ...statusFrom(snap.status), recordDropped: false };
+      }
       if (existing) this.emit('change', { type: 'connectionState', cameraId: snap.id });
       else { this.cameras.set(snap.id, cam); reshaped = true; }
     }
