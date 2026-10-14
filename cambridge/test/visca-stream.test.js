@@ -121,3 +121,49 @@ test('a throwing camera write becomes a VISCA error, not an unhandled rejection'
   const replies = await visca.handlePacket(framed(IRIS_UP, 5));
   assert.deepEqual([...replies[0].subarray(8)], [0x90, 0x61, 0x41, 0xff]);
 });
+
+// --- After the merge with the PTZ forwarding listener ---------------------------
+
+test('a VISCA-over-IP RESET control frame is skipped, not taken for garbage', async (t) => {
+  const { visca, writes } = rig();
+  await visca.start(); t.after(() => visca.stop());
+  const { socket, received } = await tcpClient(visca);
+  t.after(() => socket.destroy());
+  // What a Sony-protocol controller sends first: payload type 0x0200, one byte.
+  const reset = Buffer.from([0x02, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01]);
+  socket.write(Buffer.concat([reset, framed(IRIS_UP, 1)]));
+  await settle();
+  assert.equal(socket.destroyed, false, 'the controller is still connected');
+  assert.deepEqual(writes, [{ prop: 'fNumber', raw: 320 }]);
+  assert.equal(received.length, 2 * (8 + 3));
+});
+
+test('a controller that disconnects never has a queued move run after its release', async (t) => {
+  const state = new StateModel();
+  state.replaceAll([{ id: 'head', label: 'Head', state: 'connected' }], null, 'ptz');
+  const calls = [];
+  let finishRecall;
+  const ptz = {
+    move: (id, v, o) => { calls.push(['move', o.source]); return { ok: true }; },
+    // A recall the camera takes its time over, so the drive behind it waits.
+    preset: (id, op, n) => { calls.push(['preset', n]); return new Promise((r) => { finishRecall = () => r({ ok: true }); }); },
+    action: async () => ({ ok: true }), write: async () => ({ ok: true }),
+    entryByRole: () => null, presetBase: () => 1,
+    releaseSource: (s) => calls.push(['release', s]),
+  };
+  const visca = new ViscaServer({ state, ptz, bind: '127.0.0.1', port: 0, tcp: true,
+    applyFn: async () => ({ ok: true }), actionFn: async () => ({ ok: true }) });
+  await visca.start(); t.after(() => visca.stop());
+  const { socket } = await tcpClient(visca);
+  const RECALL_2 = [0x81, 0x01, 0x04, 0x3f, 0x02, 0x02, 0xff];
+  const PAN_LEFT = [0x81, 0x01, 0x06, 0x01, 0x10, 0x10, 0x01, 0x03, 0xff];
+  socket.write(Buffer.from([...RECALL_2, ...PAN_LEFT]));
+  await settle(60);
+  socket.destroy();          // gone while the drive is still queued
+  await settle(60);
+  finishRecall();
+  await settle();
+  assert.equal(calls.filter((c) => c[0] === 'move').length, 0,
+    'the queued drive must not run: it would latch with nothing left to release it');
+  assert.ok(calls.some((c) => c[0] === 'release'));
+});
