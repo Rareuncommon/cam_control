@@ -27,10 +27,29 @@ Cameras themselves are added in the CamBridge **Setup** tab, not here.
 
 ## Presets
 
-Drag-and-drop buttons are provided under **Record**, **Tally**, **Status**,
-**Scenes**, and one category per camera for exposure and focus. They already
-carry the feedbacks that make them readable, so a record button goes red on its
-own.
+Drag-and-drop buttons are provided under **Camera status**, **Record**,
+**Tally**, **Status**, **Scenes**, and one category per camera for exposure and
+focus. They already carry the feedbacks that make them readable, so a record
+button goes red on its own.
+
+## Camera status buttons
+
+**Camera status** has one button per camera (not PTZ heads) that shows its
+state and does nothing when pressed:
+
+| Colour | Text | Means |
+|---|---|---|
+| Green | STANDBY | connected, not recording |
+| Red | REC | recording |
+| Yellow | ERROR | not connected (offline, wrong password, identity changed, still connecting), recording failed, a critical alarm (card full or nearly, battery critical, stopped recording on its own), or Companion cannot reach CamBridge |
+| Yellow | REC ! | one of those while it is still recording |
+
+Low-card and low-battery *warnings* do not change the colour; use the alarm
+feedbacks for those. The record buttons use the same three colours.
+
+To build your own: add the **Camera status is** feedback three times — standby,
+recording, error — each with its colour. `$(cambridge:wide_status)` gives the
+word and `$(cambridge:wide_status_reason)` says why it is yellow.
 
 ## Actions
 
@@ -55,7 +74,7 @@ action first — the same thing the web panel's "Set Manual" button does.
 
 ## Feedbacks
 
-Recording, recording FAILED, connection state, any camera down, daemon
+Camera status (standby / recording / error), recording, recording FAILED, connection state, any camera down, daemon
 unreachable, exposure value comparisons, "parameter is on Auto", tally
 (program/preview), and link state.
 
@@ -67,7 +86,8 @@ unreachable, exposure value comparisons, "parameter is on Auto", tally
 Per camera, using the camera's id with any hyphens turned into underscores —
 `$(cambridge:wide_iris)`, `$(cambridge:wide_recording)`, `$(cambridge:wide_battery)`,
 plus `_iso`, `_shutter`, `_kelvin`, `_wb`, `_nd`, `_media`, `_state`, `_label`,
-`_model`, `_tally`.
+`_model`, `_tally`, `_status` (STANDBY / REC / ERROR / REC !) and
+`_status_reason`.
 
 Values are the labels the camera itself would show (`f/4.0`, `1/50`, `5600K`).
 For arithmetic in expressions, `_raw` variants hold the underlying numbers:

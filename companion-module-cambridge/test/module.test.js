@@ -544,3 +544,84 @@ test('CS8: a reconfigured module ignores late answers from the old server and ab
   oldApi.onState(sampleView({ recording: true }));
   assert.equal(inst.cameras.length, 0);
 });
+
+// --- camera status keys: green standby, red recording, yellow error ----------
+
+test('camera status keys: one feedback per status, variables and ready-made buttons', () => {
+  const { inst, captured } = makeInstance();
+  const status = (camera, s) => captured.feedbacks.cameraStatus.callback({ options: { camera, status: s } });
+  const ptz = { id: 'stage', kind: 'ptz', label: 'Stage', state: 'connected', status: {}, ptz: {} };
+  const view = sampleView();
+  view.cameras.push(ptz);
+  inst.applyState({ view });
+
+  // Wide is connected and idle; Centre is offline.
+  assert.equal(status('fx3', 'standby'), true);
+  assert.equal(status('fx3', 'recording'), false);
+  assert.equal(status('fx3', 'error'), false);
+  assert.equal(status('fx30-a', 'error'), true);
+  assert.equal(captured.variables.fx3_status, 'STANDBY');
+  assert.equal(captured.variables.fx3_status_reason, '');
+  assert.equal(captured.variables.fx30_a_status, 'ERROR');
+  assert.equal(captured.variables.fx30_a_status_reason, 'offline');
+  assert.equal(captured.variables.stage_status, undefined, 'PTZ heads do not record; no status variable');
+
+  // Rolling.
+  inst.applyState({ view: sampleView({ recording: true }) });
+  assert.equal(status('fx3', 'recording'), true);
+  assert.equal(status('fx3', 'standby'), false);
+  assert.equal(captured.variables.fx3_status, 'REC');
+
+  // Rolling with the card nearly full: yellow, and still saying REC.
+  inst.applyState({
+    view: sampleView({ recording: true }),
+    alarmsByCamera: { fx3: [{ level: 'critical', code: 'media', message: 'card has 1m 30s left and is recording now' }] },
+  });
+  assert.equal(status('fx3', 'error'), true);
+  assert.equal(status('fx3', 'recording'), false);
+  assert.equal(captured.variables.fx3_status, 'REC !');
+  assert.equal(captured.variables.fx3_status_reason, 'card has 1m 30s left and is recording now');
+
+  // A warning leaves the colour alone.
+  inst.applyState({
+    view: sampleView(),
+    alarmsByCamera: { fx3: [{ level: 'warn', code: 'battery', message: 'battery is at 25%' }] },
+  });
+  assert.equal(status('fx3', 'standby'), true);
+
+  // Ready-made buttons: a status key per Sony / stills camera (none for the
+  // PTZ head), doing nothing when pressed; the record key in the same colours.
+  inst.applyState({ view });
+  const p = captured.presets;
+  assert.ok(p.camstatus_fx3 && p.camstatus_fx30_a, 'a status key for each camera');
+  assert.equal(p.camstatus_stage, undefined, 'none for a PTZ head');
+  assert.equal(p.camstatus_fx3.category, 'Camera status');
+  assert.deepEqual(p.camstatus_fx3.steps, [{ down: [], up: [] }], 'pressing it does nothing');
+  for (const key of ['camstatus_fx3', 'record_fx3', 'status_fx3']) {
+    const fbs = p[key].feedbacks;
+    assert.deepEqual(fbs.map((f) => [f.feedbackId, f.options.status]),
+      [['cameraStatus', 'standby'], ['cameraStatus', 'recording'], ['cameraStatus', 'error']], key);
+  }
+  const colour = (key, s) => p[key].feedbacks.find((f) => f.options.status === s).style.bgcolor;
+  const rgb = (n) => [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  assert.deepEqual(rgb(colour('camstatus_fx3', 'standby')), [40, 170, 80], 'green');
+  assert.deepEqual(rgb(colour('camstatus_fx3', 'recording')), [200, 20, 30], 'red');
+  assert.deepEqual(rgb(colour('camstatus_fx3', 'error')), [240, 200, 0], 'yellow');
+  assert.match(p.camstatus_fx3.style.text, /\$\(cambridge:fx3_status\)/);
+});
+
+test('camera status keys go yellow when Companion loses CamBridge', async (t) => {
+  const { impl } = controllableFetch();
+  const realFetch = globalThis.fetch; globalThis.fetch = impl; t.after(() => { globalThis.fetch = realFetch; });
+  const { inst, captured } = makeInstance();
+  await inst.init({ host: '192.0.2.1', port: 8088 });
+  t.after(() => inst.destroy());
+  inst.applyState({ view: sampleView({ recording: true }) });
+  assert.equal(captured.feedbacks.cameraStatus.callback({ options: { camera: 'fx3', status: 'recording' } }), true);
+
+  inst.api.onConnection(false, 'socket hang up');
+
+  assert.equal(captured.feedbacks.cameraStatus.callback({ options: { camera: 'fx3', status: 'error' } }), true);
+  assert.equal(captured.variables.fx3_status, 'ERROR');
+  assert.equal(captured.variables.fx3_status_reason, 'no link to CamBridge');
+});
