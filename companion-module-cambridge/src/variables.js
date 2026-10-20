@@ -7,6 +7,7 @@
 // to do arithmetic.
 
 import { PTZ_VARIABLES, ptzVariableValues } from './ptz.js';
+import { cameraStatus } from './status.js';
 
 const PER_CAMERA = [
   ['label', 'Name'],
@@ -25,6 +26,8 @@ const PER_CAMERA = [
   ['alarm', 'Worst alarm, or empty'],
   ['rectime', 'Elapsed record time'],
   ['tally', 'Tally (PGM / PVW / off)'],
+  ['status', 'Status (STANDBY / REC / ERROR / REC ! = rolling with a fault)'],
+  ['status_reason', 'Why the status is ERROR, or empty'],
 ];
 
 const PTZ_PER_CAMERA = new Set(['label', 'model', 'state', 'alarm', 'tally']);
@@ -141,6 +144,10 @@ export function buildVariableValues(cameras, {
       Object.assign(values, ptzVariableValues(cam));
       continue;
     }
+
+    const st = cameraStatus(cam, { linkUp, alarms: alarmsByCamera?.[cam.id] });
+    values[`${v}_status`] = st.text;
+    values[`${v}_status_reason`] = st.reason;
 
     values[`${v}_iris_raw`] = raw(cam, 'fNumber');
     values[`${v}_iso_raw`] = raw(cam, 'isoSensitivity');

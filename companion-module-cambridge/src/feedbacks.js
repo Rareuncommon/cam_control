@@ -8,6 +8,7 @@
 import { combineRgb } from '@companion-module/base';
 import { buildPtzFeedbacks } from './ptz.js';
 import { buildSelectionFeedbacks } from './select.js';
+import { cameraStatus } from './status.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -15,6 +16,14 @@ const RED = combineRgb(200, 20, 30);
 const AMBER = combineRgb(240, 160, 20);
 const GREEN = combineRgb(40, 170, 80);
 const GREY = combineRgb(70, 70, 70);
+const YELLOW = combineRgb(240, 200, 0);
+
+/** The colour each camera status shows by default; Companion lets anyone change them. */
+export const STATUS_STYLE = {
+  standby: { bgcolor: GREEN, color: WHITE },
+  recording: { bgcolor: RED, color: WHITE },
+  error: { bgcolor: YELLOW, color: BLACK },
+};
 
 export function buildFeedbacks(self) {
   // Exposure and record feedbacks mean nothing on a PTZ head; connection,
@@ -32,6 +41,33 @@ export function buildFeedbacks(self) {
   const anyCameraField = () => cameraField({ choices: anyChoices, default: anyChoices[0]?.id ?? '' });
 
   const sony = {
+    // One key per camera that answers "is it fine, is it rolling" in a glance:
+    // green standby, red recording, yellow anything that needs looking at
+    // (the rule is in status.js). Three of these on one button, one per
+    // status, each with its own colour.
+    cameraStatus: {
+      name: 'Camera status is (standby / recording / error)',
+      type: 'boolean',
+      defaultStyle: STATUS_STYLE.error,
+      options: [
+        cameraField(),
+        {
+          type: 'dropdown', id: 'status', label: 'Status', default: 'error',
+          choices: [
+            { id: 'standby', label: 'Standby (green): connected, not recording' },
+            { id: 'recording', label: 'Recording (red)' },
+            { id: 'error', label: 'Error (yellow): not connected, recording failed, or a critical alarm' },
+          ],
+        },
+      ],
+      callback: (fb) => {
+        const cam = self.camera(fb.options.camera);
+        if (!cam) return false;
+        return cameraStatus(cam, { linkUp: self.linkUp, alarms: self.alarmsByCamera?.[cam.id] })
+          .status === fb.options.status;
+      },
+    },
+
     recording: {
       name: 'Camera is recording',
       type: 'boolean',

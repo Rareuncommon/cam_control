@@ -6,6 +6,7 @@ import { combineRgb } from '@companion-module/base';
 import { varId } from './variables.js';
 import { buildPtzPresets } from './ptz.js';
 import { buildControllerPresets } from './select.js';
+import { STATUS_STYLE } from './feedbacks.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -16,6 +17,11 @@ const AMBER = combineRgb(240, 160, 20);
 const base = (text, size = '14') => ({
   text, size, color: WHITE, bgcolor: DARK,
 });
+
+/** Green standby, red recording, yellow error — the same on every key that shows a camera's status. */
+const statusFeedbacks = (camera) => ['standby', 'recording', 'error'].map((status) => ({
+  feedbackId: 'cameraStatus', options: { camera, status }, style: STATUS_STYLE[status],
+}));
 
 export function buildPresets(self) {
   const presets = {};
@@ -42,25 +48,30 @@ export function buildPresets(self) {
       { feedbackId: 'camdDown', options: {}, style: { bgcolor: RED, color: WHITE } },
     ],
   };
-  // Record, exposure and focus buttons are for cinema bodies; PTZ heads get tally here and their own set in ptz.js.
-  // Record, exposure and focus buttons are for cinema bodies; PTZ heads get their own set.
+  // Status, record, exposure and focus buttons are for cinema bodies; PTZ heads get tally here and their own set in ptz.js.
   for (const cam of self.cameras) {
     const v = varId(cam.id);
     const name = cam.label || cam.id;
     const opts = { camera: cam.id };
     if (cam.kind !== 'ptz') {
+      // Shows the camera's state and does nothing when pressed, so it can sit
+      // anywhere on a page without a stray press starting or stopping a take.
+      presets[`camstatus_${v}`] = {
+        type: 'button',
+        category: 'Camera status',
+        name: `${name}: status (green standby / red recording / yellow error)`,
+        style: base(`$(cambridge:${v}_label)\\n$(cambridge:${v}_status)`, '14'),
+        steps: [{ down: [], up: [] }],
+        feedbacks: statusFeedbacks(cam.id),
+      };
+
       presets[`record_${v}`] = {
         type: 'button',
         category: 'Record',
         name: `${name}: record toggle`,
-        style: base(`$(cambridge:${v}_label)\\n$(cambridge:${v}_recording)`),
+        style: base(`$(cambridge:${v}_label)\\n$(cambridge:${v}_status)`),
         steps: [{ down: [{ actionId: 'record', options: { ...opts, mode: 'toggle' } }], up: [] }],
-        feedbacks: [
-          { feedbackId: 'recording', options: opts, style: { bgcolor: RED, color: WHITE } },
-          { feedbackId: 'recordingFailed', options: opts, style: { bgcolor: AMBER, color: BLACK } },
-          { feedbackId: 'cameraState', options: { ...opts, state: '__notok__' },
-            style: { bgcolor: combineRgb(60, 60, 60), color: combineRgb(150, 150, 150) } },
-        ],
+        feedbacks: statusFeedbacks(cam.id),
       };
     }
 
@@ -153,11 +164,7 @@ export function buildPresets(self) {
         `$(cambridge:${v}_label)\\n$(cambridge:${v}_iris) $(cambridge:${v}_iso)\\n` +
         `$(cambridge:${v}_battery)`, '14'),
       steps: [{ down: [], up: [] }],
-      feedbacks: [
-        { feedbackId: 'cameraState', options: { ...opts, state: '__notok__' },
-          style: { bgcolor: AMBER, color: BLACK } },
-        { feedbackId: 'recordingFailed', options: opts, style: { bgcolor: RED, color: WHITE } },
-      ],
+      feedbacks: statusFeedbacks(cam.id),
     };
   }
 

@@ -18,8 +18,9 @@ PTZ cameras themselves are covered in [ptz.md](ptz.md).
 ## Bitfocus Companion
 
 A full Companion module lives in `companion-module-cambridge/`. It gives a
-Stream Deck record buttons that go red on their own, exposure on physical keys,
-scene recall, tally, and press-and-hold control of every PTZ head.
+Stream Deck record buttons that go red on their own, a status key per camera
+(green standby, red recording, yellow on a fault or critical alarm), exposure on
+physical keys, scene recall, tally, and press-and-hold control of every PTZ head.
 
 ### Installing
 
