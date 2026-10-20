@@ -10,14 +10,28 @@ const { supported } = await import(new URL('cambridge/src/ptz/drivers/index.js',
 const ptz = supported().flatMap((v) => v.models);
 const external = JSON.parse(readFileSync(new URL('cambridge/src/external/catalog.json', root)));
 if (new Set(external.models.map(p => p.id)).size !== external.models.length) throw new Error('Duplicate external profile id');
-const products = [...new Set([...external.models.map(p => p.model), ...catalog.models.map(p => p.model), ...ptz])];
+const models = [...new Set([...external.models.map(p => p.model), ...catalog.models.map(p => p.model), ...ptz])];
 if (new Set(catalog.models.map(p => p.model)).size !== catalog.models.length) throw new Error('Duplicate SDK camera model');
+// Companion joins every product into the connection's name and its Edit
+// header, so listing all models buried the connection's own settings. Name
+// the families instead; the full list is in the panel's Setup tab.
+const products = [
+  'Sony cinema and Alpha bodies (Camera Remote SDK)',
+  'USB stills cameras (Canon, Nikon, Fujifilm and others)',
+  'Blackmagic cinema and studio cameras',
+  'PTZ cameras',
+];
+// The families drop the brand names, so keep every supported brand searchable.
+const brands = [...external.models.map(p => p.brand), ...supported().map(v => v.label)].map(b => b.toLowerCase());
+const keywords = [...new Set(['camera', 'sony', 'fx3', 'fx30', 'ccu', 'tally', 'ptz', 'blackmagic', ...brands])];
 if (process.argv.includes('--write')) {
   manifest.products = products;
+  manifest.keywords = keywords;
   manifest.description = 'Sony SDK, USB stills, Blackmagic cinema and PTZ camera control via CamBridge. Hardware validation remains model-specific.';
   manifest.manufacturer = 'Multiple';
   writeFileSync(path, JSON.stringify(manifest, null, '\t') + '\n');
-} else if (JSON.stringify(manifest.products) !== JSON.stringify(products)) {
+} else if (JSON.stringify(manifest.products) !== JSON.stringify(products)
+  || JSON.stringify(manifest.keywords) !== JSON.stringify(keywords)) {
   throw new Error('Companion camera list differs from the catalog. Run node scripts/sync-camera-catalog.mjs --write');
 }
-console.log(`Camera catalog: ${products.length} models, Companion list synchronized`);
+console.log(`Camera catalog: ${models.length} models, Companion list synchronized`);
