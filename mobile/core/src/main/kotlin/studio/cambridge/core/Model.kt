@@ -62,8 +62,22 @@ class Camera(val json: JsonObject) {
     val detail: String? = json["detail"].str()
     val properties: Map<String, Property> = json["properties"].obj()?.mapNotNull { (k, v) -> v.obj()?.let { k to Property(k, it) } }?.toMap() ?: emptyMap()
 
-    /** Record works on cinema and stills bodies, not PTZ heads. */
-    val canRecord: Boolean get() = kind != "ptz"
+    private val recordCapability = json["capabilities"].obj()?.get("record").obj()
+    /** Record works on cinema and stills bodies, not PTZ heads, and not when CamBridge says this body cannot. */
+    val canRecord: Boolean get() = kind != "ptz" && recordCapability?.get("available").bool() != false
+    val recordUnavailableReason: String? = recordCapability?.get("reason").str()
+
+    /**
+     * The mode property that has [prop] on Auto (Sony's Flexible Exposure),
+     * when it does: iris, ISO and shutter then read as not writable, and the
+     * fix is switching the mode to Manual (raw 2), as the web panel offers.
+     */
+    fun autoGate(prop: String): Property? = AUTO_GATES[prop]?.let { properties[it] }?.takeIf { it.raw.num() == 1.0 }
+
+    companion object {
+        val AUTO_GATES = mapOf("fNumber" to "irisMode", "isoSensitivity" to "gainMode", "shutterSpeed" to "shutterMode")
+        const val MANUAL = 2
+    }
 }
 
 class Property(val name: String, json: JsonObject) {

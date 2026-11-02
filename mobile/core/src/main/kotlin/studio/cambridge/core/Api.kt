@@ -23,6 +23,9 @@ data class ApiResponse(val status: Int, val body: JsonElement?) {
     val reason: String? get() = (body as? JsonObject)?.get("reason")?.let { (it as? JsonPrimitive)?.contentOrNull }
 
     val deviceRejected: Boolean get() = (body as? JsonObject)?.get("deviceRejected")?.jsonPrimitive?.contentOrNull == "true"
+
+    /** The CamBridge that refused a device signature, so "revoked" is never concluded from a different server. */
+    val serverId: String? get() = (body as? JsonObject)?.get("serverId")?.let { (it as? JsonPrimitive)?.contentOrNull }
 }
 
 class CamBridgeException(message: String, val status: Int? = null, val reason: String? = null) : Exception(message)

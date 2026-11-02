@@ -37,6 +37,14 @@ object BleProtocol {
     const val MAX_MESSAGE = 256 * 1024
     const val NONCE_BYTES = 16
     const val FLAG_DEFLATE = 0x01
+
+    // AUTH_FAIL codes (docs/ble-protocol.md)
+    const val FAIL_UNKNOWN_DEVICE = 1
+    const val FAIL_PAIRING_EXPIRED = 2
+    const val FAIL_BAD_PROOF = 3
+    const val FAIL_RATE_LIMITED = 4
+    const val FAIL_PROTOCOL = 5
+    const val FAIL_TIMEOUT = 6
     private const val FIRST = 0x80
     private const val LAST = 0x40
 
