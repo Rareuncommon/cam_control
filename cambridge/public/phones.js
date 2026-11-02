@@ -82,7 +82,18 @@ export function createPhones({ root, el, api, toast }) {
       el('div', { class: 'sub note', text: 'In the CamBridge app, tap Pair and scan this code. It works once, for ten minutes; closing this cancels it.' }),
       qr, status,
       el('div', { class: 'line', style: 'justify-content:flex-end;margin-top:12px' },
+        // For a phone whose camera cannot read the screen: the app also takes
+        // the link pasted. It holds the key, so it is only copied when asked.
+        el('button', { class: 'ghost', text: 'Copy link', title: 'For pasting into the app if the camera cannot read the code. It works once; send it only to your own phone.', onclick: copyLink }),
         el('button', { class: 'ghost', text: 'Close', onclick: () => dialog.close() })));
+    async function copyLink() {
+      try {
+        await navigator.clipboard.writeText(pairing.uri);
+        toast('Pairing link copied: paste it into the app');
+      } catch {
+        toast('Could not copy: this browser only allows it on localhost or HTTPS');
+      }
+    }
     let paired = false;
     dialog.addEventListener('close', async () => {
       // Drop the code (and the key in it) from the page, and cancel it if no

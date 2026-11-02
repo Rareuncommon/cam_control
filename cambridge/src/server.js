@@ -1158,7 +1158,8 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
         if (!v.ok) {
           log.warn('auth', `device ${v.status} ${req.method} ${path}: ${v.reason}`);
           return sendJson(res, v.status, {
-            error: v.error, deviceRejected: true, reason: v.reason, ...(v.serverTime ? { serverTime: v.serverTime } : {}),
+            error: v.error, deviceRejected: true, reason: v.reason, serverId: devices.ensureServerId(),
+            ...(v.serverTime ? { serverTime: v.serverTime } : {}),
           });
         }
         req.cambridgeDevice = v.device;

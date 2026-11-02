@@ -175,6 +175,7 @@ test('an open panel: pairing, signed requests, and revocation', async (t) => {
   assert.equal(ended, true, 'the stream ended');
   const after = await c.as(dev, '/api/state');
   assert.deepEqual([after.status, after.body.reason], [401, 'unknown-device']);
+  assert.equal(after.body.serverId, c.config().auth.serverId, 'the refusal names the CamBridge, so a phone can tell revoked from a different server');
   assert.equal(c.config().auth.devices[dev.id], undefined);
 });
 
