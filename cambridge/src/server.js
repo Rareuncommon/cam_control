@@ -40,6 +40,7 @@ import { PanelController } from './skaarhoj/mapping.js';
 import { Lighting } from './lighting/service.js';
 import { handleLighting, gestureLogger } from './lighting/routes.js';
 import { DeviceRegistry, pairingUri, SCHEME as DEVICE_SCHEME } from './devices.js';
+import { MdnsAdvertiser } from './mdns.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -229,7 +230,17 @@ async function readBody(req, limitBytes = 1024 * 1024) {
 
 // --- application ------------------------------------------------------------
 
-export function createApp({ configPath = './config/cambridge.json' } = {}) {
+const SERVER_VERSION = (() => {
+  try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return 'unknown'; }
+})();
+
+/**
+ * @param {object} [o]
+ * @param {string} [o.configPath]
+ * @param {boolean} [o.advertise]  announce the server over Bonjour. Off unless
+ *   asked for, so a test run never advertises a CamBridge to phones on the LAN.
+ */
+export function createApp({ configPath = './config/cambridge.json', advertise = false } = {}) {
   const cfg = loadConfig(configPath);
   const log = new Logger({
     dir: cfg.logging.dir,
@@ -329,6 +340,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     log.error('lighting', `lighting is off: ${err.message}`);
   }
   const logGesture = gestureLogger((line) => log.info('lighting', line));
+  /** Bonjour, once listening (start()). */
+  let mdns = null;
 
   /** What phones and the pairing QR call this CamBridge. */
   const serverName = () => (typeof cfg.cambridge.name === 'string' && cfg.cambridge.name.trim())
@@ -1359,6 +1372,29 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         return sendJson(res, 200, { ok: true, cameraId, cleared });
       }
 
+      // What this server offers, for clients that build themselves from it (the
+      // phone app). Features come and go with configuration — lighting that
+      // failed to start, no Sony bodies — and the app follows without a release.
+      if (path === '/api/capabilities' && req.method === 'GET') {
+        return sendJson(res, 200, {
+          api: 1,
+          server: { id: devices.ensureServerId(), name: serverName(), version: SERVER_VERSION },
+          auth: { pin: auth.enabled, devices: true, signing: 'CamBridge-HMAC v1' },
+          features: {
+            cameras: true,
+            sony: state.camdUsed,
+            ptz: state.list().some((c) => c.kind === 'ptz'),
+            external: state.list().some((c) => c.kind === 'external'),
+            record: true,
+            recordAll: true,
+            liveview: true,
+            cameraPresets: true,
+            cameraScenes: true,
+            lighting: lighting ? { available: true } : { available: false, reason: lightingError },
+          },
+        });
+      }
+
       if (path === '/api/health' && req.method === 'GET') {
         const health = camdUsed ? await camd.health() : { ok: null, body: 'not used' };
         return sendJson(res, 200, {
@@ -2017,11 +2053,19 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         server.listen(cfg.cambridge.port, cfg.cambridge.bind, () => {
           const urls = browsableUrls(cfg.cambridge.bind, cfg.cambridge.port);
           log.info('cambridge', `listening on ${urls.join('  ')}, camd at ${camdBase}`);
+          if (advertise && cfg.cambridge.mdns !== false) {
+            mdns = new MdnsAdvertiser({
+              name: serverName(), port: server.address().port, txt: { api: '1', id: devices.ensureServerId() },
+              log: (level, msg) => log.write(level, 'mdns', msg),
+            });
+            mdns.start();
+          }
           resolvePromise({ ...server.address(), urls });
         });
       });
     },
     async stop() {
+      mdns?.stop();
       logGesture.flush();
       try { lighting?.stop(); } catch (err) { log.error('lighting', `stop: ${err.message}`); }
       camd.stop();
@@ -2043,7 +2087,7 @@ if (isMainModule(import.meta.url)) {
   const argIndex = process.argv.indexOf('--config');
   const configPath = argIndex > -1 ? process.argv[argIndex + 1] : './config/cambridge.json';
   const portIndex = process.argv.indexOf('--port');
-  const app = createApp({ configPath });
+  const app = createApp({ configPath, advertise: true });
   if (portIndex > -1) app.cfg.cambridge.port = Number(process.argv[portIndex + 1]);
   let addr;
   try {
