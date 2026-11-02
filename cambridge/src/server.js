@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { gzipSync, createGzip, constants as zlibConstants } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
+import { networkInterfaces, hostname } from 'node:os';
 import { isIP } from 'node:net';
 import { dirname, join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +39,7 @@ import { RawPanelClient, DEFAULT_PORT as SKAARHOJ_PORT } from './skaarhoj/rawpan
 import { PanelController } from './skaarhoj/mapping.js';
 import { Lighting } from './lighting/service.js';
 import { handleLighting, gestureLogger } from './lighting/routes.js';
+import { DeviceRegistry, pairingUri, SCHEME as DEVICE_SCHEME } from './devices.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -195,7 +196,9 @@ function browsableUrls(bindAddr, port) {
   return urls;
 }
 
-async function readBody(req, limitBytes = 1024 * 1024) {
+/** The request body as bytes. A signed request's body is read before routing, to check the signature. */
+async function readRaw(req, limitBytes = 1024 * 1024) {
+  if (req.rawBody !== undefined) return req.rawBody;
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
@@ -203,8 +206,23 @@ async function readBody(req, limitBytes = 1024 * 1024) {
     if (total > limitBytes) throw new Error('request body too large');
     chunks.push(chunk);
   }
-  if (chunks.length === 0) return null;
-  const text = Buffer.concat(chunks).toString('utf8');
+  req.rawBody = Buffer.concat(chunks);
+  return req.rawBody;
+}
+
+/** LAN IPv4 addresses, for the pairing QR. */
+function lanAddresses() {
+  const out = [];
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+  }
+  return out;
+}
+
+async function readBody(req, limitBytes = 1024 * 1024) {
+  const raw = await readRaw(req, limitBytes);
+  if (raw.length === 0) return null;
+  const text = raw.toString('utf8');
   if (!text.trim()) return null;
   return JSON.parse(text);
 }
@@ -311,6 +329,21 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     log.error('lighting', `lighting is off: ${err.message}`);
   }
   const logGesture = gestureLogger((line) => log.info('lighting', line));
+
+  /** What phones and the pairing QR call this CamBridge. */
+  const serverName = () => (typeof cfg.cambridge.name === 'string' && cfg.cambridge.name.trim())
+    || hostname().replace(/\.local$/, '');
+
+  // Paired phones (the CamBridge app). Their requests are signed; see devices.js.
+  const devices = new DeviceRegistry({
+    readConfig: () => adoption.readConfig(),
+    saveAuth: (patch) => adoption.saveSection('auth', patch),
+    log: (level, msg) => log.write(level, 'devices', msg),
+  });
+  devices.on('revoked', (id) => {
+    // A revoked phone loses its live stream at once, not at its next request.
+    for (const c of [...sseClients.values()]) if (c.device === id) c.close();
+  });
 
   /**
    * Injected setter used by presets, gang and match, so all writes are logged.
@@ -1043,6 +1076,24 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // endpoint it calls is gated here regardless.
       const gated = path.startsWith('/api/');
       const who = { role: 'anonymous', label: 'anonymous' };
+      // A paired phone signs its requests. A request that carries a device
+      // signature must carry a good one, PIN or not: that is what makes
+      // revoking a phone mean something on an open panel.
+      if (gated && new RegExp(`^${DEVICE_SCHEME}\\s`, 'i').test(req.headers.authorization ?? '')) {
+        let raw;
+        try { raw = await readRaw(req); } catch (err) { return sendJson(res, 413, { error: err.message }); }
+        const v = devices.verifyRequest({
+          method: req.method, target: req.url, authorization: req.headers.authorization, body: raw,
+          remote: req.socket?.remoteAddress, allowPending: path === '/api/devices/activate' && req.method === 'POST',
+        });
+        if (!v.ok) {
+          log.warn('auth', `device ${v.status} ${req.method} ${path}: ${v.reason}`);
+          return sendJson(res, v.status, {
+            error: v.error, deviceRejected: true, reason: v.reason, ...(v.serverTime ? { serverTime: v.serverTime } : {}),
+          });
+        }
+        req.cambridgeDevice = v.device;
+      }
       if (gated) {
         const verdict = auth.authorise(req.method, path, req);
         Object.assign(who, verdict.who);
@@ -1104,7 +1155,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         }
         const stored = hashPin(pin);
         auth[role] = stored;
-        const saved = await adoption.saveAuth({ ...cfg.auth, [role]: stored });
+        // Merged into the auth block on disk, not rewritten from memory: that
+        // would drop phones paired since CamBridge started.
+        const saved = adoption.saveSection('auth', { [role]: stored });
         if (!saved.ok) return sendJson(res, 500, { error: saved.error });
         cfg.auth[role] = stored;
         log.info('auth', `${actor()}set the ${role === 'adminPin' ? 'admin' : 'operator'} PIN`);
@@ -1115,16 +1168,23 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/events') {
         const sink = eventSink(req, res);
         sink.write(`data: ${JSON.stringify(buildPush())}\n\n`);
-        sseClients.set(sink, { patch: url.searchParams.get('patch') === '1' });
         // Comment frames keep proxies and sleeping iPads from dropping the stream.
         const keepAlive = setInterval(() => {
           try { sink.write(': keepalive\n\n'); } catch { /* closed */ }
         }, 15_000);
-        req.on('close', () => {
+        // One way out, whichever end closes it: the client going away, or
+        // the server ending it (a phone revoked mid-stream).
+        let closed = false;
+        const close = () => {
+          if (closed) return;
+          closed = true;
           clearInterval(keepAlive);
           sseClients.delete(sink);
-          sink.end();
-        });
+          try { sink.end(); } catch { /* already closed */ }
+        };
+        sseClients.set(sink, { patch: url.searchParams.get('patch') === '1', device: req.cambridgeDevice?.id ?? null, close });
+        req.on('close', close);
+        res.on('close', close);
         return;
       }
 
@@ -1145,6 +1205,40 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'POST' && m[2]) {
         try { return sendJson(res, 200, await external.action(decodeURIComponent(m[1]), m[2], await readBody(req) ?? {})); }
         catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+
+      // --- paired phones ---
+      if (path === '/api/devices' && req.method === 'GET') {
+        return sendJson(res, 200, { devices: devices.list() });
+      }
+      if (path === '/api/devices' && req.method === 'POST') {
+        const body = await readBody(req);
+        const made = devices.create({ label: body?.label });
+        if (!made.ok) return sendJson(res, 500, { ok: false, error: made.error });
+        const uri = pairingUri({
+          serverId: devices.ensureServerId(), serverName: serverName(), hosts: lanAddresses(),
+          port: server.address()?.port ?? cfg.cambridge.port, deviceId: made.device.id, secret: made.secret,
+          expiresAt: made.device.expiresAt,
+        });
+        log.info('devices', `${actor()}made a pairing code for ${made.device.id}`);
+        return sendJson(res, 201, { ok: true, device: made.device, pairing: { uri, expiresAt: made.device.expiresAt } });
+      }
+      if (path === '/api/devices/activate' && req.method === 'POST') {
+        if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'sign this request with the device key from the QR', deviceRejected: true });
+        const body = await readBody(req);
+        const r = devices.activate(req.cambridgeDevice.id, { name: body?.name, model: body?.model });
+        if (!r.ok) return sendJson(res, r.status, { ok: false, error: r.error });
+        return sendJson(res, 200, { ok: true, device: r.device, server: { id: devices.ensureServerId(), name: serverName() } });
+      }
+      if (path === '/api/devices/me' && req.method === 'GET') {
+        if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'not a paired device', deviceRejected: true });
+        return sendJson(res, 200, { device: req.cambridgeDevice, server: { id: devices.ensureServerId(), name: serverName() } });
+      }
+      m = path.match(/^\/api\/devices\/([^/]+)$/);
+      if (m && req.method === 'DELETE') {
+        const r = devices.revoke(decodeURIComponent(m[1]));
+        if (r.ok) log.info('devices', `${actor()}revoked ${decodeURIComponent(m[1])}`);
+        return sendJson(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
       }
 
       // --- lighting ---
@@ -1876,6 +1970,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     ptz,
     external,
     lighting,
+    devices,
     /** The live panel link while driving one, else null. */
     get skaarhoj() { return skaarhoj; },
     start() {
@@ -1936,7 +2031,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       atem?.stop();
       atemWrites?.stop();
       await visca?.stop();
-      for (const c of sseClients.keys()) { try { c.end(); } catch { /* closed */ } }
+      for (const c of [...sseClients.values()]) c.close();
       sseClients.clear();
       await new Promise((r) => server.close(r));
     },

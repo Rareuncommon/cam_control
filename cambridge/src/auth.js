@@ -120,6 +120,9 @@ export const ADMIN_ROUTES = [
   /^(PUT|DELETE) \/api\/lighting\/(fixtures|profiles)\/[^/]+$/,
   /^GET \/api\/lighting\/export$/,
   /^POST \/api\/lighting\/import(\/companion)?$/,
+  // Pairing and revoking phones: who may control the studio from a pocket.
+  /^(GET|POST) \/api\/devices$/,
+  /^DELETE \/api\/devices\/[^/]+$/,
 ];
 
 /** Routes anyone may take, PIN or not — the login flow itself, and health. */
@@ -278,6 +281,12 @@ export class Auth {
    * log should not imply an identity that was never checked.
    */
   identify(req) {
+    // A paired phone whose signature the server already checked (devices.js).
+    // Operator, whatever the panel's PIN state: a phone never needs admin.
+    if (req?.cambridgeDevice) {
+      const d = req.cambridgeDevice;
+      return { role: 'operator', label: `phone:${d.name ?? d.id}`, via: 'device', device: d.id };
+    }
     if (!this.enabled) {
       // Tokens still identify themselves on an open panel, so a Companion
       // action is attributable even before a PIN is set.
