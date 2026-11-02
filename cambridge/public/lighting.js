@@ -558,12 +558,51 @@ export function createLighting({ root, pill, el, api, toast, show }) {
           el('button', { class: 'small ghost', text: 'Cancel', onclick: () => { preview.textContent = ''; pending = null; } })));
     }
 
+    // The one-time move of Companion's scenes (scene1–scene5 custom variables).
+    const companion = el('div', { class: 'lt-preview' });
+    const companionBtn = el('button', { class: 'small', text: 'Read scenes from Companion…', onclick: () => readCompanion() });
+
+    async function readCompanion() {
+      companion.textContent = '';
+      companionBtn.disabled = true;
+      let r;
+      try { r = await call('POST', '/api/lighting/import/companion', {}, { quiet: true }); } finally { companionBtn.disabled = false; }
+      if (r.httpStatus === 403) { companion.append(el('div', { class: 'note lt-err', text: 'Reading Companion needs the admin PIN.' })); return; }
+      if (!r.httpOk) { companion.append(el('div', { class: 'note lt-err', text: r.error ?? 'Could not read Companion.' })); return; }
+      const table = el('table', { class: 'list' },
+        el('tr', {}, ...['Scene', 'In Companion', 'Becomes', 'Saved', 'Notes'].map((t) => el('th', { text: t }))));
+      for (const s of r.scenes) {
+        const becomes = s.importable ? Object.entries(s.dmx).map(([n, v]) => `${n} ${v.join('/')}`).join(' · ') : '—';
+        const notes = [...s.problems, s.importable && s.replaces ? `replaces “${s.replaces}”` : null].filter(Boolean);
+        table.append(el('tr', { class: s.importable ? '' : 'lt-bad' },
+          el('td', { text: String(s.slot) }),
+          el('td', { class: 'mono', text: s.raw ?? '(not set)' }),
+          el('td', { class: 'mono', text: becomes }),
+          el('td', { class: 'note', text: s.saved ?? '' }),
+          el('td', { class: 'note', text: notes.join('; ') })));
+      }
+      companion.append(
+        el('div', { class: 'note', text: `Read from Companion at ${r.source}, universe ${r.universe}. Nothing has been written yet.` }),
+        el('div', { class: 'tablescroll' }, table));
+      if (!r.importable) { companion.append(el('div', { class: 'note lt-err', text: 'None of these can be imported.' })); return; }
+      companion.append(el('div', { class: 'line', style: 'margin-top:8px' },
+        el('button', { class: 'small primary', text: `Import ${r.importable} scene${r.importable === 1 ? '' : 's'}`, onclick: async () => {
+          if (!confirm('Write these scenes into CamBridge? Scenes in the same slots are replaced. Companion is not changed.')) return;
+          const done = await call('POST', '/api/lighting/import/companion', { confirm: true });
+          if (done.httpOk) { toast(`Imported scene${done.imported.length === 1 ? '' : 's'} ${done.imported.join(', ')} from Companion`); companion.textContent = ''; }
+        } }),
+        el('button', { class: 'small ghost', text: 'Cancel', onclick: () => { companion.textContent = ''; } })));
+    }
+
     const card = el('details', { class: 'card lt-details' },
       el('summary', { text: 'Import & export' }),
       el('div', { class: 'sub', text: 'Admin. The fixtures, custom fixture types and scenes as one JSON file. An import is checked and shown first; nothing changes until you confirm.' }),
       el('div', { class: 'line' }, exportBtn, importBtn,
         el('label', { class: 'note', for: 'lt-imp-scenes' }, scenes, document.createTextNode(' include scenes')), file),
-      preview);
+      preview,
+      el('h3', { text: 'Scenes from Companion', style: 'margin-top:16px' }),
+      el('div', { class: 'sub', text: 'Once, when moving over: reads Companion’s scene1–scene5 custom variables (read only) and shows what each becomes before anything is written.' }),
+      companionBtn, companion);
     return { card, preview };
   }
 

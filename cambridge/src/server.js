@@ -1150,7 +1150,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // --- lighting ---
       if (await handleLighting({
         req, res, path, lighting, unavailable: lightingError, admin: auth.isAdmin(who), actor: actor(),
-        readBody, sendJson, log, logGesture,
+        readBody, sendJson, log, logGesture, companionImport: (body) => lighting.importFromCompanion(body),
       })) return;
 
       // --- state ---

@@ -23,7 +23,8 @@ import {
 import { LightingEngine } from './engine.js';
 import { SacnOutput } from './output.js';
 import { LOOKS, lookState, matches, sceneView } from './looks.js';
-import { newCid, cidBytes, MAX_PRIORITY } from './sacn.js';
+import { newCid, cidBytes, MAX_PRIORITY, MIN_UNIVERSE, MAX_UNIVERSE } from './sacn.js';
+import { readCompanionScenes, savedAt, DEFAULT_COMPANION_URL } from './companion-import.js';
 
 const MAX_FADE_MS = 60_000;
 const OUTPUT_DEFAULTS = Object.freeze({
@@ -42,9 +43,11 @@ export class Lighting extends EventEmitter {
    * @param {(level: string, msg: string) => void} [o.log]
    * @param {object} [o.outputOptions]     passed to SacnOutput (tests inject a fake network)
    * @param {object} [o.engineOptions]     passed to LightingEngine (tests inject a clock)
+   * @param {Function} [o.fetch]           for the Companion import (tests inject one)
    */
-  constructor({ readConfig, writeConfig, storePath, log = () => {}, outputOptions = {}, engineOptions = {} }) {
+  constructor({ readConfig, writeConfig, storePath, log = () => {}, outputOptions = {}, engineOptions = {}, fetch = globalThis.fetch }) {
     super();
+    this.fetch = fetch;
     this.readConfig = readConfig;
     this.writeConfig = writeConfig;
     this.log = log;
@@ -341,6 +344,39 @@ export class Lighting extends EventEmitter {
     return ok({ ok: true, ...summary });
   }
 
+  /**
+   * The one-time migration of Companion's lighting scenes. Without `confirm`
+   * it only reads Companion and reports what it found and what each scene
+   * would become; with it, it reads Companion again (what is written is what
+   * Companion holds now, not what a browser sent back) and writes the scenes
+   * that can be imported — or only `slots`, if given.
+   */
+  async importFromCompanion({ confirm = false, url, universe = 1, slots } = {}) {
+    if (!Number.isInteger(universe) || universe < MIN_UNIVERSE || universe > MAX_UNIVERSE) return fail(400, `universe must be ${MIN_UNIVERSE}–${MAX_UNIVERSE}`);
+    const source = typeof url === 'string' && url.trim() ? url.trim() : this.companionUrl;
+    const r = await readCompanionScenes({
+      url: source, count: this.sceneCount, fixtures: this.fixtures, profiles: this.profiles, universe, fetch: this.fetch,
+    });
+    if (!r.ok) return fail(502, r.error);
+    const scenes = r.scenes.map((s) => ({ ...s, replaces: this.store.data.scenes[s.slot]?.name ?? null, importable: !!s.state }));
+    const chosen = scenes.filter((s) => s.importable && (!Array.isArray(slots) || slots.includes(s.slot)));
+    if (!confirm) return ok({ ok: true, dryRun: true, source: r.source, universe, scenes, importable: chosen.length });
+    if (!chosen.length) return fail(409, 'there is nothing to import: Companion has no scenes that land on the patch');
+    const write = {};
+    for (const s of chosen) {
+      write[s.slot] = {
+        name: `Scene ${s.slot}`,
+        savedAt: savedAt(s.saved),
+        note: `Imported from Companion: "${s.raw}"${s.saved ? `, saved ${s.saved}` : ''}`,
+        state: s.state,
+      };
+    }
+    const w = this.writeScenes(write);
+    if (!w.ok) return w;
+    this.log('info', `lighting: imported scene(s) ${chosen.map((s) => s.slot).join(', ')} from Companion at ${r.source}`);
+    return ok({ ok: true, imported: chosen.map((s) => s.slot), scenes: w.body.scenes });
+  }
+
   /** Writes imported scenes (Companion migration), after the caller has shown them. */
   writeScenes(scenes) {
     for (const [slot, s] of Object.entries(scenes)) {
@@ -373,6 +409,7 @@ export class Lighting extends EventEmitter {
     }
     this.sceneCount = Number.isInteger(l.sceneCount) && l.sceneCount >= 1 && l.sceneCount <= 99 ? l.sceneCount : DEFAULT_SCENE_COUNT;
     if (l.profiles !== undefined && !Array.isArray(l.profiles)) bad('profiles is not a list — ignoring it');
+    this.companionUrl = typeof l.companionUrl === 'string' && l.companionUrl.trim() ? l.companionUrl.trim() : DEFAULT_COMPANION_URL;
     this.customProfiles = Array.isArray(l.profiles) ? l.profiles : [];
     if (l.fixtures === undefined) {
       // First run: the studio's five Lyras.
