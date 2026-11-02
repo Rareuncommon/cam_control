@@ -6,6 +6,7 @@ until switched on, and none of them is required.
 | | Where it is configured | Needs hardware to confirm |
 |---|---|---|
 | Bitfocus Companion | in Companion | no |
+| Studio lighting (sACN) | the Lighting tab — see [lighting.md](lighting.md) | **yes** (the lights) |
 | ATEM tally | `config/cambridge.json` | **yes** |
 | VISCA | `config/cambridge.json` | **yes** |
 | SKAARHOJ panel (PTZ) | Setup, or `config/cambridge.json` — see [skaarhoj.md](skaarhoj.md) | **yes** |
@@ -102,6 +103,19 @@ list. Same as the − / + stepper in the web panel, deliberately.
 Exposure the camera reports iris/ISO/shutter read-only until you take them off
 Auto, and the module refuses to write rather than pretending. Use the **Auto /
 Manual** action first.
+
+### Lighting
+
+Since module 1.1.0 the studio lights are driven through CamBridge too.
+
+- **Actions:** set or nudge dimmer and colour per light, group or all; scenes
+  (tap a key to recall, hold it 5 s to save); the Studio look; output on/off.
+- **Variables:** per light % and K.
+- **Feedbacks:** the scene or look showing.
+- **Ready-made pages:** rebuilds of the old lighting pages 5, 12 and 13.
+
+Companion's own `generic-sacn` connection stays in place but disabled.
+[lighting.md](lighting.md) has the cut-over and the way back.
 
 ### Version
 

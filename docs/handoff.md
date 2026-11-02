@@ -4,6 +4,40 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-11-02 studio lighting
+
+CamBridge now drives the studio lights: five Ikan Lyra LBX8-POE panels,
+universe 1, sACN from en14. This replaces Companion's `generic-sacn`
+connection, and Companion's lighting keys go through CamBridge. Everything
+is in [lighting.md](lighting.md).
+
+**Where it lives:** `cambridge/src/lighting/`, the Lighting tab, and
+`companion-module-cambridge/src/lighting.js`. The module is now 1.1.0.
+
+**Load-bearing decisions:**
+- **Own E1.31 framing, in Node, not camd.** It needs no npm dependency. The
+  socket is bound to the lighting address, unicast by default.
+- **One state in % and K.** DMX is produced only through fixture profiles. The
+  Studio look and Off are stored as DMX, so they survive a change to the CCT
+  curve.
+- **Never black out by itself.** With no saved state nothing is sent;
+  otherwise the last state is restored and resumed.
+- **Output off by default.** A fixture with a problem is left out, not
+  guessed at.
+
+**Verified:**
+- packet layout, against two implementations and a loopback test;
+- Companion 5.0.2's HTTP API, against its source;
+- that `generic-sacn` sends all zeros when re-enabled.
+
+**Open:**
+1. **Nothing has been sent to the real lights yet.** The cut-over in
+   lighting.md is to be run in the studio, with someone watching.
+2. **Lyra behaviour.** What the panels do when sACN stops (the stale-DMX
+   table in lighting.md), whether they accept unicast and honour priority,
+   and their real CCT curve.
+3. **The old LIGHTS ON key.** What it sent; the new preset sends 100 %.
+
 ## 2026-10-14 Codex branch merged; one PTZ system
 
 `codex/stills-cinema-cameras` (12–23 September) is merged into `main`, with
