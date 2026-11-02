@@ -7,6 +7,7 @@ import { varId } from './variables.js';
 import { buildPtzPresets } from './ptz.js';
 import { buildControllerPresets } from './select.js';
 import { STATUS_STYLE } from './feedbacks.js';
+import { buildLightingPresets } from './lighting.js';
 
 const WHITE = combineRgb(255, 255, 255);
 const BLACK = combineRgb(0, 0, 0);
@@ -182,5 +183,5 @@ export function buildPresets(self) {
     };
   }
 
-  return { ...presets, ...buildPtzPresets(self), ...buildControllerPresets(self) };
+  return { ...presets, ...buildPtzPresets(self), ...buildControllerPresets(self), ...buildLightingPresets(self) };
 }

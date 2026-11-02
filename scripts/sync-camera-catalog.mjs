@@ -20,14 +20,16 @@ const products = [
   'USB stills cameras (Canon, Nikon, Fujifilm and others)',
   'Blackmagic cinema and studio cameras',
   'PTZ cameras',
+  // Not a camera: CamBridge also drives the studio lights (docs/lighting.md).
+  'Studio lighting over sACN (E1.31), e.g. Ikan Lyra panels',
 ];
 // The families drop the brand names, so keep every supported brand searchable.
 const brands = [...external.models.map(p => p.brand), ...supported().map(v => v.label)].map(b => b.toLowerCase());
-const keywords = [...new Set(['camera', 'sony', 'fx3', 'fx30', 'ccu', 'tally', 'ptz', 'blackmagic', ...brands])];
+const keywords = [...new Set(['camera', 'sony', 'fx3', 'fx30', 'ccu', 'tally', 'ptz', 'blackmagic', ...brands, 'lighting', 'sacn', 'e1.31', 'dmx'])];
 if (process.argv.includes('--write')) {
   manifest.products = products;
   manifest.keywords = keywords;
-  manifest.description = 'Sony SDK, USB stills, Blackmagic cinema and PTZ camera control via CamBridge. Hardware validation remains model-specific.';
+  manifest.description = 'Sony SDK, USB stills, Blackmagic cinema and PTZ camera control, and studio lighting (sACN), via CamBridge. Hardware validation remains model-specific.';
   manifest.manufacturer = 'Multiple';
   writeFileSync(path, JSON.stringify(manifest, null, '\t') + '\n');
 } else if (JSON.stringify(manifest.products) !== JSON.stringify(products)

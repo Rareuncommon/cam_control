@@ -3,8 +3,8 @@
 	"id": "cambridge",
 	"name": "cambridge",
 	"shortname": "CamBridge",
-	"description": "Sony SDK, USB stills, Blackmagic cinema and PTZ camera control via CamBridge. Hardware validation remains model-specific.",
-	"version": "1.0.0",
+	"description": "Sony SDK, USB stills, Blackmagic cinema and PTZ camera control, and studio lighting (sACN), via CamBridge. Hardware validation remains model-specific.",
+	"version": "1.1.0",
 	"license": "MIT",
 	"repository": "https://github.com/Rareuncommon/cam_control",
 	"bugs": "https://github.com/Rareuncommon/cam_control/issues",
@@ -25,7 +25,8 @@
 		"Sony cinema and Alpha bodies (Camera Remote SDK)",
 		"USB stills cameras (Canon, Nikon, Fujifilm and others)",
 		"Blackmagic cinema and studio cameras",
-		"PTZ cameras"
+		"PTZ cameras",
+		"Studio lighting over sACN (E1.31), e.g. Ikan Lyra panels"
 	],
 	"keywords": [
 		"camera",
@@ -45,6 +46,10 @@
 		"panasonic",
 		"pentax",
 		"sigma",
-		"ptzoptics"
+		"ptzoptics",
+		"lighting",
+		"sacn",
+		"e1.31",
+		"dmx"
 	]
 }

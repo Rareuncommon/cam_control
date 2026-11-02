@@ -20,6 +20,7 @@ import { PtzHolds, holdCeilingMs, HOLD_MAX_MIN_S, HOLD_MAX_MAX_S, HOLD_MAX_DEFAU
 import {
   bankSizeOf, bankCount, bankOf, stepSelection, selectionVariableDefs, selectionVariableValues,
 } from './select.js';
+import { lightingSignature, lightingVariableDefs, lightingVariableValues } from './lighting.js';
 
 /** Runs `fn` over `items` with at most `limit` in flight: 48 heads must not mean 48 requests at once. */
 async function mapLimit(items, limit, fn) {
@@ -81,6 +82,8 @@ class CambridgeInstance extends InstanceBase {
     this.linkUp = false;
     /** The last frame received before the link dropped, clearly not live. */
     this.lastKnown = null;
+    /** Studio lighting as CamBridge last sent it (the `lighting` envelope field), or null. */
+    this.lighting = null;
   }
 
   /** Camera-select keys per bank. Part of the definitions, so changing it rebuilds them. */
@@ -218,6 +221,8 @@ class CambridgeInstance extends InstanceBase {
       status: { ...(c.status ?? {}), recording: null, recordingFailed: false, recordingState: -1 },
     }));
     this.roll = null;
+    // Not "the lights are off": nobody can see what they are doing.
+    this.lighting = null;
     this.ptzCams = this.cameras.filter(isPtz);
     // The records built from live frames no longer match what is shown, so the
     // next frame rebuilds every camera rather than reusing them.
@@ -228,6 +233,7 @@ class CambridgeInstance extends InstanceBase {
         alarms: this.alarms, roll: null, linkUp: false,
       }),
       ...this.#selectionValues(),
+      ...lightingVariableValues(null),
     });
     this.checkFeedbacks();
   }
@@ -248,6 +254,11 @@ class CambridgeInstance extends InstanceBase {
     this.alarmSummary = frame?.alarmSummary ?? null;
     this.roll = frame?.roll ?? null;
     this.linkUp = true;
+    // A patch carries lighting only when it changed, and the client keeps the
+    // last one in the frame, so the same object means nothing changed.
+    const lighting = frame?.lighting ?? null;
+    const lightingChanged = lighting !== this.lighting;
+    this.lighting = lighting;
 
     this.camdConnected = !!view.camdConnected;
     // A server that predates PTZ does not send this, and then camd is in use.
@@ -315,6 +326,7 @@ class CambridgeInstance extends InstanceBase {
         linkUp: true,
       }),
       ...this.#selectionValues(),
+      ...(lightingChanged || rebuilt ? lightingVariableValues(this.lighting) : {}),
     });
     this.checkFeedbacks();
   }
@@ -329,13 +341,15 @@ class CambridgeInstance extends InstanceBase {
   }
 
   #signature() {
-    return `${this.cameras.map((c) => this.#cameraSignature(c)).join('|')}#${this.bankSize}#${this.ptzPerCameraPresets}`;
+    return `${this.cameras.map((c) => this.#cameraSignature(c)).join('|')}#${this.bankSize}#${this.ptzPerCameraPresets}`
+      + `#${lightingSignature(this.lighting)}`;
   }
 
   rebuildDefinitions() {
     this.setVariableDefinitions([
       ...buildVariableDefinitions(this.cameras),
       ...(this.ptzCams.length ? selectionVariableDefs(this.bankSize) : []),
+      ...lightingVariableDefs(this.lighting),
     ]);
     this.setActionDefinitions(buildActions(this));
     this.setFeedbackDefinitions(buildFeedbacks(this));

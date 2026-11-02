@@ -81,7 +81,10 @@ If a camera does not appear in the list, it is not reachable. Check on the body:
 - `MENU → Network → USB-LAN/Tethering → USB-LAN Cnct. Launch → On` — so it comes
   back by itself after a power cycle
 
-## The three tabs
+## The tabs
+
+Control, Multiview, Lighting and Setup. Lighting has its own page:
+[lighting.md](lighting.md).
 
 ### Control
 
@@ -212,6 +215,20 @@ not tell you what is being cropped.
 
 All of it is remembered per browser, so a booth iPad comes back the way it was
 left.
+
+### Lighting
+
+The studio lights, driven by CamBridge over sACN:
+- faders per light in % and K, and All faders;
+- the protected Studio look and Studio off;
+- scenes 1–5;
+- the fixture patch, and the output switch with dry run.
+
+Output is **off** until switched on, and must only be switched on once
+Companion's own sACN connection is off. The header shows a pill (DRY RUN,
+NO NETWORK, …) whenever lighting needs attention, and none while it is
+sending normally. Everything about it, including the move from Companion and
+the way back, is in [lighting.md](lighting.md).
 
 ### Setup
 

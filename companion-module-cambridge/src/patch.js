@@ -14,8 +14,12 @@
 const FIELDS = ['status', 'recordStartedAt', 'ptz', 'tally', 'capabilities', 'state', 'detail',
   'reconnectAttempts', 'label', 'group'];
 
-/** Envelope fields every frame carries alongside the camera list. */
-const ENVELOPE = ['alarms', 'alarmsByCamera', 'alarmSummary', 'roll', 'undo', 'skaarhoj'];
+/**
+ * Envelope fields a frame carries alongside the camera list. A patch that
+ * leaves one out leaves the client's copy as it was (lighting is only sent
+ * when it changed).
+ */
+const ENVELOPE = ['alarms', 'alarmsByCamera', 'alarmSummary', 'roll', 'undo', 'skaarhoj', 'lighting'];
 
 /**
  * @param {object} frame  the client's current full frame: { view: { cameras, … }, alarms, … }

@@ -4,6 +4,7 @@ import { createPtz } from './ptz.js';
 import { createBus } from './bus.js';
 import { createBulkAdd } from './bulkadd.js';
 import { applyPatch } from './patch.js';
+import { createLighting } from './lighting.js';
 import {
   buildFalseColourLut, measureThenOverlay,
   drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
@@ -73,6 +74,10 @@ let soloFeed = null;
 let gangSelection = new Set();
 let interacting = null;
 const externalUi = createExternalUi({ el, api, toast });
+// Lighting is its own tab, fed from the same stream as the cameras.
+const lightingUi = createLighting({
+  root: $('#view-lighting'), pill: $('#light-pill'), el, api, toast, show: () => switchView('lighting'),
+});
 // Persisted so a booth iPad comes back the way it was left.
 let advanced = localStorage.getItem('cb.advanced') === '1';
 let rampMs = Number(localStorage.getItem('cb.rampMs') ?? 0);
@@ -2047,6 +2052,7 @@ async function loadMeta() {
 // state, so a patch is never applied to a frame from before an outage.
 let frame = null;
 let undoJson = null;
+let lastLighting = null;
 
 /**
  * A full frame — on connect, after a reconnect, when cameras are added,
@@ -2077,6 +2083,11 @@ function adopt(next) {
   ptzUi.onView(view);
   render();
   if (currentView === 'multiview') syncMultiview();
+  // Lighting is only in a patch when it changed; a full frame always has it.
+  if (next.lighting && next.lighting !== lastLighting) {
+    lastLighting = next.lighting;
+    try { lightingUi.onView(next.lighting); } catch (err) { console.error('lighting view', err); }
+  }
 }
 
 async function resync() {
