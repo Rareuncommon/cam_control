@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Linked into the blebridge binary (__TEXT,__info_plist) by build.sh. A
+  command-line tool has no bundle, so this is how macOS knows what to call it
+  and why it wants Bluetooth when it asks for permission.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>studio.cambridge.blebridge</string>
+	<key>CFBundleName</key>
+	<string>blebridge</string>
+	<key>CFBundleDisplayName</key>
+	<string>CamBridge Bluetooth bridge</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>CamBridge uses Bluetooth so its phone app can control the studio when the phone is not on the studio network.</string>
+</dict>
+</plist>

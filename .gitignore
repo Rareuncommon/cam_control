@@ -80,3 +80,4 @@ __pycache__/
 # Local optional libgphoto2 helper (dynamic library paths are host-specific)
 cambridge/native/gphoto-control
 config/blebridge.sock
+blebridge/build/
