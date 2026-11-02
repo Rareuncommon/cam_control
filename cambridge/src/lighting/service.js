@@ -419,7 +419,9 @@ export class Lighting extends EventEmitter {
   #replacePatch(next, what, id) {
     const errors = validatePatch(next, this.profiles);
     if (errors.length) {
-      return fail(400, 'the patch has problems; nothing was changed', { errors });
+      // `fixture` says which one this change was about, so a form can put its
+      // errors by its fields and show the rest (the other half of an overlap) apart.
+      return fail(400, 'the patch has problems; nothing was changed', { errors, ...(id ? { fixture: id } : {}) });
     }
     const saved = this.#writeLighting({ fixtures: next });
     if (!saved.ok) return saved;

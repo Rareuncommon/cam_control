@@ -19,12 +19,16 @@
   <nav class="tabs">
     <button data-view="control" class="active">Control</button>
     <button data-view="multiview">Multiview</button>
+    <button data-view="lighting">Lighting</button>
     <button data-view="setup">Setup</button>
   </nav>
   <span id="camd-pill" class="pill">connecting…</span>
   <!-- "3 of 3 rolling" — the question asked most often during a shoot, and
        until now answerable only by reading three separate record buttons. -->
   <span id="roll-pill" class="pill" style="display:none"></span>
+  <!-- Lighting output, when it needs saying: off, dry run, waiting, or a
+       network fault. Hidden while CamBridge is sending normally. -->
+  <button id="light-pill" class="pill" hidden title="Lighting"></button>
   <span class="spacer"></span>
   <button id="pad-open" class="small ghost" style="display:none" title="Gamepad control">🎮</button>
   <button id="advanced-toggle" class="small ghost" title="Keep every camera's extra controls open">More controls</button>
@@ -176,6 +180,10 @@
   </dialog>
   <main id="mvgrid"></main>
 </section>
+
+<!-- ================= LIGHTING ================= -->
+<!-- Built by lighting.js: faders, looks and scenes, the patch, output. -->
+<section class="view" id="view-lighting"></section>
 
 <!-- ================= SETUP ================= -->
 <section class="view" id="view-setup">

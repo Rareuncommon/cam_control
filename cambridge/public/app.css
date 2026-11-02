@@ -650,3 +650,47 @@ table.list .ordercol button { min-width: 38px; padding: 4px 8px; }
 .external-control { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; margin-top: 10px; }
 .external-control > * { min-width: 0; max-width: 100%; }
 .external-card .note { overflow-wrap: anywhere; }
+
+/* --- lighting --------------------------------------------------------------
+   Faders are rows: name, dimmer, readout, colour, readout, Identify. On a
+   phone the row stacks so each fader keeps a usable length. */
+button.pill { min-height: 0; font-size: 12px; padding: 3px 9px; border-radius: 999px; cursor: pointer; }
+.lt-state { font-size: 15px; }
+.lt-state.warn { color: var(--warn); }
+.lt-state.bad { color: var(--bad); }
+.lt-alert { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+.lt-err { color: var(--bad); }
+.lt-looks { margin-bottom: 12px; }
+.lt-look.on, .lt-scene.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.lt-scenes { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); }
+.lt-scene { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.lt-scene.empty .lt-scene-name { color: var(--dim); }
+.lt-scene-name { font-weight: 700; overflow-wrap: anywhere; }
+.lt-row {
+  display: grid; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line);
+  grid-template-columns: minmax(80px, 140px) minmax(0, 1fr) 58px minmax(0, 1fr) 68px auto;
+}
+.lt-row:last-child { border-bottom: none; }
+.lt-row.lt-off { grid-template-columns: minmax(80px, 140px) 1fr; opacity: .8; }
+.lt-row.lt-group { grid-template-columns: minmax(80px, 140px) 1fr; }
+.lt-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.lt-readout { font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
+.lt-master { border-bottom: none; }
+.lt-master-tools { justify-content: space-between; padding-bottom: 6px; }
+.lt-masters { border-bottom: 1px solid var(--line); margin-bottom: 4px; padding-bottom: 8px; }
+.lt-patch tr.lt-bad td { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+details.lt-details > summary { cursor: pointer; font-weight: 700; list-style: none; }
+details.lt-details > summary::-webkit-details-marker { display: none; }
+details.lt-details > summary::before { content: "▸ "; color: var(--dim); }
+details.lt-details[open] > summary::before { content: "▾ "; }
+details.lt-details[open] > summary { margin-bottom: 8px; }
+.lt-profile { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.lt-preview { margin-top: 10px; }
+textarea.mono { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px; }
+@media (max-width: 720px) {
+  .lt-row { grid-template-columns: minmax(0, 1fr) 58px; }
+  .lt-row > .lt-name { grid-column: 1 / -1; }
+  .lt-row > button { grid-column: 1 / -1; justify-self: start; }
+  .lt-row.lt-off, .lt-row.lt-group { grid-template-columns: 1fr; }
+  .lt-patch th:nth-child(2), .lt-patch td:nth-child(2), .lt-patch th:nth-child(6), .lt-patch td:nth-child(6) { display: none; }
+}
