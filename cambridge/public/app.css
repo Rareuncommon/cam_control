@@ -694,3 +694,8 @@ textarea.mono { width: 100%; background: var(--panel-2); color: var(--text); bor
   .lt-row.lt-off, .lt-row.lt-group { grid-template-columns: 1fr; }
   .lt-patch th:nth-child(2), .lt-patch td:nth-child(2), .lt-patch th:nth-child(6), .lt-patch td:nth-child(6) { display: none; }
 }
+
+/* --- phones (Setup) -------------------------------------------------------- */
+dialog.phones-dialog { max-width: min(440px, 92vw); }
+.phones-qr { background: #fff; border-radius: 10px; padding: 10px; margin: 12px auto; width: min(320px, 80vw); }
+.phones-qr svg { display: block; width: 100%; height: auto; }

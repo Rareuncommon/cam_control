@@ -5,6 +5,7 @@ import { createBus } from './bus.js';
 import { createBulkAdd } from './bulkadd.js';
 import { applyPatch } from './patch.js';
 import { createLighting } from './lighting.js';
+import { createPhones } from './phones.js';
 import {
   buildFalseColourLut, measureThenOverlay,
   drawHistogram, drawGuides, drawClipReadout, FALSE_COLOUR_BANDS,
@@ -74,6 +75,8 @@ let soloFeed = null;
 let gangSelection = new Set();
 let interacting = null;
 const externalUi = createExternalUi({ el, api, toast });
+// Setup → Phones: pairing the CamBridge app.
+const phonesUi = createPhones({ root: $('#phones-card'), el, api, toast });
 // Lighting is its own tab, fed from the same stream as the cameras.
 const lightingUi = createLighting({
   root: $('#view-lighting'), pill: $('#light-pill'), el, api, toast, show: () => switchView('lighting'),
@@ -1398,6 +1401,7 @@ async function refreshSetup() {
   }
   renderSetup();
   ptzUi.refreshSkaarhoj($);
+  phonesUi.refresh();
 }
 
 // --- shared -----------------------------------------------------------------

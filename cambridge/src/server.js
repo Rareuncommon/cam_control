@@ -41,6 +41,7 @@ import { Lighting } from './lighting/service.js';
 import { handleLighting, gestureLogger } from './lighting/routes.js';
 import { DeviceRegistry, pairingUri, SCHEME as DEVICE_SCHEME } from './devices.js';
 import { MdnsAdvertiser } from './mdns.js';
+import { qrSvg } from './qr.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -1234,7 +1235,8 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
           expiresAt: made.device.expiresAt,
         });
         log.info('devices', `${actor()}made a pairing code for ${made.device.id}`);
-        return sendJson(res, 201, { ok: true, device: made.device, pairing: { uri, expiresAt: made.device.expiresAt } });
+        // The secret is in this answer and nowhere else: the QR is the only copy.
+        return sendJson(res, 201, { ok: true, device: made.device, pairing: { uri, svg: qrSvg(uri), expiresAt: made.device.expiresAt } });
       }
       if (path === '/api/devices/activate' && req.method === 'POST') {
         if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'sign this request with the device key from the QR', deviceRejected: true });
