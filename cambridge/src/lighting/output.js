@@ -67,8 +67,19 @@ export class SacnOutput extends EventEmitter {
     this.retryTimer = null;
     this.watchTimer = null;
     this.errorBurst = 0;
+    this.opened = false;
     this.closed = false;
     this.configure(settings);
+  }
+
+  /**
+   * Opens the socket (and keeps trying to). Separate from construction so
+   * that building the app — in a test, say — never touches the network.
+   */
+  open() {
+    if (this.closed) return;
+    this.opened = true;
+    this.#ensureSocket();
   }
 
   /** Applies new settings. A change of interface, address or mode rebinds. */
@@ -89,7 +100,7 @@ export class SacnOutput extends EventEmitter {
     const rebind = !before || before.interface !== this.settings.interface
       || before.address !== this.settings.address || before.mode !== this.settings.mode;
     if (rebind) this.#closeSocket();
-    this.#ensureSocket();
+    if (this.opened) this.#ensureSocket();
   }
 
   /** True when frames will actually leave the computer. */
@@ -172,7 +183,7 @@ export class SacnOutput extends EventEmitter {
   }
 
   #ensureSocket() {
-    if (this.closed || this.socket || this.binding) return;
+    if (!this.opened || this.closed || this.socket || this.binding) return;
     // The socket is opened whenever the interface is there, enabled or not, so
     // Setup can say "en14 is down" before anyone turns output on.
     const where = resolveLocalAddress(this.settings, this.networkInterfaces());
@@ -212,6 +223,8 @@ export class SacnOutput extends EventEmitter {
       } catch (err) {
         this.log('warn', `multicast setup: ${err.message}`);
       }
+      // The HTTP server keeps CamBridge running; the lighting socket alone must not.
+      socket.unref?.();
       this.socket = socket;
       this.bound = { address: where.address, interface: where.interface };
       this.#setError(null);

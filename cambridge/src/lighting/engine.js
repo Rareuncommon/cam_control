@@ -195,6 +195,8 @@ export class LightingEngine extends EventEmitter {
 
   /** Sends a frame now and reschedules. Safe to call at any time. */
   tick() {
+    // Called by the timer, or directly: either way there is one timer chain.
+    if (this.timer) this.timers.clearTimeout(this.timer);
     this.timer = null;
     if (!this.running) return;
     const now = this.now();

@@ -26,6 +26,9 @@ import { LOOKS, lookState, matches, sceneView } from './looks.js';
 import { newCid, cidBytes, MAX_PRIORITY } from './sacn.js';
 
 const MAX_FADE_MS = 60_000;
+const OUTPUT_DEFAULTS = Object.freeze({
+  enabled: false, dryRun: false, interface: 'en14', address: '192.168.220.66', mode: 'unicast', priority: 100, sourceName: 'CamBridge',
+});
 const DEFAULT_SCENE_COUNT = 5;
 const ok = (body = { ok: true }) => ({ ok: true, status: 200, body });
 const fail = (status, error, extra = {}) => ({ ok: false, status, body: { ok: false, error, ...extra } });
@@ -71,6 +74,7 @@ export class Lighting extends EventEmitter {
   }
 
   start() {
+    this.output.open();
     this.engine.start();
     const s = this.output.status();
     this.log('info', `lighting: ${this.fixtures.length} fixture(s), output ${s.state}`
@@ -119,7 +123,7 @@ export class Lighting extends EventEmitter {
       scenes: this.#sceneSlots().map((n) => sceneView(n, this.store.data.scenes[n])),
       looks: Object.values(LOOKS).map((l) => ({ id: l.id, name: l.name, protected: true })),
       active: this.#active(heading),
-      errors: [...this.patchErrors.filter((e) => !e.fixture), ...this.profileErrors],
+      errors: [...this.configErrors, ...this.patchErrors.filter((e) => !e.fixture), ...this.profileErrors],
       profiles: full
         ? [...this.profiles.values()].map((p) => ({ ...p, footprint: footprint(p), kelvin: kelvinRange(p) }))
         : [...this.profiles.values()].map((p) => ({ id: p.id, name: p.name, builtIn: !!p.builtIn })),
@@ -174,7 +178,6 @@ export class Lighting extends EventEmitter {
     const label = cleanName(name) ?? existing?.name ?? `Scene ${n}`;
     this.store.data.scenes[n] = { name: label, savedAt: new Date().toISOString(), state: this.engine.targets() };
     if (!this.store.save()) return fail(500, 'could not save the scene to disk');
-    this.log('info', `lighting scene ${n} "${label}" saved`);
     this.#emitView();
     return ok({ ok: true, scene: sceneView(n, this.store.data.scenes[n]) });
   }
@@ -197,7 +200,6 @@ export class Lighting extends EventEmitter {
     if (!n) return fail(404, `no scene ${slot}`);
     delete this.store.data.scenes[n];
     if (!this.store.save()) return fail(500, 'could not save to disk');
-    this.log('info', `lighting scene ${n} cleared`);
     this.#emitView();
     return ok({ ok: true, scene: sceneView(n, null) });
   }
@@ -229,41 +231,14 @@ export class Lighting extends EventEmitter {
     if (!admin && network.some((k) => k in changes)) {
       return fail(403, 'changing the lighting network settings needs the admin PIN');
     }
-    const next = { ...this.settings.output };
-    const errors = [];
-    if ('enabled' in changes) next.enabled = changes.enabled === true;
-    if ('dryRun' in changes) next.dryRun = changes.dryRun === true;
-    if ('interface' in changes) {
-      if (typeof changes.interface !== 'string' || changes.interface.length > 32) errors.push('interface must be a name like en14');
-      else next.interface = changes.interface.trim();
-    }
-    if ('address' in changes) {
-      if (changes.address !== '' && !isIPv4(String(changes.address))) errors.push('address must be an IPv4 address, or empty to use the interface\'s');
-      else next.address = changes.address;
-    }
-    if ('mode' in changes) {
-      if (!['unicast', 'multicast'].includes(changes.mode)) errors.push('mode is unicast or multicast');
-      else next.mode = changes.mode;
-    }
-    if ('priority' in changes) {
-      if (!Number.isInteger(changes.priority) || changes.priority < 0 || changes.priority > MAX_PRIORITY) errors.push(`priority is a whole number 0–${MAX_PRIORITY}`);
-      else next.priority = changes.priority;
-    }
-    if ('sourceName' in changes) {
-      if (typeof changes.sourceName !== 'string' || !changes.sourceName.trim() || Buffer.byteLength(changes.sourceName) > 63) errors.push('source name is 1–63 bytes');
-      else next.sourceName = changes.sourceName.trim();
-    }
-    if ('cid' in changes) {
-      try { cidBytes(changes.cid); next.cid = changes.cid; } catch { errors.push('CID must be a UUID'); }
-    }
-    if ('port' in changes) {
-      if (!Number.isInteger(changes.port) || changes.port < 1 || changes.port > 65535) errors.push('port must be 1–65535');
-      else next.port = changes.port;
-    }
-    if (errors.length) return fail(400, errors.join('; '), { errors });
+    const { values, errors } = checkOutput(changes);
+    if (errors.length) return fail(400, errors.map((e) => e.message).join('; '), { errors: errors.map((e) => e.message) });
+    const next = { ...this.settings.output, ...values };
     const saved = this.#writeLighting({ output: next });
     if (!saved.ok) return saved;
     this.output.configure(this.#outputSettings());
+    // Output just switched on: the current state goes out now, not at the next refresh.
+    this.engine.tick();
     this.log('info', `lighting output: ${describe(this.output.status())}`);
     this.#emitView();
     return ok({ ok: true, output: this.output.status() });
@@ -382,13 +357,34 @@ export class Lighting extends EventEmitter {
   #loadSettings() {
     let cfg = {};
     try { cfg = this.readConfig() ?? {}; } catch (err) { this.log('error', `lighting: cannot read config (${err.message}) — using defaults`); }
-    const l = cfg.lighting ?? {};
+    const l = cfg.lighting && typeof cfg.lighting === 'object' ? cfg.lighting : {};
+    // A hand-edited config with a bad value is reported, not guessed at: the
+    // setting falls back to its default (output off, if `enabled` is the bad
+    // one) and the Lighting tab shows what was wrong.
+    this.configErrors = [];
+    const bad = (message) => { this.configErrors.push({ message }); this.log('error', `lighting config: ${message}`); };
+    const { values, errors } = checkOutput(l.output && typeof l.output === 'object' ? l.output : {});
+    for (const e of errors) bad(`output.${e.field}: ${e.message} — using the default`);
     this.settings = {
-      output: { enabled: false, dryRun: false, interface: 'en14', address: '192.168.220.66', mode: 'unicast', priority: 100, sourceName: 'CamBridge', ...(l.output ?? {}) },
+      output: { ...OUTPUT_DEFAULTS, ...values },
     };
+    if (l.sceneCount !== undefined && !(Number.isInteger(l.sceneCount) && l.sceneCount >= 1 && l.sceneCount <= 99)) {
+      bad(`sceneCount must be 1–99 — using ${DEFAULT_SCENE_COUNT}`);
+    }
     this.sceneCount = Number.isInteger(l.sceneCount) && l.sceneCount >= 1 && l.sceneCount <= 99 ? l.sceneCount : DEFAULT_SCENE_COUNT;
+    if (l.profiles !== undefined && !Array.isArray(l.profiles)) bad('profiles is not a list — ignoring it');
     this.customProfiles = Array.isArray(l.profiles) ? l.profiles : [];
-    this.patch = Array.isArray(l.fixtures) ? l.fixtures.map((f) => ({ ...f, groups: [...(f.groups ?? [])] })) : SEED_FIXTURES.map((f) => ({ ...f, groups: [] }));
+    if (l.fixtures === undefined) {
+      // First run: the studio's five Lyras.
+      this.patch = SEED_FIXTURES.map((f) => ({ ...f, groups: [] }));
+    } else if (!Array.isArray(l.fixtures)) {
+      // Not the seed: sending the built-in patch to a rig that was set up
+      // differently would be a guess. Nothing is sent until it is fixed.
+      bad('fixtures is not a list — no fixtures are patched until it is fixed');
+      this.patch = [];
+    } else {
+      this.patch = l.fixtures.filter((f) => f && typeof f === 'object').map((f) => ({ ...f, groups: Array.isArray(f.groups) ? [...f.groups] : [] }));
+    }
     this.#validate();
   }
 
@@ -523,6 +519,37 @@ export class Lighting extends EventEmitter {
       this.emit('view');
     });
   }
+}
+
+/**
+ * Checks output settings, from the API or the config file.
+ *
+ * @returns {{values: object, errors: {field: string, message: string}[]}}
+ *   `values` holds only the fields that were given and are good.
+ */
+function checkOutput(o) {
+  const values = {};
+  const errors = [];
+  const check = (field, good, value, message) => {
+    if (!(field in o)) return;
+    if (good) values[field] = value; else errors.push({ field, message });
+  };
+  check('enabled', typeof o.enabled === 'boolean', o.enabled, 'enabled is true or false');
+  check('dryRun', typeof o.dryRun === 'boolean', o.dryRun, 'dryRun is true or false');
+  check('interface', typeof o.interface === 'string' && /^[A-Za-z0-9._-]{0,32}$/.test(o.interface.trim()), String(o.interface).trim(),
+    'interface must be a name like en14');
+  check('address', o.address === '' || (typeof o.address === 'string' && isIPv4(o.address)), o.address,
+    'address must be an IPv4 address, or empty to use the interface\'s');
+  check('mode', ['unicast', 'multicast'].includes(o.mode), o.mode, 'mode is unicast or multicast');
+  check('priority', Number.isInteger(o.priority) && o.priority >= 0 && o.priority <= MAX_PRIORITY, o.priority,
+    `priority is a whole number 0–${MAX_PRIORITY}`);
+  check('sourceName', typeof o.sourceName === 'string' && !!o.sourceName.trim() && Buffer.byteLength(o.sourceName.trim()) <= 63,
+    String(o.sourceName).trim(), 'source name is 1–63 bytes');
+  let cidOk = false;
+  try { cidBytes(o.cid); cidOk = true; } catch { /* reported below */ }
+  check('cid', cidOk, o.cid, 'CID must be a UUID');
+  check('port', Number.isInteger(o.port) && o.port >= 1 && o.port <= 65535, o.port, 'port must be 1–65535');
+  return { values, errors };
 }
 
 function fade(ms) {

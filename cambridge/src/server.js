@@ -37,6 +37,8 @@ import { PtzPresetBook } from './ptz/presets.js';
 import { BulkAdd } from './ptz/bulk.js';
 import { RawPanelClient, DEFAULT_PORT as SKAARHOJ_PORT } from './skaarhoj/rawpanel.js';
 import { PanelController } from './skaarhoj/mapping.js';
+import { Lighting } from './lighting/service.js';
+import { handleLighting, gestureLogger } from './lighting/routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -290,6 +292,25 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   if (!auth.enabled) {
     log.warn('auth', 'no PIN configured — anyone on this network can control the cameras');
   }
+
+  // Studio lighting: sACN to the panels on the lighting network, from this
+  // process (camd has nothing to do with it). Everything in it reports
+  // problems as status rather than throwing, and if it cannot even be built —
+  // an unreadable profile, say — the cameras carry on and /api/lighting says why.
+  let lighting = null;
+  let lightingError = null;
+  try {
+    lighting = new Lighting({
+      readConfig: () => adoption.readConfig(),
+      writeConfig: (c) => adoption.writeConfig(c),
+      storePath: join(dirname(resolve(configPath)), 'cambridge-lighting.json'),
+      log: (level, msg) => log.write(level, 'lighting', msg),
+    });
+  } catch (err) {
+    lightingError = err.message;
+    log.error('lighting', `lighting is off: ${err.message}`);
+  }
+  const logGesture = gestureLogger((line) => log.info('lighting', line));
 
   /**
    * Injected setter used by presets, gang and match, so all writes are logged.
@@ -627,8 +648,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     if (sseClients.size === 0) { dirty.clear(); return; }
     const wantsFull = [...sseClients.values()].some((c) => !c.patch);
     const wantsPatch = [...sseClients.values()].some((c) => c.patch);
-    const full = wantsFull || dirty.full ? { type: 'state', view: state.view(), ...env } : null;
+    const lights = lightingView();
+    const full = wantsFull || dirty.full ? { type: 'state', view: state.view(), ...env, lighting: lights } : null;
     const patch = wantsPatch && !dirty.full ? buildPatch(env) : null;
+    // Lighting rides in a patch only when it changed; a client keeps the last
+    // one it was sent, so a pan does not resend every fader.
+    if (patch && dirty.lighting) patch.lighting = lights;
     dirty.clear();
     for (const [sink, c] of sseClients) send(sink, c.patch && patch ? patch : full);
   }
@@ -658,7 +683,17 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       roll: rollState(view.cameras),
       undo: undo.summary(),
       skaarhoj: skaarhojStatus(),
+      lighting: lightingView(),
     };
+  }
+
+  /** The lighting view every stream carries, or why there is none. */
+  function lightingView() {
+    if (!lighting) return { unavailable: lightingError };
+    try { return lighting.view(); } catch (err) {
+      log.error('lighting', `view: ${err.message}`);
+      return { unavailable: err.message };
+    }
   }
 
   /**
@@ -669,7 +704,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
   const dirty = {
     full: false,
     cams: new Map(),
-    clear() { this.full = false; this.cams.clear(); },
+    lighting: false,
+    clear() { this.full = false; this.lighting = false; this.cams.clear(); },
     cam(id) {
       if (!this.cams.has(id)) this.cams.set(id, { whole: false, props: null, ptz: false, status: false, tally: false });
       return this.cams.get(id);
@@ -774,11 +810,22 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       flushPush();
       return;
     }
+    schedulePush();
+  });
+
+  function schedulePush() {
     if (pushTimer) return;
     pushTimer = setTimeout(() => {
       pushTimer = null;
       flushPush();
     }, 60);
+  }
+
+  // The lighting service coalesces its own changes (at most ten a second while
+  // a fade runs); they share the camera push's window from here.
+  lighting?.on('view', () => {
+    dirty.lighting = true;
+    schedulePush();
   });
 
   external.on('change', () => state.applyExternal(external.view()));
@@ -1099,6 +1146,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         try { return sendJson(res, 200, await external.action(decodeURIComponent(m[1]), m[2], await readBody(req) ?? {})); }
         catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
       }
+
+      // --- lighting ---
+      if (await handleLighting({
+        req, res, path, lighting, unavailable: lightingError, admin: auth.isAdmin(who), actor: actor(),
+        readBody, sendJson, log, logGesture,
+      })) return;
 
       // --- state ---
       // The same envelope the SSE push carries, minus its `type`. One shape for
@@ -1822,6 +1875,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     visca,
     ptz,
     external,
+    lighting,
     /** The live panel link while driving one, else null. */
     get skaarhoj() { return skaarhoj; },
     start() {
@@ -1830,6 +1884,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // a connection state never lands on a camera the model does not know.
       state.replaceAll(ptz.snapshots(), null, 'ptz');
       ptz.start();
+      // Restores the last lighting state and resumes sending it — if output is
+      // on. With nothing saved yet it sends nothing, never a frame of zeros.
+      try { lighting?.start(); } catch (err) { log.error('lighting', `could not start: ${err.message}`); }
       state.applyExternal(external.view());
       external.start();
       startSkaarhoj();
@@ -1870,6 +1927,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       });
     },
     async stop() {
+      logGesture.flush();
+      try { lighting?.stop(); } catch (err) { log.error('lighting', `stop: ${err.message}`); }
       camd.stop();
       await stopSkaarhoj();
       await ptz.stop();

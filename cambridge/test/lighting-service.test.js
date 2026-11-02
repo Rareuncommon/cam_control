@@ -195,10 +195,10 @@ test('a restart restores the last state and sends it — the first packet is the
 
   const live = { lighting: { output: { enabled: true } } };
   const b = rig({ config: live, dir: a.dir });
-  await tick(); // the socket binds
   assert.equal(b.L.view().known, true);
   b.L.start();
-  b.clock.advance(1600);
+  await tick(); // the socket binds
+  b.clock.advance(2100);
   await tick();
   const packets = b.net.packets();
   assert.ok(packets.length >= 5 * 4, `sending (${packets.length} packets)`);
@@ -439,4 +439,18 @@ test('state is saved shortly after it stops changing, and on stop', async () => 
   r.L.stop();
   assert.equal(r.store().state.l1.intensity, 44);
   rmSync(r.dir, { recursive: true, force: true });
+});
+
+test('bad hand-edited settings are reported and fall back to safe defaults', () => {
+  const r = rig({ config: { lighting: { output: { enabled: 'yes', priority: 'high', mode: 'unicast' }, sceneCount: 0, fixtures: 'L1 L2' } } });
+  const v = r.L.view();
+  assert.equal(v.output.enabled, false, 'output stays off rather than reading "yes" as on');
+  assert.equal(v.output.priority, 100);
+  assert.equal(v.scenes.length, 5);
+  assert.deepEqual(v.fixtures, [], 'a broken patch is not replaced with a guess');
+  const messages = v.errors.map((e) => e.message).join(' | ');
+  for (const bit of ['output.enabled', 'output.priority', 'sceneCount', 'fixtures is not a list']) assert.ok(messages.includes(bit), messages);
+  r.L.start();
+  assert.equal(r.L.set({ target: { all: true }, intensity: 50 }).status, 200, 'still answers');
+  cleanup(r);
 });

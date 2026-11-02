@@ -113,6 +113,13 @@ export const ADMIN_ROUTES = [
   // route is separate so the check is here, not remembered per setting.
   /^PUT \/api\/cameras\/[^/]+\/admin-settings\/[^/]+$/,
   /^POST \/api\/cameras\/[^/]+\/admin-actions\/[^/]+$/,
+  // The lighting patch and fixture profiles: which address drives which light.
+  // Running the lights (faders, scenes, looks, output on/off) is operator-level;
+  // PUT /api/lighting/output checks admin itself for the network settings.
+  /^POST \/api\/lighting\/(fixtures|profiles)$/,
+  /^(PUT|DELETE) \/api\/lighting\/(fixtures|profiles)\/[^/]+$/,
+  /^GET \/api\/lighting\/export$/,
+  /^POST \/api\/lighting\/import(\/companion)?$/,
 ];
 
 /** Routes anyone may take, PIN or not — the login flow itself, and health. */
@@ -164,6 +171,13 @@ export class Auth {
    * must not silently lock out every human at the same time.
    */
   get enabled() { return !!(this.operatorPin || this.adminPin); }
+
+  /**
+   * Whether `who` may change admin settings, by the same rule authorise()
+   * applies to admin routes: with no admin PIN set there is one level only.
+   * For routes that are operator-level but have admin-only fields.
+   */
+  isAdmin(who) { return !this.enabled || !this.adminPin || who?.role === 'admin'; }
 
   /** What the login page needs to know before anyone types anything. */
   state() {

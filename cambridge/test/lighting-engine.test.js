@@ -207,9 +207,25 @@ const CID = '0f5c2d1e-9a8b-4c7d-8e6f-112233445566';
 const settings = (over = {}) => ({ enabled: true, interface: 'en14', mode: 'unicast', cid: CID, ...over });
 const tick = () => new Promise((r) => setImmediate(r));
 
+test('building the sender touches no network until it is opened', async () => {
+  const f = fakeSocketFactory();
+  const out = new SacnOutput({ settings: settings(), networkInterfaces: () => NICS, createSocket: f.make });
+  out.configure(settings({ mode: 'multicast' }));
+  await tick();
+  assert.equal(f.sockets.length, 0);
+  out.send(1, new Uint8Array(512), ['192.168.220.51']);
+  out.open();
+  await tick();
+  assert.equal(f.sockets.length, 1);
+  out.close();
+  out.open();
+  assert.equal(f.sockets.length, 1, 'closed is closed');
+});
+
 test('output off, dry-run and live', async () => {
   const f = fakeSocketFactory();
   const out = new SacnOutput({ settings: settings({ enabled: false }), networkInterfaces: () => NICS, createSocket: f.make });
+  out.open();
   await tick();
   out.send(1, new Uint8Array(512), ['192.168.220.51']);
   assert.equal(out.status().state, 'off');
@@ -233,6 +249,7 @@ test('output off, dry-run and live', async () => {
 test('multicast goes to the universe group on the lighting interface', async () => {
   const f = fakeSocketFactory();
   const out = new SacnOutput({ settings: settings({ mode: 'multicast' }), networkInterfaces: () => NICS, createSocket: f.make });
+  out.open();
   await tick();
   out.send(1, new Uint8Array(512), ['192.168.220.51']);
   assert.deepEqual(f.sockets[0].sent.map((s) => s.dest), ['239.255.0.1']);
@@ -245,6 +262,7 @@ test('en14 down: a status, a retry, no exception — and sending resumes when it
   let nics = { en0: NICS.en0 };
   const logs = [];
   const out = new SacnOutput({ settings: settings(), networkInterfaces: () => nics, createSocket: f.make, retryMs: 20, log: (l, m) => logs.push(m) });
+  out.open();
   assert.equal(out.status().state, 'error');
   assert.match(out.status().error, /en14 is not up/);
   out.send(1, new Uint8Array(512), ['192.168.220.51']);   // must not throw
@@ -260,6 +278,7 @@ test('en14 down: a status, a retry, no exception — and sending resumes when it
 test('a bind failure is a status and a retry, not a crash', async () => {
   const f = fakeSocketFactory({ failBind: true });
   const out = new SacnOutput({ settings: settings(), networkInterfaces: () => NICS, createSocket: f.make, retryMs: 20 });
+  out.open();
   await tick(); await tick();
   assert.equal(out.status().state, 'error');
   assert.match(out.status().error, /EADDRNOTAVAIL/);
@@ -271,6 +290,7 @@ test('a bind failure is a status and a retry, not a crash', async () => {
 test('sequence numbers count per universe and wrap at 255', async () => {
   const f = fakeSocketFactory();
   const out = new SacnOutput({ settings: settings(), networkInterfaces: () => NICS, createSocket: f.make });
+  out.open();
   await tick();
   for (let i = 0; i < 258; i++) out.send(1, new Uint8Array(512), ['192.168.220.51']);
   out.send(2, new Uint8Array(512), ['192.168.220.52']);
