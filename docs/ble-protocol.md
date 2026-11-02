@@ -93,7 +93,9 @@ AUTH_FAIL codes:
 - **The server's proof:** `HMAC(K, "CamBridge BLE server v1\0" ‖ clientNonce ‖ serverNonce ‖ deviceId ‖ serverId)`.
 
   The phone checks this, so it knows it reached its own CamBridge.
-- **Session keys:** `HKDF-SHA256(ikm = K, salt = serverNonce ‖ clientNonce, info = "CamBridge BLE session v1", 64 bytes)`.
+- **Session keys:** `HKDF-SHA256(salt = K, ikm = serverNonce ‖ clientNonce, info = "CamBridge BLE session v1", 64 bytes)`.
+
+  `K` is the salt, so it is only ever used as an HMAC key. The app keeps it in the Android Keystore, which lets it compute with the key but never read it back.
   - bytes 0–31: phone → Mac;
   - bytes 32–63: Mac → phone.
 

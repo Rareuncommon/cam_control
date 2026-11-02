@@ -160,9 +160,13 @@ export function encodeAuthFail(code, message) { return Buffer.concat([Buffer.fro
 
 export function proofsEqual(a, b) { return a.length === b.length && timingSafeEqual(a, b); }
 
-/** Per-session keys, one per direction, from the device key and both nonces. */
+/**
+ * Per-session keys, one per direction: HKDF-SHA256 with the device key as the
+ * salt (so the key is only ever used as an HMAC key — the app keeps it in the
+ * Android Keystore, which does not let it out) and both nonces as the input.
+ */
 export function sessionKeys(key, { serverNonce, clientNonce }) {
-  const okm = Buffer.from(hkdfSync('sha256', key, Buffer.concat([serverNonce, clientNonce]), SESSION_INFO, 64));
+  const okm = Buffer.from(hkdfSync('sha256', Buffer.concat([serverNonce, clientNonce]), key, SESSION_INFO, 64));
   return { phoneToServer: okm.subarray(0, 32), serverToPhone: okm.subarray(32, 64) };
 }
 
