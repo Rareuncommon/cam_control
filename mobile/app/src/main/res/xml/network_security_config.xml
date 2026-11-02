@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CamBridge serves plain HTTP on the studio network. Cleartext is allowed so
+     the app can reach it; every request is HMAC-signed with the phone's key, so
+     it cannot be altered or replayed, and the key itself never crosses the
+     network. The app talks to nothing else. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
