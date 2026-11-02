@@ -6,6 +6,8 @@
 // posts actions over ordinary fetch — and EventSource reconnects on its own.
 
 import { createServer } from 'node:http';
+import { Readable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { gzipSync, createGzip, constants as zlibConstants } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
@@ -42,6 +44,8 @@ import { handleLighting, gestureLogger } from './lighting/routes.js';
 import { DeviceRegistry, pairingUri, SCHEME as DEVICE_SCHEME } from './devices.js';
 import { MdnsAdvertiser } from './mdns.js';
 import { qrSvg } from './qr.js';
+import { BleGateway } from './ble/gateway.js';
+import { applyPatch } from '../public/patch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -148,6 +152,35 @@ function sendJson(res, status, body) {
   }
   res.writeHead(status, { ...headers, 'Content-Length': Buffer.byteLength(text) });
   res.end(text);
+}
+
+/** The response side of an in-process request (see dispatchInternal). */
+class CaptureResponse extends EventEmitter {
+  constructor() {
+    super();
+    this.statusCode = 200;
+    this.headers = {};
+    this.chunks = [];
+    this.headersSent = false;
+    this.done = new Promise((resolve) => { this.finish = resolve; });
+  }
+  setHeader(k, v) { this.headers[String(k).toLowerCase()] = v; }
+  getHeader(k) { return this.headers[String(k).toLowerCase()]; }
+  writeHead(status, headers = {}) {
+    this.statusCode = status;
+    for (const [k, v] of Object.entries(headers)) this.setHeader(k, v);
+    this.headersSent = true;
+    return this;
+  }
+  write(c) { this.headersSent = true; this.chunks.push(Buffer.from(c)); return true; }
+  end(c) {
+    if (c) this.chunks.push(Buffer.from(c));
+    this.headersSent = true;
+    this.finish();
+    this.emit('finish');
+    this.emit('close');
+    return this;
+  }
 }
 
 /**
@@ -344,6 +377,7 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
   /** Bonjour, once listening (start()). */
   let mdns = null;
 
+
   /** What phones and the pairing QR call this CamBridge. */
   const serverName = () => (typeof cfg.cambridge.name === 'string' && cfg.cambridge.name.trim())
     || hostname().replace(/\.local$/, '');
@@ -357,6 +391,19 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
   devices.on('revoked', (id) => {
     // A revoked phone loses its live stream at once, not at its next request.
     for (const c of [...sseClients.values()]) if (c.device === id) c.close();
+  });
+
+  // Phones on Bluetooth, through the Swift bridge (blebridge/) and a Unix
+  // socket beside the config. See src/ble/gateway.js. `cambridge.ble.enabled:
+  // false` turns it off.
+  const bleCfg = cfg.cambridge.ble ?? {};
+  const ble = bleCfg.enabled === false ? null : new BleGateway({
+    socketPath: bleCfg.socket ?? join(dirname(resolve(configPath)), 'blebridge.sock'),
+    devices,
+    dispatch: (r) => dispatchInternal(r),
+    serverInfo: () => ({ id: devices.ensureServerId(), name: serverName() }),
+    subscribe: (fn) => subscribeFrames(fn),
+    log: (level, msg) => log.write(level, 'ble', msg),
   });
 
   /**
@@ -702,7 +749,10 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
     // one it was sent, so a pan does not resend every fader.
     if (patch && dirty.lighting) patch.lighting = lights;
     dirty.clear();
-    for (const [sink, c] of sseClients) send(sink, c.patch && patch ? patch : full);
+    for (const [sink, c] of sseClients) {
+      const payload = c.patch && patch ? patch : full;
+      if (c.deliver) { try { c.deliver(payload); } catch (err) { log.error('cambridge', `state consumer: ${err.message}`); } } else send(sink, payload);
+    }
   }
 
   const thresholds = resolveThresholds(cfg.alarms);
@@ -1071,7 +1121,12 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
 
   // --- HTTP -----------------------------------------------------------------
 
-  const server = createServer(async (req, res) => {
+  /**
+   * Every request goes through here: HTTP from browsers, Companion and the
+   * phone app over Wi-Fi, and — in-process, with the phone already
+   * identified — requests from phones over Bluetooth (dispatchInternal).
+   */
+  async function handleRequest(req, res) {
     let url;
     try { url = new URL(req.url, 'http://localhost'); }
     catch { return sendJson(res, 400, { error: 'Invalid request URL' }); }
@@ -1393,6 +1448,7 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
             cameraPresets: true,
             cameraScenes: true,
             lighting: lighting ? { available: true } : { available: false, reason: lightingError },
+            bluetooth: ble ? { available: true, ...ble.status() } : { available: false },
           },
         });
       }
@@ -1993,7 +2049,56 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
       if (!res.headersSent) sendJson(res, 500, { error: err.message });
       else res.end();
     }
-  });
+  }
+
+  const server = createServer(handleRequest);
+
+  /**
+   * Runs one request through handleRequest as a paired phone, without the
+   * network: how the Bluetooth gateway executes a phone's commands. The
+   * device is set on the request object directly, which no client can do.
+   */
+  async function dispatchInternal({ method, target, body, device }) {
+    const raw = Buffer.from(body === undefined ? '' : JSON.stringify(body), 'utf8');
+    const req = Readable.from(raw.length ? [raw] : []);
+    Object.assign(req, {
+      method, url: target, rawBody: raw, cambridgeDevice: device,
+      headers: { host: 'bluetooth', 'content-type': 'application/json' },
+      socket: { remoteAddress: 'bluetooth' },
+    });
+    const res = new CaptureResponse();
+    await Promise.race([
+      (async () => { await handleRequest(req, res); await res.done; })(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('the request took longer than 15 s')), 15_000).unref()),
+    ]);
+    return { status: res.statusCode, contentType: String(res.getHeader('content-type') ?? ''), body: Buffer.concat(res.chunks) };
+  }
+
+  /**
+   * The live state for in-process consumers (the Bluetooth gateway): one full
+   * frame now, then for each push the patched full frame and the patch.
+   */
+  function subscribeFrames(fn) {
+    const key = {};
+    let full = { ...buildPush() };
+    const client = {
+      patch: true,
+      close: () => sseClients.delete(key),
+      deliver(payload) {
+        if (payload.type === 'patch') {
+          const r = applyPatch(full, payload);
+          full = r.resync ? { ...buildPush() } : r.frame;
+          fn({ full, patch: r.resync ? null : payload });
+        } else {
+          full = payload;
+          fn({ full, patch: null });
+        }
+      },
+    };
+    sseClients.set(key, client);
+    fn({ full, patch: null });
+    return client.close;
+  }
 
   return {
     server,
@@ -2009,6 +2114,7 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
     external,
     lighting,
     devices,
+    ble,
     /** The live panel link while driving one, else null. */
     get skaarhoj() { return skaarhoj; },
     start() {
@@ -2020,6 +2126,7 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
       // Restores the last lighting state and resumes sending it — if output is
       // on. With nothing saved yet it sends nothing, never a frame of zeros.
       try { lighting?.start(); } catch (err) { log.error('lighting', `could not start: ${err.message}`); }
+      try { ble?.start(); } catch (err) { log.error('ble', `could not start the Bluetooth gateway: ${err.message}`); }
       state.applyExternal(external.view());
       external.start();
       startSkaarhoj();
@@ -2068,6 +2175,7 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
     },
     async stop() {
       mdns?.stop();
+      try { ble?.stop(); } catch { /* stopping */ }
       logGesture.flush();
       try { lighting?.stop(); } catch (err) { log.error('lighting', `stop: ${err.message}`); }
       camd.stop();
