@@ -51,7 +51,8 @@ export async function readCompanionScenes({ url, count, fixtures, profiles, univ
     }
     if (res.status === 404) return null;
     if (!res.ok) throw Object.assign(new Error(`Companion answered ${res.status} for ${name}`), { fatal: true });
-    return (await res.text()).trim();
+    // A scene is ten short numbers; anything long is not one, and is not echoed back whole.
+    return (await res.text()).slice(0, 4096).trim();
   };
 
   const inUniverse = fixtures.filter((f) => f.universe === universe && profiles.has(f.profile));
