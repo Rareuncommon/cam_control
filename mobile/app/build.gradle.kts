@@ -67,6 +67,8 @@ android {
                 it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
                 it.systemProperty("cambridge.vectors", rootProject.file("../protocol/vectors/v1.json").absolutePath)
                 it.systemProperty("cambridge.screenshots", layout.buildDirectory.dir("screenshots").get().asFile.absolutePath)
+                it.systemProperty("cambridge.repo", rootProject.file("..").absolutePath)
+                providers.gradleProperty("cambridge.camd").orNull?.let { camd -> it.systemProperty("cambridge.camd", camd) }
             }
         }
     }
