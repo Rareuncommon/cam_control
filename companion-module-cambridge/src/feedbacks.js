@@ -8,6 +8,7 @@
 import { combineRgb } from '@companion-module/base';
 import { buildPtzFeedbacks } from './ptz.js';
 import { buildSelectionFeedbacks } from './select.js';
+import { buildLightingFeedbacks } from './lighting.js';
 import { cameraStatus } from './status.js';
 
 const WHITE = combineRgb(255, 255, 255);
@@ -303,5 +304,5 @@ export function buildFeedbacks(self) {
     },
   };
 
-  return { ...sony, ...buildPtzFeedbacks(self), ...buildSelectionFeedbacks(self) };
+  return { ...sony, ...buildPtzFeedbacks(self), ...buildSelectionFeedbacks(self), ...buildLightingFeedbacks(self) };
 }

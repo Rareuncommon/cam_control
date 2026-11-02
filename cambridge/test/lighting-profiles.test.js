@@ -147,3 +147,8 @@ test('groups and targets', () => {
   assert.equal(resolveTarget(patch, { fixture: 'L9' }), null);
   assert.equal(resolveTarget(patch, { group: 'Back' }), null);
 });
+
+test('the colour presets land on the DMX values Companion\'s 3200 / 4400 / 5600 K keys sent (0 / 128 / 255)', () => {
+  const lyra = builtInProfiles().find((p) => p.id === 'ikan-lyra-lbx8-poe-2ch');
+  assert.deepEqual([3200, 4400, 5600].map((k) => encode(lyra, { intensity: 100, cct: k })[1]), [0, 128, 255]);
+});

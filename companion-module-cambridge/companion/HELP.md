@@ -123,3 +123,50 @@ choice indices. Still capture requires a memory-card target and non-Bulb shutter
 Existing Record actions support Blackmagic. Unconfirmed recording displays
 unknown. SDK presets, matching, undo and live view do not apply to these adapters.
 See docs/stills-cinema-control.md for installation and model-specific limits.
+
+## Studio lighting
+
+CamBridge can drive the studio lights itself, over sACN (E1.31), so Companion
+does not need its own sACN connection for them. These buttons talk to CamBridge
+only; the lights, the patch and the scenes are set up in CamBridge's
+**Lighting** tab. See `docs/lighting.md` for the move from Companion's sACN
+connection, and how to undo it.
+
+**One source at a time.** Companion's own sACN connection and CamBridge must
+never both send to the same universe: the lights would flicker between the
+two. Turn Companion's sACN connection **off** before turning CamBridge's
+output **on**.
+
+**Presets** (they need a CamBridge with lighting; the categories appear once it
+has sent its first lighting state):
+
+| Category | Buttons |
+|---|---|
+| Lighting — page 5 | LIGHTS ON (every dimmer to 100 % over 1 s), LIGHTS OFF (every dimmer to 0 over 1 s, colour unchanged), STUDIO LOOK, STUDIO OFF (both protected, over 1 s; lit while showing) |
+| Lighting — page 12 | ALL − / ALL + (±10.2 %, exactly the old ±26 DMX step; + shows the average), 3200 / 4400 / 5600 K over 1 s, each light − / + (+ shows its %), each light's colour readout, scenes 1–5 |
+| Lighting — page 13 | ALL WARMER / COOLER and each light warmer / cooler (±300 K, the old ±32 DMX step on the 3200–5600 K curve; they show the light's K), 3200 / 4400 / 5600 K |
+| Lighting — output | Output state (shows only; does nothing when pressed), output ON, output OFF |
+
+**Scene keys:** tap to recall over 1 s; **hold for 5 s to save** where the
+lights are now. Releasing before 5 s recalls; holding past 5 s saves and does
+not recall. The key is lit while that scene is what the lights show, and dim
+while the slot is empty. The Studio look and Studio off are not scene slots and
+cannot be saved over.
+
+**LIGHTS ON** sends every dimmer to 100 %. The old Companion button's exact
+values were not visible when this was written: compare it with the old button
+and change the preset's dimmer value if it used something else.
+
+**Actions:** Lighting: set dimmer and/or colour (a light, a group or all; in % and
+K, with a fade), nudge dimmer or colour, recall scene, save scene, recall Studio
+look / Studio off, CamBridge output on / off / toggle, identify a light.
+
+**Feedbacks:** scene is showing, scene slot is empty, Studio look / off is
+showing, output is off / dry run / waiting / sending / has a problem.
+
+**Variables:** per light (by its id, e.g. `l1`) `$(cambridge:light_l1_pct)`,
+`light_l1_k`, `light_l1_dmx`, `light_l1_name`; per scene
+`$(cambridge:light_scene1_name)`, `light_scene1_saved` (a time today, a date
+before, or `empty`); and `light_output` (off, dry run, waiting, sending, no
+network, send errors; `unknown` while CamBridge cannot be reached),
+`light_active`, `light_all_pct`, `light_all_k`.
