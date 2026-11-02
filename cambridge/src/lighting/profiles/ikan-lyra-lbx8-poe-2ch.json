@@ -1,0 +1,17 @@
+{
+  "id": "ikan-lyra-lbx8-poe-2ch",
+  "name": "Ikan Lyra LBX8-POE — 2-channel",
+  "manufacturer": "Ikan",
+  "model": "Lyra LBX8-POE",
+  "mode": "2-channel: dimmer, CCT",
+  "channels": [
+    { "type": "intensity", "label": "Dimmer" },
+    {
+      "type": "cct",
+      "label": "CCT",
+      "curve": [[0, 3200], [255, 5600]],
+      "curveVerified": false
+    }
+  ],
+  "notes": "Mode and channel layout verified on the studio's five panels (Oct 2026). The CCT curve is assumed linear from 3200 K at 0 to 5600 K at 255 and has not been checked with a meter: replace the curve with measured points (any number, DMX ascending) once it has."
+}
