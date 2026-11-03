@@ -28,6 +28,9 @@ import studio.cambridge.mobile.Loaded
 import studio.cambridge.mobile.data.Paired
 import studio.cambridge.mobile.data.Settings
 import studio.cambridge.mobile.motion.Rig
+import studio.cambridge.mobile.update.UpdateState
+import studio.cambridge.core.UpdateOffer
+import android.content.Intent
 import java.util.concurrent.ConcurrentHashMap
 
 /** How a command went, for the haptic and the message under it. */
@@ -63,6 +66,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The rig, as the Motion module reports it. */
     val rig: StateFlow<Rig> = graph.motion.rig
+
+    /** App updates from the paired CamBridge. */
+    val update: StateFlow<UpdateState> = graph.updates.state
+    val updatesEnabled: Boolean get() = graph.updates.enabled
+
+    fun checkForUpdate() {
+        val r = graph.remote.value ?: return
+        viewModelScope.launch { graph.updates.check(r, quiet = false) }
+    }
+
+    fun installUpdate(offer: UpdateOffer) {
+        val r = graph.remote.value ?: return say(Outcome(false, "Not connected to CamBridge"))
+        graph.updates.install(r, offer)
+    }
+
+    fun updatePermissionIntent(): Intent = graph.updates.permissionIntent()
+
+    fun dismissUpdate() = graph.updates.dismiss()
 
     /** STOP ALL for the rig, from a screen other than the Motion tab. */
     fun stopRig() = graph.motion.stopAll("STOP ALL in the app")

@@ -17,6 +17,10 @@
     <!-- Pairing: scanning the QR code in CamBridge Setup. -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Updates: installing a newer CamBridge served by the paired Mac. Android
+         asks the person once to allow it, and confirms every install. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
@@ -48,5 +52,7 @@
                 <data android:scheme="cambridge" android:host="pair" />
             </intent-filter>
         </activity>
+        <!-- The installer's answer for an update (update/AppUpdates.kt). -->
+        <receiver android:name=".update.UpdateReceiver" android:exported="false" />
     </application>
 </manifest>

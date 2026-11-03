@@ -20,6 +20,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import studio.cambridge.mobile.Loaded
 import studio.cambridge.mobile.data.Paired
+import studio.cambridge.mobile.update.UpdateState
 import studio.cambridge.mobile.ui.theme.Studio as C
 
 private enum class Tab(val title: String) { CAMERAS("Cameras"), LIGHTING("Lighting"), MOTION("Motion"), SETTINGS("Settings") }
@@ -59,6 +61,15 @@ fun CamBridgeApp(vm: MainViewModel) {
     val snackbar = remember { SnackbarHostState() }
     val view = LocalView.current
     var repairing by rememberSaveable { mutableStateOf(false) }
+
+    // A newer app on CamBridge: say so once, wherever the operator is.
+    val update by vm.update.collectAsStateWithLifecycle()
+    val offered = (update as? UpdateState.Available)?.offer
+    LaunchedEffect(offered?.versionCode) {
+        val o = offered ?: return@LaunchedEffect
+        val r = snackbar.showSnackbar("CamBridge ${o.versionName} is ready to install", actionLabel = "Update", withDismissAction = true)
+        if (r == SnackbarResult.ActionPerformed) vm.installUpdate(o)
+    }
 
     // The answer, not the tap, decides the haptic.
     LaunchedEffect(Unit) {
@@ -180,7 +191,7 @@ private fun Paired(vm: MainViewModel, paired: Paired, snackbar: SnackbarHostStat
                     Tab.CAMERAS -> CamerasScreen(studio, pending, settings.confirmRecord, vm::send)
                     Tab.LIGHTING -> LightingScreen(studio, pending, settings.fadeMs, send = vm::send, drag = { k, r -> vm.drag(k, r) })
                     Tab.MOTION -> MotionTab(onArea = vm::showMotion)
-                    Tab.SETTINGS -> SettingsScreen(paired, settings, vm::updateSettings, onPairAgain, vm::forget)
+                    Tab.SETTINGS -> SettingsScreen(paired, settings, vm::updateSettings, onPairAgain, vm::forget) { UpdatesSection(vm) }
                 }
             }
         }

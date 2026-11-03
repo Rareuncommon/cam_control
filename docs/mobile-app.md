@@ -183,6 +183,50 @@ adb install -r cambridge.apk
 
 The IP and ports are the ones the Wireless debugging screen shows.
 
+### Updates from CamBridge
+
+Once a release build signed with your key is on the phone, later versions
+come from CamBridge, with no cable:
+
+```bash
+git pull
+./scripts/publish-phone-app.sh
+```
+
+- The script builds the app and asks for the key's password. It signs with
+  `~/.cambridge-signing/cambridge-release.jks`, or `$CAMBRIDGE_KEYSTORE` if set.
+- It puts the APK and a `latest.json` in a `phone-app` folder beside
+  CamBridge's config. That's `~/Library/Application Support/CamBridge/` for
+  the app, or the repo's `config/` for `start.sh`; `--config-dir` picks
+  another.
+- The build number is the commit count, so a newer `main` is always a newer
+  version. The script refuses to publish the same build twice.
+
+Each time the phone connects over Wi-Fi, it asks CamBridge for the version.
+If it's newer, a prompt says **CamBridge 1.1.0 (N) is ready to install**,
+and **Settings › App updates** has an **Update** button. Updating:
+
+1. downloads the APK over the phone's signed connection, never over
+   Bluetooth;
+2. checks it is exactly the file CamBridge described (size and SHA-256), for
+   this app, newer, and signed with the same key as the installed app;
+3. sends STOP ALL to the rig and disconnects it, as closing the app does;
+4. hands the APK to Android's installer, which asks you to confirm.
+
+The first time, Android asks you to allow CamBridge to install apps
+(**Allow**, then back, then **Update**). Android won't install an update
+signed with a different key, so keep the key and its password backed up.
+
+Debug builds have their own app ID and the build machine's debug key, so
+they don't take updates. Install a published release once with `adb`, from
+the `phone-app` folder:
+
+```bash
+adb install ~/Library/Application\ Support/CamBridge/phone-app/CamBridge-*.apk
+```
+
+That installs beside the debug build, as a separate app with its own pairing.
+
 ## Pair a phone, and revoke one
 
 1. In CamBridge on the Mac, open **Setup › Phones › Pair a phone**. A QR code

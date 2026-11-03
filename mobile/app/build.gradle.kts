@@ -23,8 +23,11 @@ android {
         applicationId = "studio.cambridge.mobile"
         minSdk = 33
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1.0"
+        // scripts/publish-phone-app.sh passes the commit count as the build
+        // number, so every published update is higher than the last.
+        val build = providers.gradleProperty("cambridge.versionCode").orNull?.toIntOrNull()
+        versionCode = build ?: 2
+        versionName = if (build != null) "1.1.0 ($build)" else "1.1.0"
         // The Motion tab's Flutter engine is built for 64-bit ARM phones (the
         // Pixel 9a and every current Android phone).
         ndk { abiFilters += "arm64-v8a" }
