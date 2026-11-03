@@ -136,6 +136,7 @@ step "Staging cambridge"
 mkdir -p "${APP}/Contents/Resources/cambridge"
 cp -R cambridge/src cambridge/public "${APP}/Contents/Resources/cambridge/"
 cp config/cambridge.example.json "${APP}/Contents/Resources/cambridge.example.json"
+cp scripts/stop-children.sh "${APP}/Contents/Resources/stop-children.sh"
 
 if [[ "${BUNDLE_NODE}" -eq 1 ]]; then
   NODE_BIN="$(command -v node 2>/dev/null || true)"
@@ -264,15 +265,21 @@ for pn in "${CAMD_PORT}:camera daemon" "${UI_PORT}:web interface"; do
     fi
 done
 
-CAMD_PID=""; UI_PID=""
+CAMD_PID=""; UI_PID=""; STOPPED=no
+. "${RES}/stop-children.sh"
+# Bounded (scripts/stop-children.sh): anything still running after 10 s is
+# killed, so Quit always leaves nothing behind.
 cleanup() {
+    [[ "${STOPPED}" == yes ]] && return
+    STOPPED=yes
     say "shutting down"
-    [[ -n "${UI_PID}" ]] && kill "${UI_PID}" 2>/dev/null
-    [[ -n "${CAMD_PID}" ]] && kill "${CAMD_PID}" 2>/dev/null
-    wait 2>/dev/null
+    if ! stop_children 10 "${UI_PID}" "${CAMD_PID}"; then
+        say "did not stop within 10 s, killed: ${STOP_CHILDREN_KILLED}"
+    fi
     say "stopped"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup; exit 0' INT TERM
+trap cleanup EXIT
 
 # cd into the daemon's own directory: the Sony SDK resolves its transport
 # adapters from a path relative to here.
@@ -288,7 +295,7 @@ camd_health() {
 }
 
 say "starting camd"
-./camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
+CAMD_PARENT_PID=$$ ./camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
 CAMD_PID=$!
 
 healthy=false
@@ -319,7 +326,8 @@ done
 
 say "opening http://localhost:${UI_PORT}"
 open "http://localhost:${UI_PORT}"
-wait
+wait "${UI_PID}"
+say "the web interface exited (status $?)"
 LAUNCHER
 chmod +x "${APP}/Contents/MacOS/CamBridge"
 

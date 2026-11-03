@@ -74,16 +74,22 @@ done
 
 CAMD_PID=""
 CAMBRIDGE_PID=""
+STOPPED=no
+# shellcheck source=stop-children.sh
+. "${REPO_ROOT}/scripts/stop-children.sh"
 
 cleanup() {
+  [[ "${STOPPED}" == yes ]] && return
+  STOPPED=yes
   echo
   echo "Stopping…"
-  [[ -n "${CAMBRIDGE_PID}" ]] && kill "${CAMBRIDGE_PID}" 2>/dev/null
-  [[ -n "${CAMD_PID}" ]] && kill "${CAMD_PID}" 2>/dev/null
-  wait 2>/dev/null
+  if ! stop_children 10 "${CAMBRIDGE_PID}" "${CAMD_PID}"; then
+    echo "Did not stop within 10 s; killed: ${STOP_CHILDREN_KILLED}"
+  fi
   echo "Stopped."
 }
-trap cleanup INT TERM EXIT
+trap 'cleanup; exit 0' INT TERM
+trap cleanup EXIT
 
 # camd requires a per-launch access token on every request (audit DC-1). One
 # fresh secret per launch, exported so camd and the Node service share it; it is
@@ -112,7 +118,7 @@ camd_unavailable() {
 
 if [[ "${NEED_CAMD}" == yes ]]; then
   echo "Starting camd${CAMD_ARGS[*]+ ${CAMD_ARGS[*]}}…"
-  ./camd/build/camd --config "${CONFIG}" ${CAMD_ARGS[@]+"${CAMD_ARGS[@]}"} &
+  CAMD_PARENT_PID=$$ ./camd/build/camd --config "${CONFIG}" ${CAMD_ARGS[@]+"${CAMD_ARGS[@]}"} &
   CAMD_PID=$!
 
   # Wait for camd to answer before starting the UI, so the browser never opens
@@ -137,9 +143,11 @@ else
   echo "No Sony bodies — camd is not needed and not started."
 fi
 
-node cambridge/src/server.js --config "${CONFIG}" &
+# The panel's Quit signals this script, which stops both, as the app does.
+CAMBRIDGE_LAUNCHER_PID=$$ node cambridge/src/server.js --config "${CONFIG}" &
 CAMBRIDGE_PID=$!
 
 echo
 [[ "${NEED_CAMD}" == yes ]] && echo "Ctrl-C stops both." || echo "Ctrl-C stops it."
-wait
+# If cambridge exits by itself, camd is stopped too (the EXIT trap).
+wait "${CAMBRIDGE_PID}"
