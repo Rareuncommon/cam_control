@@ -7,6 +7,8 @@
 //   node scripts/mock-studio.mjs --lan           reachable from the phone on the studio network
 //   node scripts/mock-studio.mjs --lan --pair    …and print a pairing link for the app
 //   node scripts/mock-studio.mjs --advertise     announce it over Bonjour as "CamBridge (simulated)"
+//   node scripts/mock-studio.mjs --ble-socket P  take the Bluetooth bridge's socket at P (quit the
+//                                                real CamBridge first: they would share the bridge)
 //
 // For the app's automated tests: --json prints one line of JSON first
 // ({base, socket, uri}); --relay then carries one phone's Bluetooth chunks
@@ -41,7 +43,7 @@ const camdBin = arg('camd', new URL('camd/build/camd', root).pathname);
 const withCamd = existsSync(camdBin);
 const camdPort = await freePort();
 const port = Number(arg('port', '8089'));
-const socket = join(dir, 'ble.sock');
+const socket = arg('ble-socket', join(dir, 'ble.sock'));
 
 writeFileSync(configPath, JSON.stringify({
   cambridge: {
