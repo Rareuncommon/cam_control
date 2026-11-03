@@ -5,6 +5,9 @@ autofocus) and lighting (looks, faders, colour presets, scenes). It talks to
 CamBridge on the Mac over the studio Wi-Fi, and falls back to Bluetooth
 through a small bridge on the same Mac when the Wi-Fi drops.
 
+Its **Motion** tab drives an edelkrone HeadONE and SliderPLUS directly over
+Bluetooth, with no Mac involved; that is in [motion.md](motion.md).
+
 It is sideloaded with `adb`. There is no Play Store listing. It runs on
 Android 13 and later and is built for Android 17. It has been tested against
 CamBridge with simulated cameras, but not yet on a real phone in the studio.
@@ -69,8 +72,11 @@ You need this once. It installs a JDK, the Android command-line tools and
 `adb`:
 
 ```bash
-brew install --cask temurin@21 android-commandlinetools android-platform-tools
+brew install --cask temurin@21 android-commandlinetools android-platform-tools flutter
 ```
+
+Flutter builds the Motion tab ([motion.md](motion.md)). It was tested with
+Flutter 3.47.9 (Dart 3.13.7); `flutter --version` shows yours.
 
 Then the Android SDK parts the app builds against. The second command shows
 Google's SDK licences one by one; read them and answer `y` to accept:
@@ -117,13 +123,20 @@ which forgets its pairing, and pair again.
 From the repository:
 
 ```bash
-cd mobile
+cd mobile/motion
+flutter build aar --no-profile --target-platform android-arm64 --build-number 1
+cd ..
 ./gradlew :app:assembleRelease
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$HOME/.cambridge-signing/cambridge-release.jks" --ks-key-alias cambridge --out cambridge.apk app/build/outputs/apk/release/app-release-unsigned.apk
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs cambridge.apk
 ```
 
-- The first command builds a shrunk release (about 4 MB) without signing it.
+- `flutter build aar` builds the Motion tab into Android libraries the app
+  links. Run it again after changing anything in `mobile/motion`; the app's
+  build warns when it is out of date, and stops with this command when it is
+  missing.
+- `./gradlew :app:assembleRelease` builds a shrunk release (about 22 MB, most
+  of it the Flutter engine) without signing it.
 - `apksigner sign` asks for the key's password and writes `cambridge.apk`.
 - `apksigner verify` shows the certificate it was signed with.
 
@@ -424,6 +437,15 @@ From `mobile/`:
 ./gradlew :app:assembleDebug
 ```
 
+The Motion tab's own tests run in `mobile/motion` (see
+[motion.md](motion.md#tests)):
+
+```bash
+dart test
+flutter test test_widget
+flutter analyze
+```
+
 - `:core:test`:
   - checks the protocol code against the shared vectors;
   - checks the transport-switching policy on a virtual clock;
@@ -436,7 +458,9 @@ From `mobile/`:
   - hold-to-save;
   - confirm-before-record;
   - QR decoding of the code CamBridge draws;
-  - rendering every screen. The pictures are in `app/build/screenshots`.
+  - rendering every screen. The pictures are in `app/build/screenshots`;
+  - the Motion tab's side: the stops the app owns (background, close,
+    Escape), the module's rig reports, and STOP ALL on every other screen.
 
 On the server side, `npm test` in `cambridge/` includes:
 - pairing and signatures;

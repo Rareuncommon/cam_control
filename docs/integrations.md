@@ -12,6 +12,7 @@ until switched on, and none of them is required.
 | SKAARHOJ panel (PTZ) | Setup, or `config/cambridge.json` — see [skaarhoj.md](skaarhoj.md) | **yes** |
 | Gamepad | in the browser | no |
 | Phone app (Android), Wi-Fi and Bluetooth | Setup › Phones, and `blebridge` on the Mac — see [mobile-app.md](mobile-app.md) | no (a phone) |
+| Camera motion: edelkrone HeadONE + SliderPLUS (phone app, Motion tab) | in the phone app — see [motion.md](motion.md) | **yes** (the rig) |
 
 PTZ cameras themselves are covered in [ptz.md](ptz.md).
 
