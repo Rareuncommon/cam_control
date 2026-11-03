@@ -263,6 +263,7 @@ class RigController {
   Future<void> _handOver() async {
     _handingOver = true;
     _loopRunning = false;
+    _loopGeneration++;
     try {
       await device?.move.stop(settle: 1.0);
     } finally {
@@ -306,6 +307,14 @@ class RigController {
           slide: _held[RigAxis.slide] ?? 0,
         );
         if (allZero) {
+          if (jogging) {
+            // A pad was taken again while the zero was going out: send what
+            // is held now, and keep repeating it, rather than drop it and
+            // leave the rig stopped under a held pad. (Found in review, PR #9.)
+            _jogDirty = true;
+            _jogTimer ??= Timer.periodic(const Duration(milliseconds: 100), (_) => unawaited(_jogTick()));
+            continue;
+          }
           _jogTimer?.cancel();
           _jogTimer = null;
           _held.clear();
@@ -326,6 +335,7 @@ class RigController {
     _jogTimer = null;
     _held.clear();
     _loopRunning = false;
+    _loopGeneration++;
   }
 
   // -- poses -------------------------------------------------------------------------
@@ -471,6 +481,14 @@ class RigController {
   bool get looping => _loopRunning;
   (int, int)? loopEnds;
 
+  /// Which loop is the current one. Every loop takes a new number and every
+  /// stop moves it on, so a loop task waking from a pause or a recall after
+  /// it was stopped (or replaced by a newer loop) finds it is no longer
+  /// current and ends, instead of reading the newer loop's `_loopRunning` as
+  /// its own and recalling its old poses. (Found in review, PR #9.)
+  int _loopGeneration = 0;
+  bool _loopIsCurrent(int generation) => _loopRunning && generation == _loopGeneration;
+
   /// Ping-pong between the poses in [a] and [b].
   ///
   /// With no [dwell], this is the DEVICE's own loop (`MoveStyle(loop: true)`):
@@ -487,12 +505,13 @@ class RigController {
     final stops = _stops;
     await _stopForAPoseCommand();
     if (_stops != stops) return;
+    final generation = ++_loopGeneration;
     _loopRunning = true;
     loopEnds = (a, b);
     error = null;
     _notify();
     final first = await _recall(a);
-    if (!_loopRunning) return;
+    if (!_loopIsCurrent(generation)) return;
     if (first == null || !first.isSuccess) {
       _loopRunning = false;
       _notify();
@@ -506,21 +525,26 @@ class RigController {
           style: MoveStyle(speed: style.speed, acceleration: style.acceleration, loop: true),
         ),
       );
+      if (generation != _loopGeneration) return;
       if (sent != true) _loopRunning = false;
       moving = _loopRunning;
       _notify();
       return;
     }
     var to = b;
-    while (_loopRunning) {
+    while (_loopIsCurrent(generation)) {
       await Future<void>.delayed(dwell);
-      if (!_loopRunning) break;
+      if (!_loopIsCurrent(generation)) break;
       final out = await _recall(to);
-      if (out == null || !out.isSuccess) break;
+      if (!_loopIsCurrent(generation) || out == null || !out.isSuccess) break;
       to = to == b ? a : b;
     }
-    _loopRunning = false;
-    _notify();
+    // Only the current loop may say it has ended: a stale one must not clear
+    // the flag of the loop that replaced it.
+    if (generation == _loopGeneration) {
+      _loopRunning = false;
+      _notify();
+    }
   }
 
   Future<void> stopLoop() async {

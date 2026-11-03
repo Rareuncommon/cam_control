@@ -40,11 +40,25 @@ class _RigPageState extends State<RigPage> {
     _sub = c.changes.listen((_) {
       if (!mounted) return;
       if (c.phase == RigPhase.idle) {
-        Navigator.of(context).maybePop();
+        _close();
         return;
       }
       setState(() {});
     });
+  }
+
+  bool _closed = false;
+  bool _leaving = false;
+
+  /// Back to the scan page once the rig is disconnected. A plain pop, past
+  /// any sheet still open over the page: the disconnect is done, so there is
+  /// nothing for the back guard below to veto. (Asking with maybePop let the
+  /// guard veto it and disconnect again, round and round; found in review,
+  /// PR #9.)
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
@@ -54,7 +68,13 @@ class _RigPageState extends State<RigPage> {
   }
 
   Future<void> _leave() async {
-    await c.disconnect();
+    if (_leaving || _closed) return;
+    _leaving = true;
+    try {
+      await c.disconnect();
+    } finally {
+      _leaving = false;
+    }
   }
 
   @override
