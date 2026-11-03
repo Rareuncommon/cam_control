@@ -275,6 +275,8 @@ const SERVER_VERSION = (() => {
  *   asked for, so a test run never advertises a CamBridge to phones on the LAN.
  */
 export function createApp({ configPath = './config/cambridge.json', advertise = false } = {}) {
+  /** The app object this returns; the quit route stops it. */
+  let self = null;
   const cfg = loadConfig(configPath);
   const log = new Logger({
     dir: cfg.logging.dir,
@@ -1881,21 +1883,16 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
         log.info('cambridge', 'shutdown requested from the panel');
         sendJson(res, 200, { ok: true, stopping: true });
         const launcher = Number(process.env.CAMBRIDGE_LAUNCHER_PID);
-        setTimeout(async () => {
-          if (Number.isFinite(launcher) && launcher > 1) {
+        setTimeout(() => {
+          // Only the launcher that started us, still our parent: a stale pid
+          // could by now belong to some other process.
+          if (Number.isFinite(launcher) && launcher > 1 && process.ppid === launcher) {
             try { process.kill(launcher, 'SIGTERM'); return; } catch { /* already gone */ }
           }
           // Started from a terminal, or the launcher has already exited. Stop
-          // our own side cleanly; a camd started separately keeps running, which
-          // is correct — we did not start it and must not assume we own it.
-          camd.stop();
-          await stopSkaarhoj();
-          await ptz.stop();
-          await external.stop();
-          atem?.stop();
-          atemWrites?.stop();
-          await visca?.stop();
-          process.exit(0);
+          // our own side; a camd started separately keeps running, which is
+          // correct — we did not start it and must not assume we own it.
+          stopAndExit(self, 'quit from the panel');
         }, 150);
         return;
       }
@@ -2101,7 +2098,7 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
     return client.close;
   }
 
-  return {
+  self = {
     server,
     cfg,
     log,
@@ -2174,23 +2171,64 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
         });
       });
     },
+    /** The shutdown step in progress, for the log when one hangs. */
+    stopStep: null,
     async stop() {
-      mdns?.stop();
-      try { ble?.stop(); } catch { /* stopping */ }
-      logGesture.flush();
-      try { lighting?.stop(); } catch (err) { log.error('lighting', `stop: ${err.message}`); }
-      camd.stop();
-      await stopSkaarhoj();
-      await ptz.stop();
-      await external.stop();
-      atem?.stop();
-      atemWrites?.stop();
-      await visca?.stop();
-      for (const c of [...sseClients.values()]) c.close();
-      sseClients.clear();
-      await new Promise((r) => server.close(r));
+      // Each step runs even if an earlier one failed: a broken integration
+      // must not leave PTZ heads unstopped or the port held.
+      const step = async (name, fn) => {
+        self.stopStep = name;
+        try { await fn(); } catch (err) { log.error('cambridge', `stop ${name}: ${err?.message ?? err}`); }
+      };
+      await step('mdns', () => mdns?.stop());
+      await step('bluetooth', () => ble?.stop());
+      await step('log', () => logGesture.flush());
+      await step('lighting', () => lighting?.stop());
+      await step('camd link', () => camd.stop());
+      await step('skaarhoj', () => stopSkaarhoj());
+      await step('ptz', () => ptz.stop());
+      await step('external cameras', () => external.stop());
+      await step('atem', () => { atem?.stop(); atemWrites?.stop(); });
+      await step('visca', () => visca?.stop());
+      await step('web server', async () => {
+        for (const c of [...sseClients.values()]) c.close();
+        sseClients.clear();
+        // close() waits for every open connection: a browser's keep-alive, a
+        // Multiview stream, a half-sent request. Ending them is what lets
+        // Quit actually quit.
+        const closed = new Promise((r) => server.close(r));
+        server.closeAllConnections?.();
+        await closed;
+      });
+      self.stopStep = null;
     },
   };
+  return self;
+}
+
+/**
+ * Stops the app and exits, and never hangs doing it: whatever is still
+ * stopping after [deadlineMs] is abandoned and the process exits anyway, with
+ * the step it was stuck on in the log. A second request while stopping exits
+ * at once (someone is insisting).
+ */
+const exiting = new WeakSet();
+export function stopAndExit(app, why, { deadlineMs = 5000, exit = (code) => process.exit(code) } = {}) {
+  if (exiting.has(app)) {
+    app.log.warn('cambridge', `${why} while already stopping; exiting now`);
+    exit(0);
+    return;
+  }
+  exiting.add(app);
+  app.log.info('cambridge', `${why}; shutting down`);
+  const deadline = setTimeout(() => {
+    app.log.warn('cambridge', `still stopping after ${deadlineMs / 1000} s (at: ${app.stopStep ?? 'unknown'}); exiting anyway`);
+    exit(0);
+  }, deadlineMs);
+  app.stop().then(
+    () => { clearTimeout(deadline); exit(0); },
+    (err) => { clearTimeout(deadline); app.log.error('cambridge', `stop failed: ${err?.message ?? err}`); exit(0); },
+  );
 }
 
 // Run directly (not when imported by tests).
@@ -2226,11 +2264,13 @@ if (isMainModule(import.meta.url)) {
     } catch { /* exiting regardless */ }
     process.exit(1);
   });
-  for (const sig of ['SIGINT', 'SIGTERM']) {
-    process.on(sig, async () => {
-      app.log.info('cambridge', `${sig} received, shutting down`);
-      await app.stop();
-      process.exit(0);
-    });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => stopAndExit(app, `${sig} received`));
+  // Started by CamBridge.app's launcher: if the launcher goes (force-quit in
+  // Activity Monitor), go too, rather than run on unseen and keep the port.
+  const launcher = Number(process.env.CAMBRIDGE_LAUNCHER_PID);
+  if (Number.isFinite(launcher) && launcher > 1 && process.ppid === launcher) {
+    setInterval(() => {
+      if (process.ppid !== launcher) stopAndExit(app, 'the CamBridge launcher has gone');
+    }, 2000).unref();
   }
 }

@@ -1870,9 +1870,27 @@ $('#quit').addEventListener('click', async () => {
     : '';
   if (!confirm(`${warning}Quit CamBridge? This disconnects every camera and stops the control panel for everyone.`)) return;
   await api('POST', '/api/shutdown');
-  document.body.innerHTML =
-    '<div style="padding:40px;font:16px -apple-system,sans-serif;color:#93a1b0">' +
-    'CamBridge has stopped. Open it again from Applications.</div>';
+  const note = (text) => {
+    document.body.innerHTML = '';
+    const d = document.createElement('div');
+    d.style.cssText = 'padding:40px;font:16px -apple-system,sans-serif;color:#93a1b0';
+    d.textContent = text;
+    document.body.append(d);
+  };
+  note('Stopping CamBridge…');
+  // Say "stopped" only once it has: the server no longer answers. It gives
+  // itself 5 s and its launcher kills anything left after 10 s.
+  const until = Date.now() + 15_000;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(1000) });
+    } catch {
+      note('CamBridge has stopped. Open it again from Applications.');
+      return;
+    }
+  }
+  note('CamBridge is still answering 15 seconds after Quit. Its log (~/Library/Logs/CamBridge) says what it is waiting on.');
 });
 
 // --- gamepad ----------------------------------------------------------------
