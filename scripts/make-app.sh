@@ -32,8 +32,6 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>CamBridge</string>
     <key>CFBundleIconFile</key><string>CamBridge</string>
     <key>NSHighResolutionCapable</key><true/>
-    <!-- Stays in the Dock so there is an obvious way to quit, which also stops
-         both background processes. -->
     <!-- Agent app, not a windowed one. The executable here is a shell script
          that never registers with the window server, so with LSUIElement false
          macOS bounces the Dock icon for about a minute, decides the launch
@@ -91,8 +89,9 @@ Double-click it to start CamBridge. It will:
   - wait until the daemon is answering
   - open the control panel in your browser
 
-Quitting the app (Cmd-Q, or right-click the Dock icon) stops both.
+To stop it, use Quit in the panel; that stops both, and anything still
+running after 10 seconds is ended.
 
-To keep it in the Dock permanently, drag it to /Applications first:
+To start it from the Dock, build it into /Applications and drag it there:
   ./scripts/make-app.sh /Applications
 EOF

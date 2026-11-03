@@ -123,14 +123,22 @@ done
 
 CAMD_PID=""
 UI_PID=""
+STOPPED=no
+# shellcheck source=stop-children.sh
+. "${REPO_ROOT}/scripts/stop-children.sh"
+# Bounded: cambridge gets its own 5 s, camd its own 8 s, and anything still
+# running after 10 s is killed, so Quit always leaves nothing behind.
 cleanup() {
+    [[ "${STOPPED}" == yes ]] && return
+    STOPPED=yes
     say "shutting down"
-    [[ -n "${UI_PID}" ]] && kill "${UI_PID}" 2>/dev/null
-    [[ -n "${CAMD_PID}" ]] && kill "${CAMD_PID}" 2>/dev/null
-    wait 2>/dev/null
+    if ! stop_children 10 "${UI_PID}" "${CAMD_PID}"; then
+        say "did not stop within 10 s, killed: ${STOP_CHILDREN_KILLED}"
+    fi
     say "stopped"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup; exit 0' INT TERM
+trap cleanup EXIT
 
 # camd requires a per-launch access token on every request (audit DC-1). One
 # fresh secret per launch, exported so camd and the Node service share it; it is
@@ -143,7 +151,7 @@ camd_health() {
 
 if [[ "${NEED_CAMD}" == yes ]]; then
     say "starting camd"
-    ./camd/build/camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
+    CAMD_PARENT_PID=$$ ./camd/build/camd --config "${CONFIG}" >> "${LOG_DIR}/camd.stdout.log" 2>&1 &
     CAMD_PID=$!
 
     healthy=false
@@ -194,6 +202,8 @@ done
 say "opening browser at http://localhost:${UI_PORT}"
 open "http://localhost:${UI_PORT}"
 
-# Hold the app open. Quitting from the Dock terminates this script, and the trap
-# stops both children.
-wait
+# Hold the app open while the web interface runs. Quit (the panel's button, or
+# a TERM to this script) runs the trap, which stops both. If the web interface
+# exits by itself, camd is stopped too rather than left running unseen.
+wait "${UI_PID}"
+say "the web interface exited (status $?)"
