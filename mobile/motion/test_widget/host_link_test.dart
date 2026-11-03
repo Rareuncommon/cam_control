@@ -110,6 +110,18 @@ void main() {
     await host.close();
   });
 
+  test('closing the app stops the loop, then lets the units go', () async {
+    final (c, link, registry) = await joinedRig();
+    final host = HostLink(controller: c, registry: registry)..start();
+    await c.startLoop(0, 1);
+    final aborts = link.ops(9).length;
+    await fromApp('disconnect', 'test: the app is closing');
+    expect(link.ops(9).length, greaterThan(aborts), reason: 'stopped before letting go');
+    expect(c.phase, RigPhase.idle);
+    expect(link.isConnected, isFalse);
+    await host.close();
+  });
+
   test('STOP ALL with nothing connected is harmless; an unknown call is refused', () async {
     final registry = StopRegistry();
     final c = RigController(transport: FakeTransport(FakeHeadLink()), registry: registry);

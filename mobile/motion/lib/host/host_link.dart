@@ -7,9 +7,10 @@
 ///  - **The app's STOP ALL and Escape**, shown and handled on every tab while
 ///    a rig is connected, arrive here as `stopAll` and go through the same
 ///    [StopRegistry] as this module's own STOP ALL.
-///  - **The app going to the background, being hidden or closing** sends
-///    `stopAll` too, from the app's own lifecycle, which sees it whichever tab
-///    is showing. (The module's lifecycle observer still stops as well.)
+///  - **The app going to the background or being hidden** sends `stopAll`
+///    too, from the app's own lifecycle, which sees it whichever tab is
+///    showing; **closing** sends `disconnect`, which stops first. (The
+///    module's lifecycle observer still stops as well.)
 ///  - **The app's STOP ALL bar** needs to know whether a rig is connected and
 ///    moving: [HostLink] reports that on every change, as `rig`.
 ///
@@ -64,6 +65,12 @@ class HostLink {
         // to the app to show.
         EdelkroneLog.info(() => 'stop all from the CamBridge app (${call.arguments ?? 'no reason given'})');
         return registry.stopAll();
+      case 'disconnect':
+        // The app is closing: stop (RigController.disconnect stops first),
+        // then let the units go, rather than hold the link with no screen.
+        EdelkroneLog.info(() => 'disconnect from the CamBridge app (${call.arguments ?? 'no reason given'})');
+        await controller.disconnect();
+        return null;
       case 'rig':
         return rigState;
     }

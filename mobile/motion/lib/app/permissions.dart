@@ -1,82 +1,40 @@
-/// Runtime permission handling.
+/// Runtime Bluetooth permission, asked of the CamBridge app.
 ///
-/// Only Android needs anything at runtime. On iOS and macOS CoreBluetooth
-/// raises its own prompt the first time the radio is used, driven by the
-/// usage-description string in Info.plist and the Bluetooth entitlement — so
-/// there is nothing to request from Dart, and asking would return
-/// [PermissionStatus.denied] on platforms where the permission does not exist.
+/// In Slidercontrol this file asked Android directly through permission_handler.
+/// Inside the CamBridge app the app asks: it already requests "Nearby devices"
+/// (BLUETOOTH_SCAN and BLUETOOTH_CONNECT) for its own Bluetooth link to the Mac
+/// and lists it under Settings › Permissions, so the permission has one home.
+/// The app needs Android 13 or later, where those two are all a scan and a
+/// connection need; the location permission older versions required never
+/// applies. (permission_handler's current Android part also needs a newer
+/// compile SDK than Flutter builds modules with.)
 library;
 
-import 'dart:io' show Platform;
+import 'package:flutter/services.dart';
 
-import 'package:permission_handler/permission_handler.dart';
+import '../host/host_link.dart';
 
 class EkPermissions {
-  /// Requests everything scanning needs. Returns null on success, or a
-  /// human-readable reason on failure.
-  ///
-  /// `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT` exist from Android 12 (API 31).
-  /// Below that, a BLE scan is gated on location permission instead. Requesting
-  /// all three is harmless: permission_handler reports the ones that do not
-  /// apply to the running OS version as granted.
+  static const _channel = MethodChannel(hostChannelName);
+
+  /// Asks for everything scanning and connecting need. Returns null when
+  /// granted, or the app's sentence saying what was refused and where to
+  /// allow it.
   static Future<String?> request() async {
-    if (!Platform.isAndroid) return null;
-
-    final results = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.locationWhenInUse,
-    ].request();
-
-    final permanentlyDenied = <String>[];
-    final denied = <String>[];
-
-    results.forEach((permission, status) {
-      // On Android 12+ the location permission is not required for a scan that
-      // declares `neverForLocation`, and on Android 11 and below the bluetooth*
-      // permissions do not exist. Either way a refusal of one of the two groups
-      // is only fatal if the other group was also refused, which the caller
-      // discovers when the scan returns nothing.
-      if (status.isPermanentlyDenied) {
-        permanentlyDenied.add(_label(permission));
-      } else if (!status.isGranted && !status.isLimited) {
-        denied.add(_label(permission));
-      }
-    });
-
-    // Scanning genuinely cannot work without these two on Android 12+.
-    final scanBlocked =
-        results[Permission.bluetoothScan]?.isGranted == false &&
-        results[Permission.locationWhenInUse]?.isGranted == false;
-    final connectBlocked = results[Permission.bluetoothConnect]?.isGranted == false;
-
-    if (!scanBlocked && !connectBlocked) return null;
-
-    if (permanentlyDenied.isNotEmpty) {
-      return 'Permanently denied: ${permanentlyDenied.join(', ')}. '
-          'Enable them in Settings, then try again.';
+    try {
+      return await _channel.invokeMethod<String?>('requestBluetooth');
+    } on MissingPluginException {
+      return null; // not inside the CamBridge app (tests): there is nothing to ask
     }
-    return 'Denied: ${denied.join(', ')}. Bluetooth scanning needs these.';
   }
 
-  /// Opens the OS settings page, for the permanently-denied case.
-  ///
-  /// Returns false if it could not be opened — permission_handler does not
-  /// implement this on every platform, and macOS in particular may throw. The
-  /// caller should fall back to telling the user where to go by hand rather
-  /// than leaving a button that appears to do nothing.
+  /// Opens Android's settings page for the app, for a permission refused for
+  /// good. False if it could not be opened.
   static Future<bool> openSettings() async {
     try {
-      return await openAppSettings();
+      return await _channel.invokeMethod<bool>('openSettings') ?? false;
     } catch (_) {
       return false;
     }
-  }
-
-  static String _label(Permission p) {
-    if (p == Permission.bluetoothScan) return 'Bluetooth scan';
-    if (p == Permission.bluetoothConnect) return 'Bluetooth connect';
-    if (p == Permission.locationWhenInUse) return 'Location';
-    return p.toString();
   }
 }

@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_blue_plus: ^2.3.12
-  permission_handler: ^13.0.1
+  # Bluetooth permission is asked of the CamBridge app (lib/app/permissions.dart).
   shared_preferences: ^2.5.5
 
 dev_dependencies:

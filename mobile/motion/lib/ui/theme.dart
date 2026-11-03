@@ -22,6 +22,10 @@ ThemeData cambridgeTheme() {
   const scheme = ColorScheme.dark(
     primary: StudioColours.accent,
     onPrimary: Color(0xFF00213F),
+    // Stored poses and the jog pads: a muted blue, so the bright accent is
+    // left to the pose that is moving.
+    primaryContainer: Color(0xFF1C3D61),
+    onPrimaryContainer: Color(0xFFD6E8FF),
     secondary: StudioColours.accent,
     tertiary: StudioColours.warn,
     surface: StudioColours.surface,
