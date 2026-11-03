@@ -7,6 +7,7 @@ kotlinx-coroutines = "1.11.0"
 okhttp = "5.5.1"
 compose-bom = "2026.09.00"
 activity-compose = "1.13.0"
+fragment = "1.9.1"
 lifecycle = "2.11.0"
 core-ktx = "1.19.1"
 datastore = "1.3.0"
@@ -31,6 +32,10 @@ compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
+fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
+# The Motion tab: mobile/motion, built by `flutter build aar --build-number 1` (docs/motion.md).
+motion-debug = { module = "studio.cambridge.motion:flutter_debug", version = "1" }
+motion-release = { module = "studio.cambridge.motion:flutter_release", version = "1" }
 lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }

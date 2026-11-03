@@ -54,6 +54,9 @@ class AppGraph(private val app: Application) {
     val settings: StateFlow<Settings> = settingsStore.settings.stateIn(scope, SharingStarted.Eagerly, Settings())
     private val discovery = Discovery(app)
 
+    /** Camera motion (mobile/motion): started the first time the Motion tab opens, then kept for the app's life. */
+    val motion = studio.cambridge.mobile.motion.MotionBridge(app)
+
     /** Null until the store has been read, so the UI can wait instead of flashing the pairing screen. */
     val paired: StateFlow<Loaded<Paired?>> = MutableStateFlow<Loaded<Paired?>>(Loaded.Loading).also { out ->
         scope.launch { pairing.paired.collect { out.value = Loaded.Ready(it) } }

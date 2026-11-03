@@ -96,4 +96,34 @@ class ControlsTest {
         rule.onNodeWithText("Record all").performClick()
         assertEquals(listOf(Commands.recordAll(true)), sent)
     }
+
+    private fun withRig(rig: studio.cambridge.mobile.motion.Rig, motionShowing: Boolean, stops: MutableList<String>) {
+        rule.setContent {
+            CamBridgeTheme {
+                WithRigStop(rig, motionShowing = motionShowing, onStop = { stops += "stop" }) { Text("Cameras screen") }
+            }
+        }
+    }
+
+    @Test fun `while a rig is connected every other screen has STOP ALL, and it stops`() {
+        val stops = mutableListOf<String>()
+        withRig(studio.cambridge.mobile.motion.Rig(connected = true, name = "HeadONE V2", moving = true), motionShowing = false, stops)
+        rule.onNodeWithText("Cameras screen").assertIsDisplayed()
+        rule.onNodeWithText("STOP ALL").assertIsDisplayed()
+        rule.onNodeWithText("HeadONE V2 is moving").assertIsDisplayed()
+        rule.onNodeWithText("STOP ALL").performClick()
+        assertEquals(listOf("stop"), stops)
+    }
+
+    @Test fun `no bar on the Motion tab, which has its own, nor with no rig`() {
+        val stops = mutableListOf<String>()
+        withRig(studio.cambridge.mobile.motion.Rig(connected = true), motionShowing = true, stops)
+        rule.onNodeWithText("STOP ALL").assertDoesNotExist()
+    }
+
+    @Test fun `no bar with no rig connected`() {
+        withRig(studio.cambridge.mobile.motion.Rig(), motionShowing = false, mutableListOf())
+        rule.onNodeWithText("Cameras screen").assertIsDisplayed()
+        rule.onNodeWithText("STOP ALL").assertDoesNotExist()
+    }
 }
