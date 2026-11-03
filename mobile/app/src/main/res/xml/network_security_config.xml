@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CamBridge serves plain HTTP on the studio network, so cleartext is allowed.
+     Every request is HMAC-signed with the phone's key: it cannot be altered or
+     replayed, and the key never crosses the network. CamBridge's answers and
+     the live state are not signed over Wi-Fi (they are over Bluetooth); see
+     docs/mobile-app.md, "Security, and its limits". The app talks to nothing else. -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
+</network-security-config>

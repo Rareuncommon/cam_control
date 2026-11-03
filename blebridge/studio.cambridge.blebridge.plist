@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd user agent for the CamBridge Bluetooth bridge. Installed by
+  scripts/install-blebridge.sh, which fills in the @…@ paths; not loaded
+  from here.
+
+  A user agent, not a system daemon: Bluetooth permission belongs to the
+  logged-in user, and the bridge needs no privileges. KeepAlive restarts it
+  if it ever exits; it does not exit when Bluetooth is off or permission is
+  denied (it waits and logs), so launchd never sees a crash loop.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>studio.cambridge.blebridge</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@BINARY@</string>
+		<string>--socket</string>
+		<string>@SOCKET@</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>StandardOutPath</key>
+	<string>@LOG@</string>
+	<key>StandardErrorPath</key>
+	<string>@LOG@</string>
+</dict>
+</plist>

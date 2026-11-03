@@ -6,10 +6,12 @@
 // posts actions over ordinary fetch — and EventSource reconnects on its own.
 
 import { createServer } from 'node:http';
+import { Readable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { gzipSync, createGzip, constants as zlibConstants } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
+import { networkInterfaces, hostname } from 'node:os';
 import { isIP } from 'node:net';
 import { dirname, join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +41,11 @@ import { RawPanelClient, DEFAULT_PORT as SKAARHOJ_PORT } from './skaarhoj/rawpan
 import { PanelController } from './skaarhoj/mapping.js';
 import { Lighting } from './lighting/service.js';
 import { handleLighting, gestureLogger } from './lighting/routes.js';
+import { DeviceRegistry, pairingUri, SCHEME as DEVICE_SCHEME } from './devices.js';
+import { MdnsAdvertiser } from './mdns.js';
+import { qrSvg } from './qr.js';
+import { BleGateway } from './ble/gateway.js';
+import { applyPatch } from '../public/patch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -147,6 +154,35 @@ function sendJson(res, status, body) {
   res.end(text);
 }
 
+/** The response side of an in-process request (see dispatchInternal). */
+class CaptureResponse extends EventEmitter {
+  constructor() {
+    super();
+    this.statusCode = 200;
+    this.headers = {};
+    this.chunks = [];
+    this.headersSent = false;
+    this.done = new Promise((resolve) => { this.finish = resolve; });
+  }
+  setHeader(k, v) { this.headers[String(k).toLowerCase()] = v; }
+  getHeader(k) { return this.headers[String(k).toLowerCase()]; }
+  writeHead(status, headers = {}) {
+    this.statusCode = status;
+    for (const [k, v] of Object.entries(headers)) this.setHeader(k, v);
+    this.headersSent = true;
+    return this;
+  }
+  write(c) { this.headersSent = true; this.chunks.push(Buffer.from(c)); return true; }
+  end(c) {
+    if (c) this.chunks.push(Buffer.from(c));
+    this.headersSent = true;
+    this.finish();
+    this.emit('finish');
+    this.emit('close');
+    return this;
+  }
+}
+
 /**
  * Where an event stream's frames go: straight to the socket, or through gzip
  * with a sync flush after every frame so nothing sits in the compressor
@@ -195,7 +231,9 @@ function browsableUrls(bindAddr, port) {
   return urls;
 }
 
-async function readBody(req, limitBytes = 1024 * 1024) {
+/** The request body as bytes. A signed request's body is read before routing, to check the signature. */
+async function readRaw(req, limitBytes = 1024 * 1024) {
+  if (req.rawBody !== undefined) return req.rawBody;
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
@@ -203,15 +241,40 @@ async function readBody(req, limitBytes = 1024 * 1024) {
     if (total > limitBytes) throw new Error('request body too large');
     chunks.push(chunk);
   }
-  if (chunks.length === 0) return null;
-  const text = Buffer.concat(chunks).toString('utf8');
+  req.rawBody = Buffer.concat(chunks);
+  return req.rawBody;
+}
+
+/** LAN IPv4 addresses, for the pairing QR. */
+function lanAddresses() {
+  const out = [];
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+  }
+  return out;
+}
+
+async function readBody(req, limitBytes = 1024 * 1024) {
+  const raw = await readRaw(req, limitBytes);
+  if (raw.length === 0) return null;
+  const text = raw.toString('utf8');
   if (!text.trim()) return null;
   return JSON.parse(text);
 }
 
 // --- application ------------------------------------------------------------
 
-export function createApp({ configPath = './config/cambridge.json' } = {}) {
+const SERVER_VERSION = (() => {
+  try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return 'unknown'; }
+})();
+
+/**
+ * @param {object} [o]
+ * @param {string} [o.configPath]
+ * @param {boolean} [o.advertise]  announce the server over Bonjour. Off unless
+ *   asked for, so a test run never advertises a CamBridge to phones on the LAN.
+ */
+export function createApp({ configPath = './config/cambridge.json', advertise = false } = {}) {
   const cfg = loadConfig(configPath);
   const log = new Logger({
     dir: cfg.logging.dir,
@@ -311,6 +374,37 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     log.error('lighting', `lighting is off: ${err.message}`);
   }
   const logGesture = gestureLogger((line) => log.info('lighting', line));
+  /** Bonjour, once listening (start()). */
+  let mdns = null;
+
+
+  /** What phones and the pairing QR call this CamBridge. */
+  const serverName = () => (typeof cfg.cambridge.name === 'string' && cfg.cambridge.name.trim())
+    || hostname().replace(/\.local$/, '');
+
+  // Paired phones (the CamBridge app). Their requests are signed; see devices.js.
+  const devices = new DeviceRegistry({
+    readConfig: () => adoption.readConfig(),
+    saveAuth: (patch) => adoption.saveSection('auth', patch),
+    log: (level, msg) => log.write(level, 'devices', msg),
+  });
+  devices.on('revoked', (id) => {
+    // A revoked phone loses its live stream at once, not at its next request.
+    for (const c of [...sseClients.values()]) if (c.device === id) c.close();
+  });
+
+  // Phones on Bluetooth, through the Swift bridge (blebridge/) and a Unix
+  // socket beside the config. See src/ble/gateway.js. `cambridge.ble.enabled:
+  // false` turns it off.
+  const bleCfg = cfg.cambridge.ble ?? {};
+  const ble = bleCfg.enabled === false ? null : new BleGateway({
+    socketPath: bleCfg.socket ?? join(dirname(resolve(configPath)), 'blebridge.sock'),
+    devices,
+    dispatch: (r) => dispatchInternal(r),
+    serverInfo: () => ({ id: devices.ensureServerId(), name: serverName() }),
+    subscribe: (fn) => subscribeFrames(fn),
+    log: (level, msg) => log.write(level, 'ble', msg),
+  });
 
   /**
    * Injected setter used by presets, gang and match, so all writes are logged.
@@ -655,7 +749,10 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     // one it was sent, so a pan does not resend every fader.
     if (patch && dirty.lighting) patch.lighting = lights;
     dirty.clear();
-    for (const [sink, c] of sseClients) send(sink, c.patch && patch ? patch : full);
+    for (const [sink, c] of sseClients) {
+      const payload = c.patch && patch ? patch : full;
+      if (c.deliver) { try { c.deliver(payload); } catch (err) { log.error('cambridge', `state consumer: ${err.message}`); } } else send(sink, payload);
+    }
   }
 
   const thresholds = resolveThresholds(cfg.alarms);
@@ -1024,7 +1121,12 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
 
   // --- HTTP -----------------------------------------------------------------
 
-  const server = createServer(async (req, res) => {
+  /**
+   * Every request goes through here: HTTP from browsers, Companion and the
+   * phone app over Wi-Fi, and — in-process, with the phone already
+   * identified — requests from phones over Bluetooth (dispatchInternal).
+   */
+  async function handleRequest(req, res) {
     let url;
     try { url = new URL(req.url, 'http://localhost'); }
     catch { return sendJson(res, 400, { error: 'Invalid request URL' }); }
@@ -1043,6 +1145,25 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // endpoint it calls is gated here regardless.
       const gated = path.startsWith('/api/');
       const who = { role: 'anonymous', label: 'anonymous' };
+      // A paired phone signs its requests. A request that carries a device
+      // signature must carry a good one, PIN or not: that is what makes
+      // revoking a phone mean something on an open panel.
+      if (gated && new RegExp(`^${DEVICE_SCHEME}\\s`, 'i').test(req.headers.authorization ?? '')) {
+        let raw;
+        try { raw = await readRaw(req); } catch (err) { return sendJson(res, 413, { error: err.message }); }
+        const v = devices.verifyRequest({
+          method: req.method, target: req.url, authorization: req.headers.authorization, body: raw,
+          remote: req.socket?.remoteAddress, allowPending: path === '/api/devices/activate' && req.method === 'POST',
+        });
+        if (!v.ok) {
+          log.warn('auth', `device ${v.status} ${req.method} ${path}: ${v.reason}`);
+          return sendJson(res, v.status, {
+            error: v.error, deviceRejected: true, reason: v.reason, serverId: devices.ensureServerId(),
+            ...(v.serverTime ? { serverTime: v.serverTime } : {}),
+          });
+        }
+        req.cambridgeDevice = v.device;
+      }
       if (gated) {
         const verdict = auth.authorise(req.method, path, req);
         Object.assign(who, verdict.who);
@@ -1104,7 +1225,9 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         }
         const stored = hashPin(pin);
         auth[role] = stored;
-        const saved = await adoption.saveAuth({ ...cfg.auth, [role]: stored });
+        // Merged into the auth block on disk, not rewritten from memory: that
+        // would drop phones paired since CamBridge started.
+        const saved = adoption.saveSection('auth', { [role]: stored });
         if (!saved.ok) return sendJson(res, 500, { error: saved.error });
         cfg.auth[role] = stored;
         log.info('auth', `${actor()}set the ${role === 'adminPin' ? 'admin' : 'operator'} PIN`);
@@ -1115,16 +1238,23 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (path === '/api/events') {
         const sink = eventSink(req, res);
         sink.write(`data: ${JSON.stringify(buildPush())}\n\n`);
-        sseClients.set(sink, { patch: url.searchParams.get('patch') === '1' });
         // Comment frames keep proxies and sleeping iPads from dropping the stream.
         const keepAlive = setInterval(() => {
           try { sink.write(': keepalive\n\n'); } catch { /* closed */ }
         }, 15_000);
-        req.on('close', () => {
+        // One way out, whichever end closes it: the client going away, or
+        // the server ending it (a phone revoked mid-stream).
+        let closed = false;
+        const close = () => {
+          if (closed) return;
+          closed = true;
           clearInterval(keepAlive);
           sseClients.delete(sink);
-          sink.end();
-        });
+          try { sink.end(); } catch { /* already closed */ }
+        };
+        sseClients.set(sink, { patch: url.searchParams.get('patch') === '1', device: req.cambridgeDevice?.id ?? null, close });
+        req.on('close', close);
+        res.on('close', close);
         return;
       }
 
@@ -1145,6 +1275,41 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (m && req.method === 'POST' && m[2]) {
         try { return sendJson(res, 200, await external.action(decodeURIComponent(m[1]), m[2], await readBody(req) ?? {})); }
         catch (error) { return sendJson(res, 409, { ok: false, error: error.message }); }
+      }
+
+      // --- paired phones ---
+      if (path === '/api/devices' && req.method === 'GET') {
+        return sendJson(res, 200, { devices: devices.list() });
+      }
+      if (path === '/api/devices' && req.method === 'POST') {
+        const body = await readBody(req);
+        const made = devices.create({ label: body?.label });
+        if (!made.ok) return sendJson(res, 500, { ok: false, error: made.error });
+        const uri = pairingUri({
+          serverId: devices.ensureServerId(), serverName: serverName(), hosts: lanAddresses(),
+          port: server.address()?.port ?? cfg.cambridge.port, deviceId: made.device.id, secret: made.secret,
+          expiresAt: made.device.expiresAt,
+        });
+        log.info('devices', `${actor()}made a pairing code for ${made.device.id}`);
+        // The secret is in this answer and nowhere else: the QR is the only copy.
+        return sendJson(res, 201, { ok: true, device: made.device, pairing: { uri, svg: qrSvg(uri), expiresAt: made.device.expiresAt } });
+      }
+      if (path === '/api/devices/activate' && req.method === 'POST') {
+        if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'sign this request with the device key from the QR', deviceRejected: true });
+        const body = await readBody(req);
+        const r = devices.activate(req.cambridgeDevice.id, { name: body?.name, model: body?.model });
+        if (!r.ok) return sendJson(res, r.status, { ok: false, error: r.error });
+        return sendJson(res, 200, { ok: true, device: r.device, server: { id: devices.ensureServerId(), name: serverName() } });
+      }
+      if (path === '/api/devices/me' && req.method === 'GET') {
+        if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'not a paired device', deviceRejected: true });
+        return sendJson(res, 200, { device: req.cambridgeDevice, server: { id: devices.ensureServerId(), name: serverName() } });
+      }
+      m = path.match(/^\/api\/devices\/([^/]+)$/);
+      if (m && req.method === 'DELETE') {
+        const r = devices.revoke(decodeURIComponent(m[1]));
+        if (r.ok) log.info('devices', `${actor()}revoked ${decodeURIComponent(m[1])}`);
+        return sendJson(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
       }
 
       // --- lighting ---
@@ -1263,6 +1428,30 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         const cleared = state.acknowledgeRecordDrop(cameraId);
         if (cleared) log.info('alarm', `${actor()}${cameraId} dropped-record alarm acknowledged`);
         return sendJson(res, 200, { ok: true, cameraId, cleared });
+      }
+
+      // What this server offers, for clients that build themselves from it (the
+      // phone app). Features come and go with configuration — lighting that
+      // failed to start, no Sony bodies — and the app follows without a release.
+      if (path === '/api/capabilities' && req.method === 'GET') {
+        return sendJson(res, 200, {
+          api: 1,
+          server: { id: devices.ensureServerId(), name: serverName(), version: SERVER_VERSION },
+          auth: { pin: auth.enabled, devices: true, signing: 'CamBridge-HMAC v1' },
+          features: {
+            cameras: true,
+            sony: state.camdUsed,
+            ptz: state.list().some((c) => c.kind === 'ptz'),
+            external: state.list().some((c) => c.kind === 'external'),
+            record: true,
+            recordAll: true,
+            liveview: true,
+            cameraPresets: true,
+            cameraScenes: true,
+            lighting: lighting ? { available: true } : { available: false, reason: lightingError },
+            bluetooth: ble ? { available: true, ...ble.status() } : { available: false },
+          },
+        });
       }
 
       if (path === '/api/health' && req.method === 'GET') {
@@ -1861,7 +2050,56 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       if (!res.headersSent) sendJson(res, 500, { error: err.message });
       else res.end();
     }
-  });
+  }
+
+  const server = createServer(handleRequest);
+
+  /**
+   * Runs one request through handleRequest as a paired phone, without the
+   * network: how the Bluetooth gateway executes a phone's commands. The
+   * device is set on the request object directly, which no client can do.
+   */
+  async function dispatchInternal({ method, target, body, device }) {
+    const raw = Buffer.from(body === undefined ? '' : JSON.stringify(body), 'utf8');
+    const req = Readable.from(raw.length ? [raw] : []);
+    Object.assign(req, {
+      method, url: target, rawBody: raw, cambridgeDevice: device,
+      headers: { host: 'bluetooth', 'content-type': 'application/json' },
+      socket: { remoteAddress: 'bluetooth' },
+    });
+    const res = new CaptureResponse();
+    await Promise.race([
+      (async () => { await handleRequest(req, res); await res.done; })(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('the request took longer than 15 s')), 15_000).unref()),
+    ]);
+    return { status: res.statusCode, contentType: String(res.getHeader('content-type') ?? ''), body: Buffer.concat(res.chunks) };
+  }
+
+  /**
+   * The live state for in-process consumers (the Bluetooth gateway): one full
+   * frame now, then for each push the patched full frame and the patch.
+   */
+  function subscribeFrames(fn) {
+    const key = {};
+    let full = { ...buildPush() };
+    const client = {
+      patch: true,
+      close: () => sseClients.delete(key),
+      deliver(payload) {
+        if (payload.type === 'patch') {
+          const r = applyPatch(full, payload);
+          full = r.resync ? { ...buildPush() } : r.frame;
+          fn({ full, patch: r.resync ? null : payload });
+        } else {
+          full = payload;
+          fn({ full, patch: null });
+        }
+      },
+    };
+    sseClients.set(key, client);
+    fn({ full, patch: null });
+    return client.close;
+  }
 
   return {
     server,
@@ -1876,6 +2114,8 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
     ptz,
     external,
     lighting,
+    devices,
+    ble,
     /** The live panel link while driving one, else null. */
     get skaarhoj() { return skaarhoj; },
     start() {
@@ -1887,6 +2127,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       // Restores the last lighting state and resumes sending it — if output is
       // on. With nothing saved yet it sends nothing, never a frame of zeros.
       try { lighting?.start(); } catch (err) { log.error('lighting', `could not start: ${err.message}`); }
+      try { ble?.start(); } catch (err) { log.error('ble', `could not start the Bluetooth gateway: ${err.message}`); }
       state.applyExternal(external.view());
       external.start();
       startSkaarhoj();
@@ -1922,11 +2163,20 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
         server.listen(cfg.cambridge.port, cfg.cambridge.bind, () => {
           const urls = browsableUrls(cfg.cambridge.bind, cfg.cambridge.port);
           log.info('cambridge', `listening on ${urls.join('  ')}, camd at ${camdBase}`);
+          if (advertise && cfg.cambridge.mdns !== false) {
+            mdns = new MdnsAdvertiser({
+              name: serverName(), port: server.address().port, txt: { api: '1', id: devices.ensureServerId() },
+              log: (level, msg) => log.write(level, 'mdns', msg),
+            });
+            mdns.start();
+          }
           resolvePromise({ ...server.address(), urls });
         });
       });
     },
     async stop() {
+      mdns?.stop();
+      try { ble?.stop(); } catch { /* stopping */ }
       logGesture.flush();
       try { lighting?.stop(); } catch (err) { log.error('lighting', `stop: ${err.message}`); }
       camd.stop();
@@ -1936,7 +2186,7 @@ export function createApp({ configPath = './config/cambridge.json' } = {}) {
       atem?.stop();
       atemWrites?.stop();
       await visca?.stop();
-      for (const c of sseClients.keys()) { try { c.end(); } catch { /* closed */ } }
+      for (const c of [...sseClients.values()]) c.close();
       sseClients.clear();
       await new Promise((r) => server.close(r));
     },
@@ -1948,7 +2198,7 @@ if (isMainModule(import.meta.url)) {
   const argIndex = process.argv.indexOf('--config');
   const configPath = argIndex > -1 ? process.argv[argIndex + 1] : './config/cambridge.json';
   const portIndex = process.argv.indexOf('--port');
-  const app = createApp({ configPath });
+  const app = createApp({ configPath, advertise: true });
   if (portIndex > -1) app.cfg.cambridge.port = Number(process.argv[portIndex + 1]);
   let addr;
   try {

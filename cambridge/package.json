@@ -10,8 +10,9 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "npm run check:catalog && node --test test/*.test.js",
-    "check:catalog": "node ../scripts/sync-camera-catalog.mjs"
+    "test": "npm run check:catalog && npm run check:vectors && node --test test/*.test.js",
+    "check:catalog": "node ../scripts/sync-camera-catalog.mjs",
+    "check:vectors": "node ../scripts/make-protocol-vectors.mjs --check"
   },
   "dependencies": {},
   "devDependencies": {}

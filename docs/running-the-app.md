@@ -255,6 +255,16 @@ you add an admin PIN.
 
 Sessions last sixteen hours, so nobody signs in twice in a day.
 
+#### Phones
+
+The CamBridge Android app pairs in **Setup › Phones**: **Pair a phone** shows a
+QR code that works once, for ten minutes. The list shows each phone, when it
+was last seen and whether that was over Wi-Fi or Bluetooth. **Revoke** stops a
+phone at once on both. Phones are operators: they can do what the shoot needs,
+not what outlasts it. With a PIN set, pairing a phone needs the admin PIN.
+Building, installing and the Bluetooth bridge are in
+[mobile-app.md](mobile-app.md).
+
 #### Companion, scripts and anything that is not a person
 
 Machine clients cannot answer a PIN prompt, so they use a token instead. Add one
