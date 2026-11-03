@@ -1,0 +1,104 @@
+/// Reopening the app picks the last rig up again (found on the phone: after
+/// closing and opening the app, the joined head and slider were not found
+/// again), but only as it was left, never by joining anything, and not after
+/// the user pressed Disconnect.
+library;
+
+import 'dart:async';
+
+import 'package:test/test.dart';
+
+import '../../lib/app/rig_controller.dart';
+import '../../lib/control/stop_registry.dart';
+import '../../lib/sdk/devices/registry.dart';
+import '../../lib/sdk/motion/pose.dart';
+import '../../lib/sdk/protocol/generated/moco.dart';
+import '../sdk/fake_rig.dart';
+import 'rig_controller_test.dart' show until;
+
+/// The head and slider as they advertise once joined: the head leads the
+/// layout, the slider is a member of its group.
+List<EdelkroneDevice> joinedUnits(FakeHeadLink link) => [
+  link.device,
+  EdelkroneDevice(
+    id: 'slider',
+    model: fakeSliderUnit().model,
+    advData: advFor(2, setup: EdlSetup.GROUP_MEMBER, group: 0x0101),
+    rssi: -45,
+  ),
+];
+
+/// First run: find the units apart, join, connect, then close (or press
+/// Disconnect when [forget]).
+Future<LastRigStore> firstRun({required bool forget}) async {
+  final store = MemoryLastRigStore();
+  final link = FakeHeadLink(unit: fakeHeadUnit(group: 0x0101));
+  final c = RigController(
+    transport: FakeTransport(link, seen: [link.device, fakeSliderUnit()]),
+    registry: StopRegistry(),
+    lastRig: store,
+  );
+  await c.startScan();
+  await until(() => c.seen.isNotEmpty);
+  final head = c.seen.firstWhere((s) => s.name == 'HeadONE V2');
+  await c.connect(head, join: c.joinable(head));
+  expect(c.isJoined, isTrue);
+  await c.disconnect(forget: forget);
+  return store;
+}
+
+Future<RigController> reopen(LastRigStore store, List<EdelkroneDevice> Function(FakeHeadLink) units) async {
+  final link = FakeHeadLink(unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101));
+  final c = RigController(
+    transport: FakeTransport(link, seen: units(link)),
+    registry: StopRegistry(),
+    lastRig: store,
+  );
+  await c.startScan();
+  return c;
+}
+
+void main() {
+  test('closing and reopening connects to the joined rig again by itself', () async {
+    final store = await firstRun(forget: false);
+    final c = await reopen(store, joinedUnits);
+    await until(() => c.phase == RigPhase.connected);
+    expect(c.isJoined, isTrue);
+    expect(c.axes, {RigAxis.pan, RigAxis.slide});
+    await c.disconnect();
+  });
+
+  test('after Disconnect it waits to be asked', () async {
+    final store = await firstRun(forget: true);
+    final c = await reopen(store, joinedUnits);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(c.phase, RigPhase.scanning);
+    expect(await store.load(), isNull);
+    await c.stopScan();
+  });
+
+  test('a rig that was joined but has been switched off and on is not joined by itself', () async {
+    final store = await firstRun(forget: false);
+    final c = await reopen(store, (link) => [fakeHeadUnit(), fakeSliderUnit()]);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(c.phase, RigPhase.scanning, reason: 'joining is always the user\'s call');
+    await c.stopScan();
+  });
+
+  test('nothing is picked up while the app is not on screen', () async {
+    final store = await firstRun(forget: false);
+    final link = FakeHeadLink(unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101));
+    final c = RigController(
+      transport: FakeTransport(link, seen: joinedUnits(link)),
+      registry: StopRegistry(),
+      lastRig: store,
+    )..mayResume = () => false;
+    await c.startScan();
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(c.phase, RigPhase.scanning);
+    c.mayResume = () => true;
+    await c.startScan();
+    await until(() => c.phase == RigPhase.connected);
+    await c.disconnect();
+  });
+}
