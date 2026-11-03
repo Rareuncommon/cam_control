@@ -23,8 +23,11 @@ android {
         applicationId = "studio.cambridge.mobile"
         minSdk = 33
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
+        // The Motion tab's Flutter engine is built for 64-bit ARM phones (the
+        // Pixel 9a and every current Android phone).
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     signingConfigs {
@@ -88,8 +91,33 @@ kotlin {
     }
 }
 
+// The Motion tab is the Flutter module in mobile/motion, built into Android
+// libraries first (docs/motion.md):
+//   cd mobile/motion && flutter build aar --no-profile --target-platform android-arm64 --build-number 1
+val motionRepo = rootProject.file("motion/build/host/outputs/repo")
+val motionSources = listOf("lib", "pubspec.yaml", "pubspec.lock").map { rootProject.file("motion/$it") }
+gradle.taskGraph.whenReady {
+    if (allTasks.none { it.project == project }) return@whenReady
+    val built = motionRepo.resolve("studio/cambridge/motion")
+    if (!built.isDirectory) {
+        throw GradleException(
+            "The Motion tab's Flutter module has not been built. Run, from mobile/motion:\n" +
+                "  flutter build aar --no-profile --target-platform android-arm64 --build-number 1\n" +
+                "then build the app again (docs/motion.md).",
+        )
+    }
+    val builtAt = built.walkTopDown().filter { it.isFile }.maxOfOrNull { it.lastModified() } ?: 0L
+    val changedAt = motionSources.flatMap { it.walkTopDown().filter { f -> f.isFile }.toList() }.maxOfOrNull { it.lastModified() } ?: 0L
+    if (changedAt > builtAt) {
+        logger.warn("w: mobile/motion has changed since its libraries were built; this app gets the old Motion tab until `flutter build aar` runs again.")
+    }
+}
+
 dependencies {
     implementation(project(":core"))
+    debugImplementation(libs.motion.debug)
+    releaseImplementation(libs.motion.release)
+    implementation(libs.fragment.ktx)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)

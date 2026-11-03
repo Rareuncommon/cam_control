@@ -53,6 +53,12 @@ class ScreenshotsTest {
 
     @Test fun settings() = shoot("settings") { SettingsScreen(paired, Settings(confirmRecord = true), onChange = {}, onPairAgain = {}, onForget = {}) }
 
+    @Test fun stopBar() = shoot("stop-bar") {
+        WithRigStop(studio.cambridge.mobile.motion.Rig(connected = true, name = "HeadONE V2", moving = true), motionShowing = false, onStop = {}) {
+            CamerasScreen(Samples.studio, emptySet(), confirmRecord = false, send = { _, _ -> })
+        }
+    }
+
     @Test fun chips() = shoot("chips") {
         Column(Modifier.padding(16.dp)) {
             val now = System.currentTimeMillis()

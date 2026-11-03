@@ -27,6 +27,7 @@ import studio.cambridge.mobile.CamBridgeApplication
 import studio.cambridge.mobile.Loaded
 import studio.cambridge.mobile.data.Paired
 import studio.cambridge.mobile.data.Settings
+import studio.cambridge.mobile.motion.Rig
 import java.util.concurrent.ConcurrentHashMap
 
 /** How a command went, for the haptic and the message under it. */
@@ -59,6 +60,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _outcomes = MutableSharedFlow<Outcome>(extraBufferCapacity = 16)
     val outcomes: SharedFlow<Outcome> = _outcomes.asSharedFlow()
+
+    /** The rig, as the Motion module reports it. */
+    val rig: StateFlow<Rig> = graph.motion.rig
+
+    /** STOP ALL for the rig, from a screen other than the Motion tab. */
+    fun stopRig() = graph.motion.stopAll("STOP ALL in the app")
+
+    private val _motionArea = MutableStateFlow<MotionArea?>(null)
+    /** Where the Motion tab is on screen while it is showing; null otherwise. */
+    val motionArea: StateFlow<MotionArea?> = _motionArea.asStateFlow()
+
+    fun showMotion(area: MotionArea?) {
+        _motionArea.value = area
+    }
 
     /** A scanned or opened pairing code waiting for "replace the current pairing?". */
     private val _offer = MutableStateFlow<Pairing?>(null)

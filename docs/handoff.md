@@ -4,6 +4,34 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-11-03 camera motion in the phone app (edelkrone)
+
+The phone app has a **Motion** tab that drives an edelkrone HeadONE and
+SliderPLUS directly over Bluetooth. It is Slidercontrol (`main`, `cea6b83`),
+brought in as a Flutter module (`mobile/motion`) and moved to edelkrone SDK
+0.1.1. Everything is in [motion.md](motion.md).
+
+**Load-bearing decisions:**
+- **A Flutter module inside the Kotlin app,** so the verified Dart port of the
+  SDK comes over as it was, with its vectors, rather than being ported a
+  second time.
+- **The rig stays connected across tabs.** The module's engine lives for the
+  app's life and its view stays attached, hidden. The app owns the stops that
+  hold whichever tab shows: background or hidden, closing, Escape, and a
+  STOP ALL bar on every other screen.
+- **SDK 0.1.1 via Slidercontrol's own generators,** proven first to reproduce
+  the 0.1.0 port byte for byte. The 0.1.1 codecs only add point mode; the
+  behaviour changes in the hand-ported layers follow 0.1.1's code.
+- **The focus gate stays stricter than 0.1.1,** as the safety rules require.
+
+**Open:**
+1. **Not run on the rig.** Take the camera off it first.
+2. **Focus gate on a HeadONE with a focus motor.** 0.1.1 says only a HeadPLUS
+   V3 takes the motor reference, so the strict gate may refuse for as long as
+   the motor is connected. Check on the rig.
+3. **flutter_blue_plus licence:** `nonprofit` is declared; studio use may need
+   the commercial licence (motion.md).
+
 ## 2026-11-03 phone app (Android), Wi-Fi and Bluetooth
 
 An Android app controls the cameras and lights. It uses Wi-Fi first, and
