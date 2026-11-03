@@ -13,6 +13,8 @@
 #include <thread>
 #include <vector>
 
+#include <unistd.h>
+
 #include "camd/api.h"
 #include "camd/config.h"
 #include "camd/http.h"
@@ -24,9 +26,24 @@ namespace {
 
 std::atomic<bool> g_stop{false};
 
+// How long a clean shutdown may take before camd exits anyway. Disconnecting
+// a camera that has gone quiet can block inside the SDK; a launcher waiting on
+// that is what kept CamBridge running after Quit.
+constexpr int kStopDeadlineSeconds = 8;
+
 void onSignal(int sig) {
     (void)sig;
-    g_stop = true;
+    // A second signal while stopping means "now": _Exit is async-signal-safe.
+    if (g_stop.exchange(true)) std::_Exit(0);
+}
+
+/** The launcher that started camd (CAMD_PARENT_PID), or 0 when camd runs on its own. */
+pid_t launcherPid() {
+    const char* v = std::getenv("CAMD_PARENT_PID");
+    if (!v || !*v) return 0;
+    char* end = nullptr;
+    long pid = std::strtol(v, &end, 10);
+    return (end && *end == '\0' && pid > 1 && static_cast<pid_t>(pid) == getppid()) ? static_cast<pid_t>(pid) : 0;
 }
 
 void usage() {
@@ -202,12 +219,24 @@ int main(int argc, char** argv) {
     std::cout << "camd ready on http://" << cfg.bind << ":" << server.port()
               << " (ws " << cfg.wsPath << ")\n";
 
+    // Started by CamBridge's launcher: if it goes (force-quit), go too, rather
+    // than keep the cameras and the port with nobody able to see camd running.
+    const pid_t launcher = launcherPid();
     while (!g_stop) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        if (launcher && getppid() != launcher) {
+            LOG_WARN("camd", "the CamBridge launcher has gone; shutting down");
+            g_stop = true;
+        }
     }
 
     LOG_INFO("camd", "shutting down");
     std::cout << "camd shutting down\n";
+    std::thread([] {
+        std::this_thread::sleep_for(std::chrono::seconds(kStopDeadlineSeconds));
+        LOG_WARN("camd", "still stopping after %d s; exiting anyway", kStopDeadlineSeconds);
+        std::_Exit(0);
+    }).detach();
     server.stop();
     hub.shutdown();
     registry.stop();
