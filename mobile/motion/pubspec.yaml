@@ -1,0 +1,32 @@
+name: cambridge_motion
+description: "Camera motion for the CamBridge app: an edelkrone HeadONE and SliderPLUS over Bluetooth, built on a Dart port of edelkrone's SDK."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_blue_plus: ^2.3.12
+  permission_handler: ^13.0.1
+  shared_preferences: ^2.5.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  # The SDK port and the controller are pure Dart: `dart test` runs them with
+  # no Flutter binding and no hardware.
+  test: ^1.25.0
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Built as an Android library (flutter build aar) and shown inside the
+  # CamBridge app's Motion tab. See docs/motion.md.
+  module:
+    androidX: true
+    androidPackage: studio.cambridge.motion
+    iosBundleIdentifier: studio.cambridge.motion
