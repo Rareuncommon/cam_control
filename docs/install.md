@@ -330,7 +330,8 @@ cd ~/cam_control
 
 That builds **CamBridge.app**. Double-click it and it starts the daemon and the
 server, waits until they are actually answering, and opens the panel in your
-browser. Quitting it stops both. Drag it to the Dock.
+browser. **Quit** in the panel stops both. While it runs it has no Dock icon;
+you can still drag the app to the Dock to start it from there.
 
 The app is a thin wrapper — all the real code stays in `~/cam_control` and the
 app runs whatever is checked out there, so it never goes stale. Re-run

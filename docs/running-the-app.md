@@ -26,7 +26,11 @@ Double-click **CamBridge**. It will:
 2. wait until the daemon is actually answering
 3. open the control panel in your browser
 
-Quitting the app (Cmd-Q, or right-click the Dock icon → Quit) stops both.
+To stop it, use **Quit** at the top of the panel. CamBridge has no Dock icon
+while it runs, so that is the way out. It stops the camera daemon and the web
+server, and the page says *CamBridge has stopped* only once nothing answers any
+more. Nothing is left running: anything that has not stopped within 10 seconds
+is ended, and the log notes what it was waiting on.
 
 If something goes wrong before the browser opens, you get a dialog rather than a
 silent failure, with a button to open `logs/launch.log`.
@@ -337,3 +341,19 @@ Logs live in `logs/`:
 
 `camd.log` and `cambridge.log` are the pair to read together on a Monday
 morning: one is what the cameras did, the other is what was asked of them.
+
+### If CamBridge seems not to quit
+
+After **Quit**, Activity Monitor should show no `CamBridge`, `node` or `camd`
+process. Search for each name: the web server shows as `node`, not as
+CamBridge. Since November 2026 shutdown is bounded:
+- the server gives itself 5 seconds;
+- camd gives itself 8;
+- the launcher ends anything still running after 10.
+
+Force-quitting the `CamBridge` process also stops the other two within a couple
+of seconds. If something is still there after that, `launch.log` and
+`cambridge.log` say which step it was stuck on ("still stopping after 5 s (at:
+…)"). Older copies of CamBridge could wait forever on an open browser connection
+or a camera that would not disconnect: update and rebuild the app (`git pull`,
+then `./scripts/make-app.sh /Applications`).
