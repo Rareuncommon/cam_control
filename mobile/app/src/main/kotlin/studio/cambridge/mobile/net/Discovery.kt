@@ -52,7 +52,9 @@ class Discovery(context: Context) {
     fun stop() {
         listener?.let { runCatching { nsd.stopServiceDiscovery(it) } }
         listener = null
-        callbacks.forEach { runCatching { nsd.unregisterServiceInfoCallback(it) } }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            callbacks.forEach { runCatching { nsd.unregisterServiceInfoCallback(it) } }
+        }
         callbacks.clear()
     }
 

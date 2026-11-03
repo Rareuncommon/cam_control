@@ -40,6 +40,10 @@ android {
     }
 
     buildTypes {
+        // A debug build installs beside a signed release instead of clashing with it.
+        debug {
+            applicationIdSuffix = ".debug"
+        }
         release {
             // R8 drops what the app does not use; the app has no reflection-based
             // serialization (it reads JSON as trees), so no keep rules are needed.

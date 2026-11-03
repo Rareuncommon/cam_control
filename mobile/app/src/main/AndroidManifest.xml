@@ -11,8 +11,7 @@
     <!-- Bluetooth: the fallback through the Mac's bridge. The scan only looks for
          the CamBridge service, never for location. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="s" />
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- Pairing: scanning the QR code in CamBridge Setup. -->
@@ -33,7 +32,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="unspecified"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
