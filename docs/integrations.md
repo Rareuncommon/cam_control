@@ -11,6 +11,7 @@ until switched on, and none of them is required.
 | VISCA | `config/cambridge.json` | **yes** |
 | SKAARHOJ panel (PTZ) | Setup, or `config/cambridge.json` — see [skaarhoj.md](skaarhoj.md) | **yes** |
 | Gamepad | in the browser | no |
+| Phone app (Android), Wi-Fi and Bluetooth | Setup › Phones, and `blebridge` on the Mac — see [mobile-app.md](mobile-app.md) | no (a phone) |
 
 PTZ cameras themselves are covered in [ptz.md](ptz.md).
 

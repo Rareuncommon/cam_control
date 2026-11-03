@@ -4,6 +4,49 @@ Written to be pasted into another assistant, or read by a person picking this up
 cold. It is the state of the project, the decisions that are load-bearing, and
 what is genuinely unknown — not a feature list.
 
+## 2026-11-03 phone app (Android), Wi-Fi and Bluetooth
+
+An Android app controls the cameras and lights. It uses Wi-Fi first, and
+falls back to Bluetooth LE through a small bridge on the Mac. Everything is
+in [mobile-app.md](mobile-app.md), and the Bluetooth protocol is in
+[ble-protocol.md](ble-protocol.md).
+
+**Where it lives:**
+- `mobile/` (Kotlin, Compose; `:core` is plain Kotlin);
+- `blebridge/` (Swift, launchd);
+- `cambridge/src/devices.js`, `cambridge/src/ble/`, `public/phones.js`;
+- `scripts/mock-studio.mjs`;
+- `protocol/vectors/v1.json`.
+
+**Load-bearing decisions:**
+- **No new API.** The phone sends the REST calls the panel already uses and
+  reads the same event stream. Over Bluetooth the same requests run in-process
+  through the same router, as that phone.
+- **A key per phone, from a QR.** Every Wi-Fi request is HMAC-signed. Over
+  Bluetooth, both sides prove the key, then everything is sealed with
+  AES-GCM. Revoking a phone ends its stream and its Bluetooth session at once.
+  On the phone the key is a non-exportable Android Keystore HMAC key, so it is
+  only ever used as an HMAC key: session keys come from HKDF with the key as
+  the salt.
+- **The bridge is a pipe.** All checks happen in CamBridge, which owns the
+  Unix socket.
+- **One set of test vectors** is checked by both the Node and Kotlin tests.
+
+**Verified (in tests, not on hardware):**
+- the app's Wi-Fi path and its Bluetooth session, each against the real server
+  with simulated cameras;
+- the protocol, byte for byte, between Node and Kotlin;
+- hold-to-save and confirm-before-record;
+- the QR as drawn by CamBridge, decoded by the app.
+
+**Open:**
+1. **Not yet run on a phone or with the real bridge.** The Swift bridge has not
+   been compiled here (there is no Mac). The app has not been on the Pixel 9a.
+2. **No PIN in the studio,** by choice. The Wi-Fi API stays open to unsigned
+   clients on the network; phones are protected either way.
+3. **Nothing has been sent to the real cameras or lights from the app.** Do
+   that with someone in the studio watching.
+
 ## 2026-11-02 studio lighting
 
 CamBridge now drives the studio lights: five Ikan Lyra LBX8-POE panels,
