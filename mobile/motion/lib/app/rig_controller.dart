@@ -105,9 +105,18 @@ class RigController {
     _notify();
   }
 
+  /// Where each rig (by its leader's MAC) first appeared in the list. The
+  /// list keeps that order, so entries do not swap places under a finger as
+  /// their signal strengths cross.
+  final Map<String, int> _listed = {};
+
   void _onSeen(List<EdelkroneDevice> units) {
     _rigs = groupIntoRigs([...units]..sort((a, b) => b.rssi.compareTo(a.rssi)));
-    seen = [for (final r in _rigs) seenOf(r)];
+    final found = [for (final r in _rigs) seenOf(r)];
+    for (final s in found) {
+      _listed.putIfAbsent(normaliseMac(s.mac), () => _listed.length);
+    }
+    seen = found..sort((a, b) => _listed[normaliseMac(a.mac)]!.compareTo(_listed[normaliseMac(b.mac)]!));
     _notify();
   }
 
@@ -119,6 +128,52 @@ class RigController {
       target.rig.master,
       _rigs,
     ).where((u) => u.advData.setup == EdlSetup.NONE || u.advData.setup == EdlSetup.SLIDE_ONLY).toList();
+  }
+
+  /// True when [target]'s leader can lead a layout of more than one unit
+  /// (a head can; a slider on its own cannot).
+  bool canLead(Seen target) => target.rig.master.model.deviceSetups.any((d) => d.devices.length > 1);
+
+  /// Why the other units in sight are not offered to join [target], one
+  /// line each, from what they advertise and the SDK's own layout table.
+  /// Shown on the scan page so a refusal is visible rather than silent; it
+  /// changes nothing about what joins.
+  List<String> joinRefusals(Seen target) {
+    final leader = target.rig.master;
+    final setup = leader.advData.setup;
+    if (EdelkroneSession.isMultiModule(setup)) {
+      return target.modules.isNotEmpty
+          ? const []
+          : [
+              'The ${leader.displayName} already advertises a layout (${setup.name}) whose modules are not '
+                  'in sight. Switch both units off and on to clear it.',
+            ];
+    }
+    final out = <String>[];
+    for (final r in _rigs) {
+      for (final u in r.devices) {
+        if (u == leader) continue;
+        final rig = rigFromSelection([leader, u]);
+        final adv = u.advData.setup;
+        if (rig == null) {
+          out.add(
+            'The SDK has no layout for a ${leader.displayName}${leader.isTilted ? ' (tilted)' : ''} with a '
+            '${u.displayName}.',
+          );
+        } else if (rig.master != leader) {
+          out.add(
+            'The SDK would make the ${u.displayName} the leader, not the ${leader.displayName} '
+            '(the ${u.displayName} advertises ${adv.name}).',
+          );
+        } else if (adv != EdlSetup.NONE && adv != EdlSetup.SLIDE_ONLY) {
+          out.add(
+            'The ${u.displayName} advertises ${adv.name}, so it is already in a layout. Switch it off and '
+            'on to free it.',
+          );
+        }
+      }
+    }
+    return out;
   }
 
   // -- connecting ------------------------------------------------------------------

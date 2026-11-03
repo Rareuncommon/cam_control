@@ -196,9 +196,8 @@ class _StatusStrip extends StatelessWidget {
     final s = c.status;
     final info = d?.info;
     final layout = s?.layout;
+    final title = [if (info != null) info.name, ...c.modules].join(' + ');
     final parts = <String>[
-      if (info != null) info.name,
-      if (c.modules.isNotEmpty) '+ ${c.modules.join(', ')}',
       if (layout != null && layout != EdlSetup.NONE) layout.name.toLowerCase().replaceAll('_', ' '),
       if (s?.batteryPercent != null) 'battery ${s!.batteryPercent!.round()}%',
       if (c.looping) 'looping' else if (c.moving) 'moving' else if (s?.isMoving == true) 'moving' else 'idle',
@@ -211,7 +210,7 @@ class _StatusStrip extends StatelessWidget {
     ];
     return Container(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-      padding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
+      padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
       child: Row(
         children: [
           Icon(
@@ -225,7 +224,16 @@ class _StatusStrip extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(parts.join(' · '), style: theme.textTheme.bodySmall, overflow: TextOverflow.ellipsis),
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  parts.join(' · '),
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  overflow: TextOverflow.ellipsis,
+                ),
                 if (warnings.isNotEmpty)
                   Text(
                     warnings.join(' · '),
@@ -537,6 +545,15 @@ String _describe(RigPose? p) {
   ].join(' · ');
 }
 
+/// A pose's axes one per line, so a value never breaks across lines.
+List<String> _axisLines(RigPose? p) {
+  if (p == null) return const ['position not read'];
+  return [
+    for (final a in [RigAxis.pan, RigAxis.tilt, RigAxis.slide])
+      if (p[a] != null) '${a.label} ${a.format(p[a]!)}',
+  ];
+}
+
 const _gridGap = 6.0;
 
 /// The pose tiles' shape: the column count (from 3 to 6, [prefer] on a tie)
@@ -630,16 +647,16 @@ class _PoseTile extends StatelessWidget {
                       style: TextStyle(color: fg, fontSize: 11),
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 110),
-                    child: Text(
-                      _describe(pose),
-                      style: TextStyle(color: fg.withValues(alpha: 0.8), fontSize: 9),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
+                  for (final line in _axisLines(pose))
+                    Text(
+                      line,
+                      style: TextStyle(
+                        color: fg.withValues(alpha: 0.75),
+                        fontSize: 9,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                      softWrap: false,
                     ),
-                  ),
                 ] else ...[
                   Icon(isGap ? Icons.warning_amber : Icons.add, color: isGap ? scheme.error : fg),
                   Text('save as ${slot + 1}', style: TextStyle(color: fg, fontSize: 11)),
@@ -660,12 +677,39 @@ class _Style extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     Widget bar(String label, double value, double min, ValueChanged<double> on, String shown) => Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('$label · $shown', style: Theme.of(context).textTheme.labelSmall),
-          Slider(value: value, min: min, max: 1, onChanged: on),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    label,
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    overflow: TextOverflow.fade,
+                    softWrap: false,
+                  ),
+                ),
+                Text(
+                  shown,
+                  style: theme.textTheme.labelMedium?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+                ),
+              ],
+            ),
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 4,
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
+            ),
+            child: Slider(value: value, min: min, max: 1, onChanged: on),
+          ),
         ],
       ),
     );
@@ -680,7 +724,7 @@ class _Style extends StatelessWidget {
           bar('ACCEL', c.acceleration, 0.0, (v) {
             c.acceleration = v;
             c.clearError();
-          }, '${(c.acceleration * 100).round()}% of the move'),
+          }, '${(c.acceleration * 100).round()}%'),
           bar('JOG', c.jogSpeed, 0.05, (v) {
             c.jogSpeed = v;
             c.clearError();

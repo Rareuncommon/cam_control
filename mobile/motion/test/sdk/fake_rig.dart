@@ -317,6 +317,9 @@ class FakeTransport implements Transport {
   @override
   Future<void> startScan() async => _devices.add(seen);
 
+  /// A later scan result, as the radio reports one.
+  void emit(List<EdelkroneDevice> units) => _devices.add(units);
+
   @override
   Future<void> stopScan() async {}
 
