@@ -65,10 +65,15 @@ These rules come from Slidercontrol and are kept as they were:
 Open **Motion**, then:
 
 1. **Scan.** The app asks for "Nearby devices" if it does not have it, finds
-   the edelkrone units, and groups them into rigs the way the SDK does,
-   strongest signal first.
-2. **Pair the head and slider.** Tap the HeadONE, tick the slider, and press
-   Connect. This forms a wireless layout:
+   the edelkrone units, and groups them into rigs the way the SDK does. The
+   list keeps the order units were first found in, so entries don't swap
+   places as their signals change. Signal shows as bars; long-press for dBm.
+2. **Pair the head and slider.** A head and a slider it can join show first,
+   as one **Rig** card. Press **Connect head + slider**, then **Join and
+   connect**. (**HeadONE only**, or tapping a unit in the list below, connects
+   it on its own.) If a head and slider are in sight but the SDK won't join
+   them, the head's card says why, from what the units advertise. Send that
+   line if you see it. Joining forms a wireless layout:
    - the head keeps its group;
    - it takes the layout configuration;
    - it invites the slider by MAC address;

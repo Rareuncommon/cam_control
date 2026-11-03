@@ -1,5 +1,6 @@
 /// Finds the rig: edelkrone units grouped into rigs as the SDK groups them,
-/// strongest signal first, and the sheet that joins the slider to the head.
+/// in the order they were first found, and the sheet that joins the slider
+/// to the head.
 ///
 /// From Slidercontrol (lib/main.dart at cea6b83), moved into its own file
 /// when the app became the CamBridge app's Motion tab.
@@ -59,7 +60,7 @@ class _ScanPageState extends State<ScanPage> {
     await c.startScan();
   }
 
-  Future<void> _choose(Seen s) async {
+  Future<void> _choose(Seen s, {bool joinAll = true}) async {
     if (!s.drivable) {
       _snack('${s.name} is not something this app drives — it controls heads and sliders.');
       return;
@@ -69,12 +70,13 @@ class _ScanPageState extends State<ScanPage> {
       return;
     }
     final offer = c.joinable(s);
-    var join = <EdelkroneDevice>[...offer];
+    var join = <EdelkroneDevice>[if (joinAll) ...offer];
     final go = await showModalBottomSheet<bool>(
       context: context,
+      isScrollControlled: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setSheet) => SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: Insets.page,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -107,7 +109,10 @@ class _ScanPageState extends State<ScanPage> {
                   children: [
                     TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
                     Gap.wSm,
-                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Connect')),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: Text(join.isEmpty ? 'Connect' : 'Join and connect'),
+                    ),
                   ],
                 ),
               ],
@@ -126,6 +131,17 @@ class _ScanPageState extends State<ScanPage> {
     final theme = Theme.of(context);
     final scanning = c.phase == RigPhase.scanning;
     final connecting = c.phase == RigPhase.connecting;
+    // A head with a slider it can join comes first, as one rig with one
+    // button: driving both together is what this tab is for.
+    final pairs = [
+      for (final s in c.seen)
+        if (s.drivable && s.recognised && c.joinable(s).isNotEmpty) s,
+    ];
+    final refusals = <Seen, List<String>>{
+      if (pairs.isEmpty)
+        for (final s in c.seen)
+          if (s.drivable && c.canLead(s) && c.joinRefusals(s).isNotEmpty) s: c.joinRefusals(s),
+    };
     return Scaffold(
       appBar: AppBar(
         title: const Text('Camera motion'),
@@ -136,6 +152,10 @@ class _ScanPageState extends State<ScanPage> {
             onPressed: connecting ? null : () => scanning ? c.stopScan() : _scan(),
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(2),
+          child: scanning || connecting ? const LinearProgressIndicator(minHeight: 2) : const SizedBox(height: 2),
+        ),
       ),
       body: ListView(
         padding: Insets.page,
@@ -151,10 +171,10 @@ class _ScanPageState extends State<ScanPage> {
             ),
           if (c.seen.isEmpty && !connecting)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 32),
+              padding: const EdgeInsets.symmetric(vertical: 48),
               child: Column(
                 children: [
-                  if (scanning) const CircularProgressIndicator(),
+                  Icon(Icons.bluetooth_searching, size: 48, color: theme.colorScheme.onSurfaceVariant),
                   Gap.md,
                   Text(
                     scanning ? 'Looking for edelkrone units…' : 'Nothing found yet.',
@@ -169,25 +189,28 @@ class _ScanPageState extends State<ScanPage> {
                 ],
               ),
             ),
-          for (final s in c.seen)
-            Card(
-              child: ListTile(
-                enabled: !connecting,
-                leading: Icon(s.modules.isNotEmpty || c.joinable(s).isNotEmpty ? Icons.videocam : Icons.linear_scale),
-                title: Text(s.name),
-                subtitle: Text(
-                  [
-                    s.mac,
-                    _layoutLabel(s.layout),
-                    if (s.modules.isNotEmpty) 'with ${s.modules.join(', ')}',
-                    if (!s.drivable) 'not driven by this app',
-                    if (s.layout == EdlSetup.GROUP_MEMBER) 'module of a layout — connect to its head',
-                  ].join(' · '),
-                ),
-                trailing: Text('${s.signal} dBm', style: theme.textTheme.bodySmall),
-                onTap: connecting ? null : () => _choose(s),
-              ),
+          for (final s in pairs)
+            _PairCard(
+              leader: s,
+              modules: c.joinable(s),
+              enabled: !connecting,
+              onBoth: () => _choose(s),
+              onLeaderOnly: () => _choose(s, joinAll: false),
             ),
+          if (c.seen.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
+              child: Text(pairs.isEmpty ? 'UNITS IN RANGE' : 'EACH UNIT ON ITS OWN', style: theme.textTheme.labelSmall),
+            ),
+            for (final s in c.seen)
+              _UnitCard(
+                s: s,
+                head: s.modules.isNotEmpty || c.canLead(s),
+                refusals: refusals[s] ?? const [],
+                enabled: !connecting,
+                onTap: () => _choose(s, joinAll: false),
+              ),
+          ],
           Gap.lg,
           const Caution(
             'Take the camera off the rig the first time you try anything that moves. The app stops '
@@ -195,6 +218,191 @@ class _ScanPageState extends State<ScanPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A head and the slider it can join, as one rig.
+class _PairCard extends StatelessWidget {
+  const _PairCard({
+    required this.leader,
+    required this.modules,
+    required this.enabled,
+    required this.onBoth,
+    required this.onLeaderOnly,
+  });
+
+  final Seen leader;
+  final List<EdelkroneDevice> modules;
+  final bool enabled;
+  final VoidCallback onBoth;
+  final VoidCallback onLeaderOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: scheme.primary.withValues(alpha: 0.6)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('RIG', style: theme.textTheme.labelSmall?.copyWith(color: scheme.primary)),
+            Gap.xs,
+            Text(
+              [leader.name, ...modules.map((m) => m.displayName)].join(' + '),
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            Gap.sm,
+            _UnitLine(icon: Icons.videocam, name: leader.name, mac: leader.mac, rssi: leader.signal),
+            for (final m in modules) _UnitLine(icon: Icons.linear_scale, name: m.displayName, mac: m.mac, rssi: m.rssi),
+            Gap.md,
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                onPressed: enabled ? onBoth : null,
+                icon: const Icon(Icons.link),
+                label: Text(modules.length == 1 ? 'Connect head + slider' : 'Connect all together'),
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(onPressed: enabled ? onLeaderOnly : null, child: Text('${leader.name} only')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UnitLine extends StatelessWidget {
+  const _UnitLine({required this.icon, required this.name, required this.mac, required this.rssi});
+  final IconData icon;
+  final String name;
+  final String mac;
+  final int rssi;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: theme.colorScheme.onSurfaceVariant),
+          Gap.wSm,
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: name),
+                  TextSpan(
+                    text: '  $mac',
+                    style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+              style: theme.textTheme.bodySmall,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SignalBars(rssi),
+        ],
+      ),
+    );
+  }
+}
+
+/// One unit as the radio sees it, and, for a head that cannot take the
+/// slider in sight, why not.
+class _UnitCard extends StatelessWidget {
+  const _UnitCard({
+    required this.s,
+    required this.head,
+    required this.refusals,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final Seen s;
+  final bool head;
+  final List<String> refusals;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final details = [
+      _layoutLabel(s.layout),
+      if (s.modules.isNotEmpty) 'with ${s.modules.join(', ')}',
+      if (!s.drivable) 'not driven by this app',
+      if (s.layout == EdlSetup.GROUP_MEMBER) 'module of a layout — connect to its head',
+    ].join(' · ');
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    head ? Icons.videocam : Icons.linear_scale,
+                    color: s.drivable ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  Gap.wMd,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(s.name, style: theme.textTheme.titleSmall),
+                        Text(
+                          '${s.mac} · $details',
+                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SignalBars(s.signal),
+                ],
+              ),
+              if (refusals.isNotEmpty) ...[Gap.sm, for (final r in refusals) Caution('Cannot join: $r')],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Signal strength as bars, with the figure on long press: a number that
+/// changes every scan is hard to read and draws the eye.
+class SignalBars extends StatelessWidget {
+  const SignalBars(this.rssi, {super.key});
+  final int rssi;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = rssi >= -65
+        ? Icons.signal_cellular_alt
+        : rssi >= -80
+        ? Icons.signal_cellular_alt_2_bar
+        : Icons.signal_cellular_alt_1_bar;
+    return Tooltip(
+      message: '$rssi dBm',
+      child: Icon(icon, size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
     );
   }
 }
