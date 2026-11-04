@@ -89,6 +89,11 @@ Open **Motion**, then:
    it was left in: joined if it was joined, on its own if it was on its own.
    It does this only while the app is on screen, and it never joins anything
    by itself (a join lasts until power-off, so that is always your call).
+   What a unit advertises can be out of date, so before picking a joined rig
+   up, the app connects to the head alone, reads the layout the head itself
+   reports, sends it a stop and lets go. It reconnects the rig only if the
+   head still holds the layout; otherwise it says so and leaves the rig for
+   you to connect.
    Connecting moves nothing. Pressing **Disconnect** makes the app forget the
    rig, so it won't reconnect until you connect it again.
 3. **Control page.** One screen, no scrolling, upright or on its side:

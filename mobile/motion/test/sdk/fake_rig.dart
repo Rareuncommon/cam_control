@@ -95,7 +95,7 @@ class FakeHeadLink implements DeviceLink {
   final _changes = StreamController<bool>.broadcast();
   final _rx = {for (final c in Channel.values) c: StreamController<List<int>>.broadcast()};
   bool _up = true;
-  late final Timer _physics;
+  late Timer _physics;
   final _clock = Stopwatch()..start();
 
   EdlSetup _configuration;
@@ -289,6 +289,15 @@ class FakeHeadLink implements DeviceLink {
   @override
   Future<void> requestLowLatency() async {}
 
+  /// Up again, as a fresh connection to the same unit is: what the layout,
+  /// poses and position were, they still are.
+  void reconnect() {
+    if (_up) return;
+    _up = true;
+    _physics = Timer.periodic(const Duration(milliseconds: 10), (_) => _step());
+    if (!_changes.isClosed) _changes.add(true);
+  }
+
   @override
   Future<void> disconnect() async {
     _physics.cancel();
@@ -327,7 +336,7 @@ class FakeTransport implements Transport {
   void clearDevices() {}
 
   @override
-  Future<DeviceLink> connect(EdelkroneDevice device) async => link;
+  Future<DeviceLink> connect(EdelkroneDevice device) async => link..reconnect();
 
   @override
   Future<void> dispose() async => link.disconnect();

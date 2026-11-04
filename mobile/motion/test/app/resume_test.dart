@@ -47,8 +47,19 @@ Future<LastRigStore> firstRun({required bool forget}) async {
   return store;
 }
 
-Future<RigController> reopen(LastRigStore store, List<EdelkroneDevice> Function(FakeHeadLink) units) async {
-  final link = FakeHeadLink(unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101));
+/// Reopening, with the head still holding the layout unless [holds] is false
+/// (switched off and on after it advertised).
+Future<RigController> reopen(
+  LastRigStore store,
+  List<EdelkroneDevice> Function(FakeHeadLink) units, {
+  bool holds = true,
+  void Function(FakeHeadLink)? onLink,
+}) async {
+  final link = FakeHeadLink(
+    unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101),
+    configuration: holds ? EdlSetup.PAN_AND_SLIDE : EdlSetup.NONE,
+  );
+  onLink?.call(link);
   final c = RigController(
     transport: FakeTransport(link, seen: units(link)),
     registry: StopRegistry(),
@@ -62,10 +73,27 @@ void main() {
   test('closing and reopening connects to the joined rig again by itself', () async {
     final store = await firstRun(forget: false);
     final c = await reopen(store, joinedUnits);
-    await until(() => c.phase == RigPhase.connected);
+    await until(() => c.phase == RigPhase.connected, timeout: const Duration(seconds: 20));
     expect(c.isJoined, isTrue);
     expect(c.axes, {RigAxis.pan, RigAxis.slide});
     await c.disconnect();
+  });
+
+  test('a stale "joined" advertisement is not picked up, and nothing is joined', () async {
+    final store = await firstRun(forget: false);
+    late FakeHeadLink link;
+    final c = await reopen(store, joinedUnits, holds: false, onLink: (l) => link = l);
+    await until(() => c.error != null, timeout: const Duration(seconds: 10));
+    expect(c.error, contains('no longer holds its layout'));
+    expect(c.phase, isNot(RigPhase.connected));
+    expect(link.configuration, EdlSetup.NONE, reason: 'the layout was not formed again');
+    expect(link.sent.where((p) => p.op == 201), isEmpty, reason: 'no configurationSet was sent');
+    expect(
+      link.sent.any((p) => p.op == 9 || p.op == 20),
+      isTrue,
+      reason: 'the head was sent a stop before it was let go',
+    );
+    await c.stopScan();
   });
 
   test('after Disconnect it waits to be asked', () async {
@@ -87,7 +115,10 @@ void main() {
 
   test('nothing is picked up while the app is not on screen', () async {
     final store = await firstRun(forget: false);
-    final link = FakeHeadLink(unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101));
+    final link = FakeHeadLink(
+      unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101),
+      configuration: EdlSetup.PAN_AND_SLIDE,
+    );
     final c = RigController(
       transport: FakeTransport(link, seen: joinedUnits(link)),
       registry: StopRegistry(),

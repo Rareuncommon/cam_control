@@ -162,7 +162,7 @@ class RigController {
       if (normaliseMac(s.mac) != normaliseMac(r.mac) || !s.drivable || !s.recognised) continue;
       if (r.joined != s.modules.isNotEmpty) return;
       _resume = null;
-      unawaited(connect(s));
+      unawaited(r.joined ? _resumeJoined(s) : connect(s));
       return;
     }
   }
@@ -272,6 +272,48 @@ class RigController {
       error = e is EdelkroneError ? e.message : '$e';
       _notify();
     }
+  }
+
+  /// Picks a joined rig up again only if the head itself still holds the
+  /// layout. What a unit advertises can be stale (switched off and on since
+  /// the scan), and the SDK's connect re-forms a layout the head no longer
+  /// reports, which is a join. So the head is first connected on its own,
+  /// without its modules, which never joins anything; the layout it reports
+  /// is read; it is sent a stop and let go. Only if it still holds a layout
+  /// is the rig connected as it was. (Found in review, PR #11.)
+  Future<void> _resumeJoined(Seen s) async {
+    await stopScan();
+    phase = RigPhase.connecting;
+    _notify();
+    var holds = false;
+    try {
+      final head = Rig(master: s.rig.master, slaves: const [], setup: s.rig.master.advData.setup, resolved: null);
+      final probe = await sdk.connect(transport, head, seenRigs: _rigs);
+      final layout = probe.layout;
+      holds = layout != null && EdelkroneSession.isMultiModule(layout);
+      try {
+        await probe.move.stop(settle: 0);
+      } catch (_) {}
+      try {
+        await probe.disconnect();
+      } catch (_) {}
+    } catch (e) {
+      phase = RigPhase.idle;
+      error = e is EdelkroneError ? e.message : '$e';
+      _notify();
+      return;
+    }
+    if (!holds) {
+      phase = RigPhase.idle;
+      await startScan();
+      error =
+          '${s.name} no longer holds its layout (it was switched off and on), so it was not picked up again by '
+          'itself: that would join the units again. Connect it from the list.';
+      _notify();
+      return;
+    }
+    phase = RigPhase.idle;
+    await connect(s);
   }
 
   /// Connects again to the rig that was lost. A layout survives while its
