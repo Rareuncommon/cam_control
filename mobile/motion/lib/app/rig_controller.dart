@@ -336,7 +336,17 @@ class RigController {
     }
     // Closed, sent to the background or disconnected while the head was
     // being checked: the pick-up is cancelled. (Found in review, PR #11.)
-    if (mine != _session || !mayResume()) return;
+    if (mine != _session || !mayResume()) {
+      // Abandoned (sent to the background, or closed): not left showing
+      // "Connecting…", and tried again when the app is back on screen.
+      // (Found in review, PR #11.)
+      if (mine == _session) {
+        _resume ??= (mac: s.rig.master.mac, joined: true);
+        phase = RigPhase.idle;
+        _notify();
+      }
+      return;
+    }
     phase = RigPhase.idle;
     await connect(s);
   }

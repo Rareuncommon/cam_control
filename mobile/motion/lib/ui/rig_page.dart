@@ -156,6 +156,7 @@ class _RigPageState extends State<RigPage> {
           height: MediaQuery.of(context).size.height * 0.7,
           child: Column(
             children: [
+              SheetStop(onStop: c.stopAll),
               ListTile(
                 title: const Text('SDK log'),
                 subtitle: const Text('What the SDK port did and decided. Paste it when something misbehaves.'),
@@ -476,6 +477,7 @@ class _PoseGrid extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            SheetStop(onStop: c.stopAll),
             ListTile(title: Text(c.names[slot] ?? 'Pose ${slot + 1}'), subtitle: Text(_describe(c.poses[slot]))),
             ListTile(
               leading: const Icon(Icons.edit),
@@ -531,6 +533,32 @@ class _PoseGrid extends StatelessWidget {
       ),
     );
   }
+}
+
+/// STOP ALL at the top of every sheet on this page: a sheet covers the
+/// page's own STOP ALL, and something may be moving while it is open.
+/// Stops everything, then closes the sheet. (Found in review, PR #11.)
+class SheetStop extends StatelessWidget {
+  const SheetStop({super.key, required this.onStop});
+  final Future<void> Function() onStop;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: FilledButton.icon(
+      style: FilledButton.styleFrom(
+        backgroundColor: StudioColours.stop,
+        foregroundColor: StudioColours.text,
+        minimumSize: const Size.fromHeight(48),
+      ),
+      onPressed: () {
+        unawaited(onStop());
+        Navigator.of(context).pop();
+      },
+      icon: const Icon(Icons.stop_circle),
+      label: const Text('STOP ALL', style: TextStyle(fontWeight: FontWeight.w700)),
+    ),
+  );
 }
 
 /// Motion is refused: a focus motor is fitted and the head does not yet know
@@ -686,6 +714,7 @@ class _Style extends StatelessWidget {
         children: [
           Expanded(
             child: _StyleTile(
+              onStop: c.stopAll,
               label: 'SPEED',
               help: 'How fast pose moves and loops run, as a share of the rig\'s top speed.',
               value: c.speed,
@@ -699,6 +728,7 @@ class _Style extends StatelessWidget {
           Gap.wSm,
           Expanded(
             child: _StyleTile(
+              onStop: c.stopAll,
               label: 'ACCEL',
               help: 'How much of each move is spent speeding up and slowing down. Higher is gentler.',
               value: c.acceleration,
@@ -712,6 +742,7 @@ class _Style extends StatelessWidget {
           Gap.wSm,
           Expanded(
             child: _StyleTile(
+              onStop: c.stopAll,
               label: 'JOG',
               help: 'The top speed of the jog pads, at full deflection.',
               value: c.jogSpeed,
@@ -730,6 +761,7 @@ class _Style extends StatelessWidget {
 
 class _StyleTile extends StatelessWidget {
   const _StyleTile({
+    required this.onStop,
     required this.label,
     required this.help,
     required this.value,
@@ -742,6 +774,7 @@ class _StyleTile extends StatelessWidget {
   final double value;
   final double min;
   final ValueChanged<double> onChanged;
+  final Future<void> Function() onStop;
 
   static String _percent(double v) => '${(v * 100).round()}%';
 
@@ -817,6 +850,7 @@ class _StyleTile extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  SheetStop(onStop: onStop),
                   Row(
                     children: [
                       Expanded(child: Text(label, style: theme.textTheme.titleMedium)),
@@ -922,6 +956,7 @@ class _Actions extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                SheetStop(onStop: c.stopAll),
                 Text('Loop', style: Theme.of(context).textTheme.titleLarge),
                 Gap.sm,
                 Row(

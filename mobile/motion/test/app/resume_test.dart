@@ -113,6 +113,24 @@ void main() {
     await c.disconnect();
   });
 
+  test('going to the background during the head check is not left "Connecting…", and picks up on return', () async {
+    final store = await firstRun(forget: false);
+    var onScreen = true;
+    late FakeHeadLink link;
+    final c = await reopen(store, joinedUnits, onLink: (l) => link = l, latency: const Duration(milliseconds: 80));
+    c.mayResume = () => onScreen;
+    await until(() => c.phase == RigPhase.connecting);
+    onScreen = false; // backgrounded: only stops are sent, no disconnect
+    await until(() => c.phase != RigPhase.connecting, timeout: const Duration(seconds: 10));
+    expect(c.phase, RigPhase.idle);
+    expect(link.isConnected, isFalse, reason: 'the head checked was let go');
+
+    onScreen = true;
+    await c.startScan(); // what the app does on coming back
+    await until(() => c.phase == RigPhase.connected, timeout: const Duration(seconds: 20));
+    await c.disconnect();
+  });
+
   test('Disconnect while connecting leaves the rig alone', () async {
     final link = FakeHeadLink(unit: fakeHeadUnit(), latency: const Duration(milliseconds: 80));
     final c = RigController(
