@@ -65,6 +65,14 @@ class HostLink {
         // to the app to show.
         EdelkroneLog.info(() => 'stop all from the CamBridge app (${call.arguments ?? 'no reason given'})');
         return registry.stopAll();
+      case 'stopAndConfirm':
+        // Before the app is replaced (an update): STOP ALL, then the rig's own
+        // confirmation that it is still. Every problem goes back to the app,
+        // which installs nothing unless the list is empty.
+        EdelkroneLog.info(() => 'stop and confirm from the CamBridge app (${call.arguments ?? 'no reason given'})');
+        final failures = await registry.stopAll();
+        final unconfirmed = await controller.confirmStopped();
+        return [...failures, ?unconfirmed];
       case 'disconnect':
         // The app is closing: stop (RigController.disconnect stops first),
         // then let the units go, rather than hold the link with no screen.

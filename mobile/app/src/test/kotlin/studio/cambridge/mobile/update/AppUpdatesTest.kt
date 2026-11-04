@@ -50,17 +50,17 @@ class AppUpdatesTest {
     }
 
     @Test fun `the install waits until the module confirms the stop, then the release, on the main thread`() {
-        val module = Module(mapOf("stopAll" to emptyList<String>(), "disconnect" to null))
+        val module = Module(mapOf("stopAndConfirm" to emptyList<String>(), "disconnect" to null))
         val outcome = fromBackground { confirmStopAndRelease(module.invoke, "installing an app update", 5_000) }
         assertNull(outcome)
-        assertEquals(listOf("stopAll" to true, "disconnect" to true), module.calls, "stop first, then let go, both on the main thread")
+        assertEquals(listOf("stopAndConfirm" to true, "disconnect" to true), module.calls, "stop first, then let go, both on the main thread")
     }
 
-    @Test fun `a stop that reports failures is not confirmed, and the rig is not let go`() {
-        val module = Module(mapOf("stopAll" to listOf("head: the link dropped"), "disconnect" to null))
+    @Test fun `a stop the rig does not confirm (a lost link) is not confirmed, and the rig is not let go`() {
+        val module = Module(mapOf("stopAndConfirm" to listOf("the link to the rig is lost"), "disconnect" to null))
         val outcome = fromBackground { confirmStopAndRelease(module.invoke, "installing an app update", 5_000) }
-        assertEquals("STOP ALL reported: head: the link dropped", outcome)
-        assertEquals(listOf("stopAll"), module.calls.map { it.first })
+        assertEquals("STOP ALL reported: the link to the rig is lost", outcome)
+        assertEquals(listOf("stopAndConfirm"), module.calls.map { it.first })
     }
 
     @Test fun `no answer from the module is not a confirmation`() {

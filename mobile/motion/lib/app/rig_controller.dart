@@ -617,6 +617,27 @@ class RigController {
   /// already inside the SDK is cancelled there.
   int _stops = 0;
 
+  /// After a stop, whether the rig itself confirms it is still, for when the
+  /// app is about to be replaced (an update). The SDK's stop never throws and
+  /// so cannot report a stop it failed to deliver; this reads what the rig
+  /// reports instead. (Found in review, PR #12.)
+  /// @return why it is not confirmed, or null when it is (or nothing is connected)
+  Future<String?> confirmStopped({double within = 5.0}) async {
+    if (phase == RigPhase.lost) {
+      return 'the link to the rig is lost, so it cannot confirm it stopped; a move in progress carries on to its end';
+    }
+    final d = device;
+    if (d == null || phase != RigPhase.connected) return null;
+    bool idle;
+    try {
+      idle = await d.move.waitUntilIdle(timeout: within);
+    } catch (e) {
+      return 'the rig did not answer after the stop: $e';
+    }
+    if (phase == RigPhase.lost) return 'the link to the rig dropped after the stop';
+    return idle ? null : 'the rig still reports moving ${within.toStringAsFixed(0)} s after the stop';
+  }
+
   /// Stops all motion: the joystick, a recall, and the device's loop. The SDK's
   /// stop goes to the front of the command queue and never throws.
   Future<void> stopAll() async {

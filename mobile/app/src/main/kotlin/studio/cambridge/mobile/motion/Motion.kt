@@ -126,10 +126,12 @@ class MotionBridge(private val context: Context) : Motion {
 }
 
 /**
- * Sends `stopAll`, waits for the module's answer (the stops that failed),
- * then `disconnect`, and waits for that: on the main thread, where the
- * module's channel takes calls. (Found in review, PR #12: sending without
- * waiting let an install start while the stop was still going out.)
+ * Sends `stopAndConfirm`, waits for the module's answer (the stops that
+ * failed, and the rig's own confirmation that it is still), then
+ * `disconnect`, and waits for that: on the main thread, where the module's
+ * channel takes calls. (Found in review, PR #12: sending without waiting let
+ * an install start while the stop was still going out, and the SDK's stop
+ * cannot report a stop it failed to deliver.)
  * @return why the stop and release were not confirmed, or null
  */
 internal suspend fun confirmStopAndRelease(
@@ -150,7 +152,7 @@ internal suspend fun confirmStopAndRelease(
     }
     // "" means confirmed; null from withTimeoutOrNull means it ran out of time.
     val outcome = withTimeoutOrNull(timeoutMs) {
-        val stopped = call("stopAll")
+        val stopped = call("stopAndConfirm")
         stopped.exceptionOrNull()?.let { return@withTimeoutOrNull "STOP ALL failed: ${it.message}" }
         val failures = (stopped.getOrNull() as? List<*>).orEmpty()
         if (failures.isNotEmpty()) return@withTimeoutOrNull "STOP ALL reported: ${failures.joinToString("; ")}"
