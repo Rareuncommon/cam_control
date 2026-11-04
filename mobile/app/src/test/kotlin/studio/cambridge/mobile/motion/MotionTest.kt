@@ -23,6 +23,7 @@ class MotionTest {
         override val rig: StateFlow<Rig> = MutableStateFlow(Rig())
         override fun stopAll(reason: String) { calls += "stopAll" }
         override fun disconnect(reason: String) { calls += "disconnect" }
+        override suspend fun stopAndRelease(reason: String, timeoutMs: Long): String? { calls += "stopAndRelease"; return null }
     }
 
     private class Reply : MethodChannel.Result {

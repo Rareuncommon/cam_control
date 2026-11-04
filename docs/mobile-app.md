@@ -210,7 +210,9 @@ and **Settings › App updates** has an **Update** button. Updating:
    Bluetooth;
 2. checks it is exactly the file CamBridge described (size and SHA-256), for
    this app, newer, and signed with the same key as the installed app;
-3. sends STOP ALL to the rig and disconnects it, as closing the app does;
+3. sends STOP ALL to the rig and lets go of it, as closing the app does, and
+   waits for the Motion module to confirm both (if it can't, nothing is
+   installed);
 4. hands the APK to Android's installer, which asks you to confirm.
 
 The first time, Android asks you to allow CamBridge to install apps

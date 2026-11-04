@@ -107,8 +107,16 @@ class AppUpdates(
                     return@launch
                 }
                 // The installer replaces this process: stop the rig and let it
-                // go first, as closing the app does.
-                stopRigForInstall(motion)
+                // go first, as closing the app does, and wait until the module
+                // confirms both. Nothing is installed otherwise.
+                motion.stopAndRelease("installing an app update")?.let { problem ->
+                    _state.value = UpdateState.Failed(
+                        "The rig did not confirm it stopped ($problem), so the update was not installed. " +
+                            "Check the rig, then try again.",
+                        offer,
+                    )
+                    return@launch
+                }
                 _state.value = UpdateState.Installing(offer)
                 withContext(Dispatchers.IO) { commit(out) }
             } catch (e: Exception) {
@@ -172,17 +180,6 @@ class AppUpdates(
     fun dismiss() {
         if (_state.value is UpdateState.Failed || _state.value is UpdateState.UpToDate) _state.value = UpdateState.Idle
     }
-}
-
-/**
- * STOP ALL, then let go of the rig, before an install. On the main thread:
- * the Motion module's channel only takes calls there, and this runs from a
- * background coroutine. If it throws, the install does not go ahead.
- * (Found in review, PR #12.)
- */
-internal suspend fun stopRigForInstall(motion: Motion) = withContext(Dispatchers.Main) {
-    motion.stopAll("installing an app update")
-    motion.disconnect("installing an app update")
 }
 
 /**

@@ -1,12 +1,14 @@
 package studio.cambridge.mobile.update
 
+import android.os.Handler
 import android.os.Looper
+import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -16,34 +18,55 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import studio.cambridge.core.Link
-import studio.cambridge.mobile.motion.Motion
-import studio.cambridge.mobile.motion.Rig
+import studio.cambridge.mobile.motion.confirmStopAndRelease
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** Found in review (PR #12): the rig stop before an install, and when the app checks for updates. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = android.app.Application::class)
 class AppUpdatesTest {
-    private class Recording : Motion {
+    /** The Motion module's side of the channel: answers each call later, as Dart does. */
+    private class Module(val answers: Map<String, Any?>, val answerAfterMs: Long = 50) {
         val calls = mutableListOf<Pair<String, Boolean>>()
-        override val rig: StateFlow<Rig> = MutableStateFlow(Rig())
-        override fun stopAll(reason: String) { calls += "stopAll" to (Looper.myLooper() == Looper.getMainLooper()) }
-        override fun disconnect(reason: String) { calls += "disconnect" to (Looper.myLooper() == Looper.getMainLooper()) }
+        val invoke: (String, Any?, MethodChannel.Result) -> Unit = { method, _, result ->
+            calls += method to (Looper.myLooper() == Looper.getMainLooper())
+            if (method in answers) Handler(Looper.getMainLooper()).postDelayed({ result.success(answers[method]) }, answerAfterMs)
+        }
     }
 
-    @Test fun `the rig is stopped, then let go, on the main thread, even from a background coroutine`() {
-        val motion = Recording()
+    /** Runs [block] on a background coroutine while the main looper turns, as on a phone. */
+    private fun <T> fromBackground(block: suspend () -> T): T {
         val scope = CoroutineScope(Dispatchers.Default)
-        val job = scope.async { stopRigForInstall(motion) }
+        val job: Deferred<T> = scope.async { block() }
         val main = shadowOf(Looper.getMainLooper())
-        val end = System.currentTimeMillis() + 5_000
+        val end = System.currentTimeMillis() + 10_000
         while (!job.isCompleted && System.currentTimeMillis() < end) {
-            main.idle()
-            Thread.sleep(5)
+            main.idleFor(java.time.Duration.ofMillis(10))
+            Thread.sleep(2)
         }
-        runBlocking { job.await() }
-        scope.cancel()
-        assertEquals(listOf("stopAll" to true, "disconnect" to true), motion.calls)
+        return runBlocking { job.await() }.also { scope.cancel() }
+    }
+
+    @Test fun `the install waits until the module confirms the stop, then the release, on the main thread`() {
+        val module = Module(mapOf("stopAll" to emptyList<String>(), "disconnect" to null))
+        val outcome = fromBackground { confirmStopAndRelease(module.invoke, "installing an app update", 5_000) }
+        assertNull(outcome)
+        assertEquals(listOf("stopAll" to true, "disconnect" to true), module.calls, "stop first, then let go, both on the main thread")
+    }
+
+    @Test fun `a stop that reports failures is not confirmed, and the rig is not let go`() {
+        val module = Module(mapOf("stopAll" to listOf("head: the link dropped"), "disconnect" to null))
+        val outcome = fromBackground { confirmStopAndRelease(module.invoke, "installing an app update", 5_000) }
+        assertEquals("STOP ALL reported: head: the link dropped", outcome)
+        assertEquals(listOf("stopAll"), module.calls.map { it.first })
+    }
+
+    @Test fun `no answer from the module is not a confirmation`() {
+        val module = Module(answers = emptyMap())
+        val outcome = fromBackground { confirmStopAndRelease(module.invoke, "installing an app update", 300) }
+        assertTrue(outcome!!.contains("did not confirm the stop"), outcome)
     }
 
     @Test fun `updates are checked each time Wi-Fi comes up, not on every health tick`() = runBlocking {
