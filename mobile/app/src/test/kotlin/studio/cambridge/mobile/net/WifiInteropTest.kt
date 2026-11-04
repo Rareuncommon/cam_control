@@ -17,6 +17,7 @@ import okhttp3.Request
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import studio.cambridge.core.ApiRequest
 import studio.cambridge.core.Commands
 import studio.cambridge.core.LightTarget
 import studio.cambridge.core.Pairing
@@ -24,6 +25,7 @@ import studio.cambridge.core.RawDeviceKey
 import studio.cambridge.core.Studio
 import studio.cambridge.core.SwitchingClient
 import studio.cambridge.core.TransportKind
+import studio.cambridge.core.Updates
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -51,7 +53,7 @@ class WifiInteropTest {
 
     private fun nodeAvailable() = try { ProcessBuilder("node", "--version").start().waitFor() == 0 } catch (e: Exception) { false }
 
-    @Test fun `pair, follow state, record, light, and be refused once revoked`() = runBlocking<Unit> {
+    @Test fun `pair, follow state, record, light, update, and be refused once revoked`() = runBlocking<Unit> {
         assumeTrue("node is needed for the simulated studio", nodeAvailable())
         val args = mutableListOf("node", "scripts/mock-studio.mjs", "--json", "--port", "0")
         System.getProperty("cambridge.camd")?.takeIf { File(it).canExecute() }?.let { args += listOf("--camd", it) }
@@ -91,6 +93,23 @@ class WifiInteropTest {
         val set = client.call(Commands.lightingSet(LightTarget.All, intensity = 40.0, fadeMs = 0))
         assertTrue(set.ok, "lighting set: ${set.status} ${set.error}")
         until("every live fixture at 40 %") { s -> s.lighting!!.liveFixtures.let { f -> f.isNotEmpty() && f.all { it.intensity == 40.0 } } }
+
+        // An update published beside the config is offered, and downloads
+        // byte for byte over the signed link.
+        val published = File(first["configDir"]!!.jsonPrimitive.content, "phone-app").apply { mkdirs() }
+        val apk = ByteArray(300_000) { (it * 31 % 251).toByte() }
+        File(published, "CamBridge-900.apk").writeBytes(apk)
+        File(published, "latest.json").writeText("""{ "versionCode": 900, "versionName": "1.1.0 (900)", "file": "CamBridge-900.apk" }""")
+        val about = client.call(ApiRequest("GET", Updates.INFO_PATH))
+        val offer = Updates.offer(about.body, installedVersion = 2)
+        assertEquals(900L, offer?.versionCode, "offered: ${about.status} ${about.body}")
+        assertEquals(null, Updates.offer(about.body, installedVersion = 900), "not offered to a phone already on it")
+        val got = File.createTempFile("update", ".apk").apply { deleteOnExit() }
+        var progress = 0L
+        wifi.download(Updates.APK_PATH, got) { done, _ -> progress = done }
+        assertTrue(Updates.matches(got, offer!!), "the download is the published APK")
+        assertEquals(apk.size.toLong(), progress)
+        println("ok: update offered and downloaded")
 
         // Revoked from Setup › Phones (an open panel needs no sign-in).
         val http = OkHttpClient()

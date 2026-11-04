@@ -44,6 +44,8 @@ fun SettingsScreen(
     onChange: ((Settings) -> Settings) -> Unit,
     onPairAgain: () -> Unit,
     onForget: () -> Unit,
+    /** The App updates section, from [UpdatesSection]. */
+    updates: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
     var confirmForget by remember { mutableStateOf(false) }
@@ -104,6 +106,8 @@ fun SettingsScreen(
             }
         }
         TextButton(onClick = { context.startActivity(appSettingsIntent(context)) }) { Text("Open Android settings for CamBridge") }
+
+        updates()
 
         SectionTitle("About")
         Text("CamBridge for Android ${BuildConfig.VERSION_NAME}", color = C.muted)

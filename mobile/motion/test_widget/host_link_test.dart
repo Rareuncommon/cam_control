@@ -91,6 +91,42 @@ void main() {
     await c.disconnect();
   });
 
+  test('before an update, STOP ALL is confirmed by the rig itself', () async {
+    final (c, link, registry) = await joinedRig();
+    final host = HostLink(controller: c, registry: registry)..start();
+    await c.startLoop(0, 1);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(link.moving, isTrue);
+    expect(await fromApp('stopAndConfirm', 'test: installing an update'), isEmpty);
+    expect(link.moving, isFalse, reason: 'confirmed only once the head reports it is still');
+    await host.close();
+    await c.disconnect();
+  });
+
+  test('before an update, a lost link is not a confirmed stop', () async {
+    final (c, link, registry) = await joinedRig();
+    final host = HostLink(controller: c, registry: registry)..start();
+    await link.disconnect(); // the radio drops
+    await settle();
+    expect(c.phase, RigPhase.lost);
+    final failures = await fromApp('stopAndConfirm', 'test: installing an update') as List<Object?>;
+    expect(failures, [contains('the link to the rig is lost')]);
+    await host.close();
+    await c.disconnect();
+  });
+
+  test('before an update, a rig that stops answering is not a confirmed stop, though the link is up', () async {
+    final (c, link, registry) = await joinedRig();
+    final host = HostLink(controller: c, registry: registry)..start();
+    link.silent = true; // writes still succeed; no replies come back
+    final failures = await fromApp('stopAndConfirm', 'test: installing an update') as List<Object?>;
+    expect(c.phase, RigPhase.connected, reason: 'the link itself never dropped');
+    expect(failures, isNotEmpty, reason: 'a cached "idle" is not a confirmation');
+    link.silent = false;
+    await host.close();
+    await c.disconnect();
+  });
+
   test('the app is told when a rig connects, moves and goes', () async {
     final (c, _, registry) = await joinedRig();
     final host = HostLink(controller: c, registry: registry)..start();

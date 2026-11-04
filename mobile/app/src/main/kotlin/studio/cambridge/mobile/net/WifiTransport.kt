@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -40,6 +41,7 @@ import studio.cambridge.core.RequestSigner
 import studio.cambridge.core.Transport
 import studio.cambridge.core.TransportKind
 import java.io.IOException
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -194,6 +196,45 @@ class WifiTransport(
             exchange(url, request, timeoutMs = 10_000)
         } catch (e: IOException) {
             throw CamBridgeException("Wi-Fi: ${e.message ?: "no answer"}")
+        }
+    }
+
+    /**
+     * Downloads [target] to [out] over the signed link, for an app update.
+     * Only ever over Wi-Fi: an APK is far too big for the Bluetooth bridge.
+     * [onProgress] gets the bytes so far and the total (or -1).
+     */
+    suspend fun download(target: String, out: File, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
+        val url = base ?: throw CamBridgeException("Not connected over Wi-Fi")
+        val full = url.resolve(target) ?: throw CamBridgeException("bad path $target")
+        val sentTarget = full.encodedPath + (full.encodedQuery?.let { "?$it" } ?: "")
+        val request = Request.Builder().url(full)
+            .header("Authorization", signer.authorization("GET", sentTarget, ByteArray(0)))
+            .get().build()
+        val client = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
+        withContext(Dispatchers.IO) {
+            try {
+                client.newCall(request).await().use { r ->
+                    if (!r.isSuccessful) throw CamBridgeException("CamBridge answered ${r.code} to the download")
+                    val total = r.body.contentLength()
+                    r.body.byteStream().use { input ->
+                        out.outputStream().use { o ->
+                            val buf = ByteArray(64 * 1024)
+                            var done = 0L
+                            while (true) {
+                                ensureActive()
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                o.write(buf, 0, n)
+                                done += n
+                                onProgress(done, total)
+                            }
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                throw CamBridgeException("Wi-Fi: ${e.message ?: "the download stopped"}")
+            }
         }
     }
 

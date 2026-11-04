@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
@@ -31,6 +32,7 @@ import studio.cambridge.mobile.data.SettingsStore
 import studio.cambridge.mobile.net.Discovery
 import studio.cambridge.mobile.net.Endpoint
 import studio.cambridge.mobile.net.WifiTransport
+import studio.cambridge.mobile.update.watchForUpdates
 
 class CamBridgeApplication : Application() {
     lateinit var graph: AppGraph
@@ -57,6 +59,15 @@ class AppGraph(private val app: Application) {
     /** Camera motion (mobile/motion): started the first time the Motion tab opens, then kept for the app's life. */
     val motion = studio.cambridge.mobile.motion.MotionBridge(app)
 
+    /** Updates from the paired CamBridge: checked each time Wi-Fi connects. */
+    val updates = studio.cambridge.mobile.update.AppUpdates(
+        context = app,
+        scope = scope,
+        motion = motion,
+        installedVersion = BuildConfig.VERSION_CODE.toLong(),
+        enabled = !BuildConfig.DEBUG,
+    )
+
     /** Null until the store has been read, so the UI can wait instead of flashing the pairing screen. */
     val paired: StateFlow<Loaded<Paired?>> = MutableStateFlow<Loaded<Paired?>>(Loaded.Loading).also { out ->
         scope.launch { pairing.paired.collect { out.value = Loaded.Ready(it) } }
@@ -71,6 +82,14 @@ class AppGraph(private val app: Application) {
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
     init {
+        scope.launch {
+            remote.collectLatest { r ->
+                r ?: return@collectLatest
+                // Every time Wi-Fi comes up, not just the first: an update
+                // published during an outage is offered on reconnecting.
+                watchForUpdates(r.wifi.link) { updates.check(r) }
+            }
+        }
         scope.launch {
             combine(pairing.paired.distinctUntilChanged(), foreground) { p, fg -> if (fg) p else null }
                 .distinctUntilChanged()

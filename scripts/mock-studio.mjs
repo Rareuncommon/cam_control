@@ -103,7 +103,7 @@ if (has('pair') || json) {
   uri = made.pairing.uri;
 }
 
-if (json) process.stdout.write(`${JSON.stringify({ base, socket, uri, cameras: withCamd ? 3 : 0 })}\n`);
+if (json) process.stdout.write(`${JSON.stringify({ base, socket, uri, cameras: withCamd ? 3 : 0, configDir: dir })}\n`);
 say(`Simulated CamBridge on ${address.urls?.join('  ') ?? base}`);
 if (uri && !json) say(`Pairing link (valid 10 min): ${uri}`);
 

@@ -6,7 +6,12 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -38,6 +43,14 @@ interface Motion {
 
     /** The app is closing: stop, then let the units go (the module stops before it disconnects). */
     fun disconnect(reason: String)
+
+    /**
+     * STOP ALL, then let the units go, and wait for the module to confirm
+     * each: for when the app is about to be replaced (an update), where a
+     * stop still in flight would be cut off.
+     * @return why it was not confirmed, or null when it was (or nothing was running)
+     */
+    suspend fun stopAndRelease(reason: String, timeoutMs: Long = 10_000): String?
 }
 
 /** Answers the module's requests for Bluetooth permission; the activity provides it. */
@@ -84,6 +97,11 @@ class MotionBridge(private val context: Context) : Motion {
         channel?.invokeMethod("disconnect", reason)
     }
 
+    override suspend fun stopAndRelease(reason: String, timeoutMs: Long): String? {
+        val ch = channel ?: return null // never started: nothing can be moving
+        return confirmStopAndRelease(ch::invokeMethod, reason, timeoutMs)
+    }
+
     /** The module's calls. Separate from the engine, so tests need none. */
     internal fun handle(method: String, arguments: Any?, result: MethodChannel.Result) {
         when (method) {
@@ -104,6 +122,47 @@ class MotionBridge(private val context: Context) : Motion {
     companion object {
         const val ENGINE_ID = "cambridge_motion"
         const val CHANNEL = "studio.cambridge.motion/host"
+    }
+}
+
+/**
+ * Sends `stopAndConfirm`, waits for the module's answer (the stops that
+ * failed, and the rig's own confirmation that it is still), then
+ * `disconnect`, and waits for that: on the main thread, where the module's
+ * channel takes calls. (Found in review, PR #12: sending without waiting let
+ * an install start while the stop was still going out, and the SDK's stop
+ * cannot report a stop it failed to deliver.)
+ * @return why the stop and release were not confirmed, or null
+ */
+internal suspend fun confirmStopAndRelease(
+    invoke: (String, Any?, MethodChannel.Result) -> Unit,
+    reason: String,
+    timeoutMs: Long,
+): String? = withContext(Dispatchers.Main) {
+    suspend fun call(method: String): Result<Any?> = suspendCancellableCoroutine { c ->
+        invoke(method, reason, object : MethodChannel.Result {
+            override fun success(result: Any?) { if (c.isActive) c.resume(Result.success(result)) }
+            override fun error(code: String, message: String?, details: Any?) {
+                if (c.isActive) c.resume(Result.failure(IllegalStateException(message ?: code)))
+            }
+            override fun notImplemented() {
+                if (c.isActive) c.resume(Result.failure(IllegalStateException("the Motion module does not answer $method")))
+            }
+        })
+    }
+    // "" means confirmed; null from withTimeoutOrNull means it ran out of time.
+    val outcome = withTimeoutOrNull(timeoutMs) {
+        val stopped = call("stopAndConfirm")
+        stopped.exceptionOrNull()?.let { return@withTimeoutOrNull "STOP ALL failed: ${it.message}" }
+        val failures = (stopped.getOrNull() as? List<*>).orEmpty()
+        if (failures.isNotEmpty()) return@withTimeoutOrNull "STOP ALL reported: ${failures.joinToString("; ")}"
+        call("disconnect").exceptionOrNull()?.let { return@withTimeoutOrNull "letting go of the rig failed: ${it.message}" }
+        ""
+    }
+    when (outcome) {
+        null -> "the Motion module did not confirm the stop within ${timeoutMs / 1000} s"
+        "" -> null
+        else -> outcome
     }
 }
 

@@ -45,6 +45,7 @@ import { DeviceRegistry, pairingUri, SCHEME as DEVICE_SCHEME } from './devices.j
 import { MdnsAdvertiser } from './mdns.js';
 import { qrSvg } from './qr.js';
 import { BleGateway } from './ble/gateway.js';
+import { createPhoneApp, PHONE_APP_DIR } from './phone-app.js';
 import { applyPatch } from '../public/patch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -335,6 +336,8 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
     log: (level, msg) => log.write(level, 'ptz', msg),
   });
   const gangs = new Gangs(store, state, log);
+  // Updates for the phone app: scripts/publish-phone-app.sh puts them here.
+  const phoneApp = createPhoneApp({ dir: join(dirname(resolve(configPath)), PHONE_APP_DIR) });
   const adoption = new Adoption(configPath, camd, log, ptz);
   /** Groups and order come from the config; re-read whenever the config changes. */
   const syncMeta = () => {
@@ -1306,6 +1309,19 @@ export function createApp({ configPath = './config/cambridge.json', advertise = 
       if (path === '/api/devices/me' && req.method === 'GET') {
         if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'not a paired device', deviceRejected: true });
         return sendJson(res, 200, { device: req.cambridgeDevice, server: { id: devices.ensureServerId(), name: serverName() } });
+      }
+      // --- phone app updates ---
+      // Only for paired phones, and only over Wi-Fi: an APK is far too big
+      // for the Bluetooth link, which the app never asks it over.
+      if (path === '/api/phone-app' && req.method === 'GET') {
+        if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'not a paired device', deviceRejected: true });
+        return sendJson(res, 200, phoneApp.describe());
+      }
+      if (path === '/api/phone-app/apk' && req.method === 'GET') {
+        if (!req.cambridgeDevice) return sendJson(res, 401, { error: 'not a paired device', deviceRejected: true });
+        if (req.socket?.remoteAddress === 'bluetooth') return sendJson(res, 400, { error: 'download the update over Wi-Fi' });
+        log.info('devices', `${actor()}downloads phone app ${phoneApp.describe().versionName ?? '(none)'}`);
+        return phoneApp.send(res);
       }
       m = path.match(/^\/api\/devices\/([^/]+)$/);
       if (m && req.method === 'DELETE') {
