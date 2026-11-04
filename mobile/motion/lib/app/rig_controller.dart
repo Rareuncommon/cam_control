@@ -635,7 +635,17 @@ class RigController {
       return 'the rig did not answer after the stop: $e';
     }
     if (phase == RigPhase.lost) return 'the link to the rig dropped after the stop';
-    return idle ? null : 'the rig still reports moving ${within.toStringAsFixed(0)} s after the stop';
+    if (!idle) return 'the rig still reports moving ${within.toStringAsFixed(0)} s after the stop';
+    // The wait can end on a cached state when status reads fail, so a fresh
+    // status reply saying "still" is required. (Found in review, PR #12.)
+    try {
+      await d.refresh();
+    } catch (e) {
+      return 'the rig did not answer a status request after the stop: $e';
+    }
+    if (phase == RigPhase.lost) return 'the link to the rig dropped after the stop';
+    if (d.move.isMoving != false) return 'the rig did not report that it is still after the stop';
+    return null;
   }
 
   /// Stops all motion: the joystick, a recall, and the device's loop. The SDK's
