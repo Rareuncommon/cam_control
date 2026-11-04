@@ -54,10 +54,12 @@ Future<RigController> reopen(
   List<EdelkroneDevice> Function(FakeHeadLink) units, {
   bool holds = true,
   void Function(FakeHeadLink)? onLink,
+  Duration latency = const Duration(milliseconds: 3),
 }) async {
   final link = FakeHeadLink(
     unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101),
     configuration: holds ? EdlSetup.PAN_AND_SLIDE : EdlSetup.NONE,
+    latency: latency,
   );
   onLink?.call(link);
   final c = RigController(
@@ -94,6 +96,39 @@ void main() {
       reason: 'the head was sent a stop before it was let go',
     );
     await c.stopScan();
+  });
+
+  test('closing while the head is being checked cancels the pick-up, and it is tried again next time', () async {
+    final store = await firstRun(forget: false);
+    late FakeHeadLink link;
+    final c = await reopen(store, joinedUnits, onLink: (l) => link = l, latency: const Duration(milliseconds: 80));
+    await until(() => c.phase == RigPhase.connecting);
+    await c.disconnect(forget: false); // what the CamBridge app sends when it closes
+    await Future<void>.delayed(const Duration(seconds: 4));
+    expect(c.phase, isNot(RigPhase.connected), reason: 'nothing is taken after the app has closed');
+    expect(link.isConnected, isFalse, reason: 'the head is let go');
+
+    await c.startScan(); // back on screen
+    await until(() => c.phase == RigPhase.connected, timeout: const Duration(seconds: 20));
+    await c.disconnect();
+  });
+
+  test('Disconnect while connecting leaves the rig alone', () async {
+    final link = FakeHeadLink(unit: fakeHeadUnit(), latency: const Duration(milliseconds: 80));
+    final c = RigController(
+      transport: FakeTransport(link, seen: [link.device, fakeSliderUnit()]),
+      registry: StopRegistry(),
+    );
+    await c.startScan();
+    await until(() => c.seen.length == 2);
+    final connecting = c.connect(c.seen.firstWhere((s) => s.name == 'HeadONE V2'));
+    await until(() => c.phase == RigPhase.connecting);
+    await c.disconnect();
+    await connecting;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(c.phase, RigPhase.idle);
+    expect(c.device, isNull);
+    expect(link.isConnected, isFalse, reason: 'what was connected after the Disconnect is let go');
   });
 
   test('after Disconnect it waits to be asked', () async {

@@ -87,6 +87,13 @@ class RigController {
   /// to "on screen"; tests leave it on.
   bool Function() mayResume = () => true;
 
+  /// Moved on by every disconnect, so a connect still in progress knows it
+  /// was cancelled.
+  int _session = 0;
+
+  /// The rig being picked up again by itself, while that is in progress.
+  ({String mac, bool joined})? _picking;
+
   final _changes = StreamController<void>.broadcast();
 
   /// Fires whenever anything shown on screen may have changed.
@@ -162,7 +169,8 @@ class RigController {
       if (normaliseMac(s.mac) != normaliseMac(r.mac) || !s.drivable || !s.recognised) continue;
       if (r.joined != s.modules.isNotEmpty) return;
       _resume = null;
-      unawaited(r.joined ? _resumeJoined(s) : connect(s));
+      _picking = r;
+      unawaited((r.joined ? _resumeJoined(s) : connect(s)).whenComplete(() => _picking = null));
       return;
     }
   }
@@ -238,6 +246,7 @@ class RigController {
   /// stored pose holds both axes.
   Future<void> connect(Seen target, {List<EdelkroneDevice> join = const []}) async {
     if (phase == RigPhase.connecting) return;
+    final mine = _session;
     await stopScan();
     phase = RigPhase.connecting;
     error = null;
@@ -245,6 +254,18 @@ class RigController {
     _notify();
     try {
       final d = await sdk.connect(transport, target.rig, withModules: join, seenRigs: _rigs);
+      if (mine != _session) {
+        // Disconnect was asked for (or the app closed) while this was still
+        // connecting: stop what was connected and let it go, rather than take
+        // the rig with nobody watching. (Found in review, PR #11.)
+        try {
+          await d.move.stop(settle: 0);
+        } catch (_) {}
+        try {
+          await d.disconnect();
+        } catch (_) {}
+        return;
+      }
       device = d;
       _rigKey = d.info.mac;
       names = await _names.load(_rigKey);
@@ -282,6 +303,7 @@ class RigController {
   /// is read; it is sent a stop and let go. Only if it still holds a layout
   /// is the rig connected as it was. (Found in review, PR #11.)
   Future<void> _resumeJoined(Seen s) async {
+    final mine = _session;
     await stopScan();
     phase = RigPhase.connecting;
     _notify();
@@ -312,6 +334,9 @@ class RigController {
       _notify();
       return;
     }
+    // Closed, sent to the background or disconnected while the head was
+    // being checked: the pick-up is cancelled. (Found in review, PR #11.)
+    if (mine != _session || !mayResume()) return;
     phase = RigPhase.idle;
     await connect(s);
   }
@@ -345,12 +370,16 @@ class RigController {
   /// [forget] (the Disconnect button) also forgets the rig, so the app does
   /// not connect to it again by itself. Closing the app keeps it.
   Future<void> disconnect({bool forget = true}) async {
+    _session++;
     if (forget) {
       _resume = null;
       unawaited(_lastRig.save(null));
     } else if (device != null) {
       // Closing: pick this rig up again when the app is next on screen.
       _resume = (mac: device!.info.mac, joined: isJoined);
+    } else if (_picking != null) {
+      // Closing while it was being picked up: try again next time.
+      _resume = _picking;
     }
     await stopAll();
     await _teardown();
