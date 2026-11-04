@@ -82,6 +82,20 @@ Open **Motion**, then:
    From then on the head plans every pose move so both axes arrive together.
    The layout lasts until a unit is switched off. Switching a unit off also
    deletes the poses stored on the head.
+
+   **Reopening the app** finds the rig already joined and shows it as a
+   **Rig · already joined** card with a **Connect** button. The app also
+   connects to the last rig by itself when it's in sight in the same state
+   it was left in: joined if it was joined, on its own if it was on its own.
+   It does this only while the app is on screen, and it never joins anything
+   by itself (a join lasts until power-off, so that is always your call).
+   What a unit advertises can be out of date, so before picking a joined rig
+   up, the app connects to the head alone, reads the layout the head itself
+   reports, sends it a stop and lets go. It reconnects the rig only if the
+   head still holds the layout; otherwise it says so and leaves the rig for
+   you to connect.
+   Connecting moves nothing. Pressing **Disconnect** makes the app forget the
+   rig, so it won't reconnect until you connect it again.
 3. **Control page.** One screen, no scrolling, upright or on its side:
    - **Live position:** pan or tilt in degrees and slide in cm, updated every
      0.25 s, plus battery. These warnings show when they apply:
@@ -89,7 +103,7 @@ Open **Motion**, then:
      - the slider not answering the head;
      - an orientation warning;
      - a focus motor that is not set up.
-   - **Jog pads,** one per axis, with a jog-speed slider. Holding a pad sends
+   - **Jog pads,** one per axis. Holding a pad sends
      a command every 100 ms; releasing it stops at once. Grabbing a pad during
      a loop or a recall stops that first.
    - **Twelve pose slots, stored on the head.**
@@ -101,7 +115,9 @@ Open **Motion**, then:
        stored in between.
      - **Hold a pose** to rename it, replace it with the current position, or
        delete it. Names are kept on the phone, per rig.
-   - **Speed and acceleration** sliders, used for every pose move.
+   - **Speed, accel and jog** tiles, each showing its value. Tap one for a
+     full-width slider and presets (10, 25, 50, 75, 100%). Speed and accel
+     apply to every pose move; jog is the pads' top speed.
    - **Loop** between two poses.
      - With no pause, it is the head's own loop: one command it runs until
        stopped.

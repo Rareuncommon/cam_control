@@ -156,6 +156,7 @@ class _RigPageState extends State<RigPage> {
           height: MediaQuery.of(context).size.height * 0.7,
           child: Column(
             children: [
+              SheetStop(onStop: c.stopAll),
               ListTile(
                 title: const Text('SDK log'),
                 subtitle: const Text('What the SDK port did and decided. Paste it when something misbehaves.'),
@@ -476,6 +477,7 @@ class _PoseGrid extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            SheetStop(onStop: c.stopAll),
             ListTile(title: Text(c.names[slot] ?? 'Pose ${slot + 1}'), subtitle: Text(_describe(c.poses[slot]))),
             ListTile(
               leading: const Icon(Icons.edit),
@@ -531,6 +533,32 @@ class _PoseGrid extends StatelessWidget {
       ),
     );
   }
+}
+
+/// STOP ALL at the top of every sheet on this page: a sheet covers the
+/// page's own STOP ALL, and something may be moving while it is open.
+/// Stops everything, then closes the sheet. (Found in review, PR #11.)
+class SheetStop extends StatelessWidget {
+  const SheetStop({super.key, required this.onStop});
+  final Future<void> Function() onStop;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: FilledButton.icon(
+      style: FilledButton.styleFrom(
+        backgroundColor: StudioColours.stop,
+        foregroundColor: StudioColours.text,
+        minimumSize: const Size.fromHeight(48),
+      ),
+      onPressed: () {
+        unawaited(onStop());
+        Navigator.of(context).pop();
+      },
+      icon: const Icon(Icons.stop_circle),
+      label: const Text('STOP ALL', style: TextStyle(fontWeight: FontWeight.w700)),
+    ),
+  );
 }
 
 /// Motion is refused: a focus motor is fitted and the head does not yet know
@@ -671,65 +699,195 @@ class _PoseTile extends StatelessWidget {
   }
 }
 
+/// The move style: three tiles, each with its value and a level bar. Tapping
+/// one opens a full-width slider with presets, which is easier to set with a
+/// thumb than three small sliders side by side.
 class _Style extends StatelessWidget {
   const _Style({required this.c});
   final RigController c;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    Widget bar(String label, double value, double min, ValueChanged<double> on, String shown) => Expanded(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Row(
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    label,
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    overflow: TextOverflow.fade,
-                    softWrap: false,
-                  ),
-                ),
-                Text(
-                  shown,
-                  style: theme.textTheme.labelMedium?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
-                ),
-              ],
+          Expanded(
+            child: _StyleTile(
+              onStop: c.stopAll,
+              label: 'SPEED',
+              help: 'How fast pose moves and loops run, as a share of the rig\'s top speed.',
+              value: c.speed,
+              min: 0.01,
+              onChanged: (v) {
+                c.speed = v;
+                c.clearError();
+              },
             ),
           ),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 4,
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
+          Gap.wSm,
+          Expanded(
+            child: _StyleTile(
+              onStop: c.stopAll,
+              label: 'ACCEL',
+              help: 'How much of each move is spent speeding up and slowing down. Higher is gentler.',
+              value: c.acceleration,
+              min: 0,
+              onChanged: (v) {
+                c.acceleration = v;
+                c.clearError();
+              },
             ),
-            child: Slider(value: value, min: min, max: 1, onChanged: on),
+          ),
+          Gap.wSm,
+          Expanded(
+            child: _StyleTile(
+              onStop: c.stopAll,
+              label: 'JOG',
+              help: 'The top speed of the jog pads, at full deflection.',
+              value: c.jogSpeed,
+              min: 0.05,
+              onChanged: (v) {
+                c.jogSpeed = v;
+                c.clearError();
+              },
+            ),
           ),
         ],
       ),
     );
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(
-        children: [
-          bar('SPEED', c.speed, 0.01, (v) {
-            c.speed = v;
-            c.clearError();
-          }, '${(c.speed * 100).round()}%'),
-          bar('ACCEL', c.acceleration, 0.0, (v) {
-            c.acceleration = v;
-            c.clearError();
-          }, '${(c.acceleration * 100).round()}%'),
-          bar('JOG', c.jogSpeed, 0.05, (v) {
-            c.jogSpeed = v;
-            c.clearError();
-          }, '${(c.jogSpeed * 100).round()}%'),
-        ],
+  }
+}
+
+class _StyleTile extends StatelessWidget {
+  const _StyleTile({
+    required this.onStop,
+    required this.label,
+    required this.help,
+    required this.value,
+    required this.min,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String help;
+  final double value;
+  final double min;
+  final ValueChanged<double> onChanged;
+  final Future<void> Function() onStop;
+
+  static String _percent(double v) => '${(v * 100).round()}%';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _open(context),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant, letterSpacing: 0.8),
+                      softWrap: false,
+                      overflow: TextOverflow.fade,
+                    ),
+                  ),
+                  Icon(Icons.tune, size: 14, color: scheme.onSurfaceVariant),
+                ],
+              ),
+              Text(
+                _percent(value),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: ((value - min) / (1 - min)).clamp(0.0, 1.0),
+                  minHeight: 4,
+                  backgroundColor: scheme.outline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _open(BuildContext context) {
+    var v = value;
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, set) {
+          final theme = Theme.of(context);
+          void change(double x) {
+            set(() => v = x);
+            onChanged(x);
+          }
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: Insets.page,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SheetStop(onStop: onStop),
+                  Row(
+                    children: [
+                      Expanded(child: Text(label, style: theme.textTheme.titleMedium)),
+                      Text(
+                        _percent(v),
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text(help, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  Gap.sm,
+                  Slider(value: v, min: min, max: 1, onChanged: change),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final p in const [0.1, 0.25, 0.5, 0.75, 1.0])
+                        if (p >= min)
+                          ChoiceChip(
+                            label: Text(_percent(p)),
+                            selected: (v - p).abs() < 0.005,
+                            onSelected: (_) => change(p),
+                          ),
+                    ],
+                  ),
+                  Gap.sm,
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -798,6 +956,7 @@ class _Actions extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                SheetStop(onStop: c.stopAll),
                 Text('Loop', style: Theme.of(context).textTheme.titleLarge),
                 Gap.sm,
                 Row(

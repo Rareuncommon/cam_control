@@ -137,6 +137,12 @@ class _ScanPageState extends State<ScanPage> {
       for (final s in c.seen)
         if (s.drivable && s.recognised && c.joinable(s).isNotEmpty) s,
     ];
+    // A rig joined earlier stays joined until a unit is switched off, so after
+    // reopening the app it is found already joined: one card, just Connect.
+    final joined = [
+      for (final s in c.seen)
+        if (s.drivable && s.recognised && s.modules.isNotEmpty) s,
+    ];
     final refusals = <Seen, List<String>>{
       if (pairs.isEmpty)
         for (final s in c.seen)
@@ -189,6 +195,15 @@ class _ScanPageState extends State<ScanPage> {
                 ],
               ),
             ),
+          for (final s in joined)
+            _PairCard(
+              leader: s,
+              modules: s.rig.orderedSlaves,
+              joined: true,
+              enabled: !connecting,
+              onBoth: () => c.connect(s),
+              onLeaderOnly: null,
+            ),
           for (final s in pairs)
             _PairCard(
               leader: s,
@@ -200,7 +215,10 @@ class _ScanPageState extends State<ScanPage> {
           if (c.seen.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
-              child: Text(pairs.isEmpty ? 'UNITS IN RANGE' : 'EACH UNIT ON ITS OWN', style: theme.textTheme.labelSmall),
+              child: Text(
+                pairs.isEmpty && joined.isEmpty ? 'UNITS IN RANGE' : 'EACH UNIT ON ITS OWN',
+                style: theme.textTheme.labelSmall,
+              ),
             ),
             for (final s in c.seen)
               _UnitCard(
@@ -230,13 +248,18 @@ class _PairCard extends StatelessWidget {
     required this.enabled,
     required this.onBoth,
     required this.onLeaderOnly,
+    this.joined = false,
   });
 
   final Seen leader;
   final List<EdelkroneDevice> modules;
   final bool enabled;
   final VoidCallback onBoth;
-  final VoidCallback onLeaderOnly;
+  final VoidCallback? onLeaderOnly;
+
+  /// Already joined (the units remember it until switched off): Connect
+  /// only, nothing to join.
+  final bool joined;
 
   @override
   Widget build(BuildContext context) {
@@ -252,7 +275,10 @@ class _PairCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('RIG', style: theme.textTheme.labelSmall?.copyWith(color: scheme.primary)),
+            Text(
+              joined ? 'RIG · ALREADY JOINED' : 'RIG',
+              style: theme.textTheme.labelSmall?.copyWith(color: scheme.primary),
+            ),
             Gap.xs,
             Text(
               [leader.name, ...modules.map((m) => m.displayName)].join(' + '),
@@ -268,13 +294,20 @@ class _PairCard extends StatelessWidget {
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                 onPressed: enabled ? onBoth : null,
                 icon: const Icon(Icons.link),
-                label: Text(modules.length == 1 ? 'Connect head + slider' : 'Connect all together'),
+                label: Text(
+                  joined
+                      ? 'Connect'
+                      : modules.length == 1
+                      ? 'Connect head + slider'
+                      : 'Connect all together',
+                ),
               ),
             ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(onPressed: enabled ? onLeaderOnly : null, child: Text('${leader.name} only')),
-            ),
+            if (onLeaderOnly != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(onPressed: enabled ? onLeaderOnly : null, child: Text('${leader.name} only')),
+              ),
           ],
         ),
       ),

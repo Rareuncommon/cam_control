@@ -69,7 +69,7 @@ class HostLink {
         // The app is closing: stop (RigController.disconnect stops first),
         // then let the units go, rather than hold the link with no screen.
         EdelkroneLog.info(() => 'disconnect from the CamBridge app (${call.arguments ?? 'no reason given'})');
-        await controller.disconnect();
+        await controller.disconnect(forget: false);
         return null;
       case 'rig':
         return rigState;

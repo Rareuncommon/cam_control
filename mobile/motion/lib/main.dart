@@ -31,13 +31,20 @@ class MotionApp extends StatefulWidget {
 }
 
 class _MotionAppState extends State<MotionApp> with WidgetsBindingObserver {
-  late final RigController controller = RigController(transport: FlutterBlueTransport(), names: PrefsPoseNameStore());
+  late final RigController controller = RigController(
+    transport: FlutterBlueTransport(),
+    names: PrefsPoseNameStore(),
+    lastRig: PrefsLastRigStore(),
+  );
   late final HostLink host = HostLink(controller: controller, registry: StopRegistry.instance);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // The last rig is picked up again only while the app is on screen, never
+    // while it is closing or in the background.
+    controller.mayResume = () => WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     host.start();
   }
 
@@ -57,6 +64,12 @@ class _MotionAppState extends State<MotionApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden || state == AppLifecycleState.detached) {
       unawaited(StopRegistry.instance.stopAll());
+    }
+    // Back on screen with no rig: look again, which picks the last rig up if
+    // it is still there as it was left.
+    if (state == AppLifecycleState.resumed &&
+        (controller.phase == RigPhase.idle || controller.phase == RigPhase.scanning)) {
+      unawaited(controller.startScan());
     }
   }
 

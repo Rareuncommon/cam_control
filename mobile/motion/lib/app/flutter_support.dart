@@ -36,6 +36,35 @@ class PrefsPoseNameStore implements PoseNameStore {
   }
 }
 
+/// The last rig connected to, in SharedPreferences.
+class PrefsLastRigStore implements LastRigStore {
+  static const _key = 'last_rig_v1';
+
+  @override
+  Future<({String mac, bool joined})?> load() async {
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(_key);
+      if (raw == null) return null;
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      return (mac: '${m['mac']}', joined: m['joined'] == true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> save(({String mac, bool joined})? rig) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (rig == null) {
+        await prefs.remove(_key);
+      } else {
+        await prefs.setString(_key, jsonEncode({'mac': rig.mac, 'joined': rig.joined}));
+      }
+    } catch (_) {}
+  }
+}
+
 /// The last few hundred SDK log lines, for the diagnostics sheet.
 class LogBuffer {
   LogBuffer._();

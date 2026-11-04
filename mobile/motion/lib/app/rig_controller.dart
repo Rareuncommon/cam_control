@@ -47,19 +47,52 @@ class MemoryPoseNameStore implements PoseNameStore {
   Future<void> save(String rigKey, Map<int, String> names) async => _data[rigKey] = Map.of(names);
 }
 
+/// The rig the app last connected to, so reopening the app picks it up again.
+/// Only the leader's MAC and whether modules were joined to it are kept.
+abstract class LastRigStore {
+  Future<({String mac, bool joined})?> load();
+  Future<void> save(({String mac, bool joined})? rig);
+}
+
+class MemoryLastRigStore implements LastRigStore {
+  ({String mac, bool joined})? _rig;
+  @override
+  Future<({String mac, bool joined})?> load() async => _rig;
+  @override
+  Future<void> save(({String mac, bool joined})? rig) async => _rig = rig;
+}
+
 /// The slots the app offers. The protocol carries 16 on a head, but the SDK
 /// notes the firmware decides — a HeadPLUS V3 stores 0 to 11 — and a slider
 /// has 12, so 12 is what every unit here can be relied on for.
 const poseSlots = 12;
 
 class RigController {
-  RigController({required this.transport, StopRegistry? registry, PoseNameStore? names})
+  RigController({required this.transport, StopRegistry? registry, PoseNameStore? names, LastRigStore? lastRig})
     : registry = registry ?? StopRegistry.instance,
-      _names = names ?? MemoryPoseNameStore();
+      _names = names ?? MemoryPoseNameStore(),
+      _lastRig = lastRig ?? MemoryLastRigStore();
 
   final Transport transport;
   final StopRegistry registry;
   final PoseNameStore _names;
+  final LastRigStore _lastRig;
+
+  /// The rig to pick up again when it is next seen as it was left: read once,
+  /// and given up after one attempt, a Disconnect, or a different connect.
+  ({String mac, bool joined})? _resume;
+  bool _resumeLoaded = false;
+
+  /// Whether picking the last rig up again is allowed now. The app sets this
+  /// to "on screen"; tests leave it on.
+  bool Function() mayResume = () => true;
+
+  /// Moved on by every disconnect, so a connect still in progress knows it
+  /// was cancelled.
+  int _session = 0;
+
+  /// The rig being picked up again by itself, while that is in progress.
+  ({String mac, bool joined})? _picking;
 
   final _changes = StreamController<void>.broadcast();
 
@@ -84,6 +117,10 @@ class RigController {
     phase = RigPhase.scanning;
     _notify();
     await _scanSub?.cancel();
+    if (!_resumeLoaded) {
+      _resumeLoaded = true;
+      _resume = await _lastRig.load();
+    }
     _scanSub = transport.devices.listen(_onSeen);
     try {
       await transport.startScan();
@@ -118,6 +155,24 @@ class RigController {
     }
     seen = found..sort((a, b) => _listed[normaliseMac(a.mac)]!.compareTo(_listed[normaliseMac(b.mac)]!));
     _notify();
+    _maybeResume();
+  }
+
+  /// Connects to the last rig by itself when it is seen in the same state it
+  /// was left in: still joined if it was joined, on its own if it was alone.
+  /// It never joins anything (a join lasts until power-off, so it is always
+  /// the user's call), and connecting moves nothing.
+  void _maybeResume() {
+    final r = _resume;
+    if (r == null || phase != RigPhase.scanning || !mayResume()) return;
+    for (final s in seen) {
+      if (normaliseMac(s.mac) != normaliseMac(r.mac) || !s.drivable || !s.recognised) continue;
+      if (r.joined != s.modules.isNotEmpty) return;
+      _resume = null;
+      _picking = r;
+      unawaited((r.joined ? _resumeJoined(s) : connect(s)).whenComplete(() => _picking = null));
+      return;
+    }
   }
 
   /// The units the registry says could join [target]'s leader as modules —
@@ -191,6 +246,7 @@ class RigController {
   /// stored pose holds both axes.
   Future<void> connect(Seen target, {List<EdelkroneDevice> join = const []}) async {
     if (phase == RigPhase.connecting) return;
+    final mine = _session;
     await stopScan();
     phase = RigPhase.connecting;
     error = null;
@@ -198,6 +254,18 @@ class RigController {
     _notify();
     try {
       final d = await sdk.connect(transport, target.rig, withModules: join, seenRigs: _rigs);
+      if (mine != _session) {
+        // Disconnect was asked for (or the app closed) while this was still
+        // connecting: stop what was connected and let it go, rather than take
+        // the rig with nobody watching. (Found in review, PR #11.)
+        try {
+          await d.move.stop(settle: 0);
+        } catch (_) {}
+        try {
+          await d.disconnect();
+        } catch (_) {}
+        return;
+      }
       device = d;
       _rigKey = d.info.mac;
       names = await _names.load(_rigKey);
@@ -214,6 +282,8 @@ class RigController {
         }
       });
       registry.register(this, stopAll);
+      _resume = null;
+      unawaited(_lastRig.save((mac: d.info.mac, joined: d.info.modules.isNotEmpty)));
       phase = RigPhase.connected;
       _notify();
       unawaited(refreshPoses());
@@ -223,6 +293,62 @@ class RigController {
       error = e is EdelkroneError ? e.message : '$e';
       _notify();
     }
+  }
+
+  /// Picks a joined rig up again only if the head itself still holds the
+  /// layout. What a unit advertises can be stale (switched off and on since
+  /// the scan), and the SDK's connect re-forms a layout the head no longer
+  /// reports, which is a join. So the head is first connected on its own,
+  /// without its modules, which never joins anything; the layout it reports
+  /// is read; it is sent a stop and let go. Only if it still holds a layout
+  /// is the rig connected as it was. (Found in review, PR #11.)
+  Future<void> _resumeJoined(Seen s) async {
+    final mine = _session;
+    await stopScan();
+    phase = RigPhase.connecting;
+    _notify();
+    var holds = false;
+    try {
+      final head = Rig(master: s.rig.master, slaves: const [], setup: s.rig.master.advData.setup, resolved: null);
+      final probe = await sdk.connect(transport, head, seenRigs: _rigs);
+      final layout = probe.layout;
+      holds = layout != null && EdelkroneSession.isMultiModule(layout);
+      try {
+        await probe.move.stop(settle: 0);
+      } catch (_) {}
+      try {
+        await probe.disconnect();
+      } catch (_) {}
+    } catch (e) {
+      phase = RigPhase.idle;
+      error = e is EdelkroneError ? e.message : '$e';
+      _notify();
+      return;
+    }
+    if (!holds) {
+      phase = RigPhase.idle;
+      await startScan();
+      error =
+          '${s.name} no longer holds its layout (it was switched off and on), so it was not picked up again by '
+          'itself: that would join the units again. Connect it from the list.';
+      _notify();
+      return;
+    }
+    // Closed, sent to the background or disconnected while the head was
+    // being checked: the pick-up is cancelled. (Found in review, PR #11.)
+    if (mine != _session || !mayResume()) {
+      // Abandoned (sent to the background, or closed): not left showing
+      // "Connecting…", and tried again when the app is back on screen.
+      // (Found in review, PR #11.)
+      if (mine == _session) {
+        _resume ??= (mac: s.rig.master.mac, joined: true);
+        phase = RigPhase.idle;
+        _notify();
+      }
+      return;
+    }
+    phase = RigPhase.idle;
+    await connect(s);
   }
 
   /// Connects again to the rig that was lost. A layout survives while its
@@ -250,7 +376,21 @@ class RigController {
 
   /// Stops everything, then disconnects. The SDK does NOT stop moving
   /// equipment on disconnect, so this always stops first.
-  Future<void> disconnect() async {
+  ///
+  /// [forget] (the Disconnect button) also forgets the rig, so the app does
+  /// not connect to it again by itself. Closing the app keeps it.
+  Future<void> disconnect({bool forget = true}) async {
+    _session++;
+    if (forget) {
+      _resume = null;
+      unawaited(_lastRig.save(null));
+    } else if (device != null) {
+      // Closing: pick this rig up again when the app is next on screen.
+      _resume = (mac: device!.info.mac, joined: isJoined);
+    } else if (_picking != null) {
+      // Closing while it was being picked up: try again next time.
+      _resume = _picking;
+    }
     await stopAll();
     await _teardown();
     phase = RigPhase.idle;
