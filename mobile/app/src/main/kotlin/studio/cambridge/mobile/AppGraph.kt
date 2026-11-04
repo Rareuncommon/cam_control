@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -24,7 +23,6 @@ import studio.cambridge.core.ApiRequest
 import studio.cambridge.core.ClockOffset
 import studio.cambridge.core.Commands
 import studio.cambridge.core.DeviceKey
-import studio.cambridge.core.Link
 import studio.cambridge.core.SwitchingClient
 import studio.cambridge.mobile.ble.BleTransport
 import studio.cambridge.mobile.data.Paired
@@ -34,6 +32,7 @@ import studio.cambridge.mobile.data.SettingsStore
 import studio.cambridge.mobile.net.Discovery
 import studio.cambridge.mobile.net.Endpoint
 import studio.cambridge.mobile.net.WifiTransport
+import studio.cambridge.mobile.update.watchForUpdates
 
 class CamBridgeApplication : Application() {
     lateinit var graph: AppGraph
@@ -86,8 +85,9 @@ class AppGraph(private val app: Application) {
         scope.launch {
             remote.collectLatest { r ->
                 r ?: return@collectLatest
-                r.wifi.link.first { it is Link.Up }
-                updates.check(r)
+                // Every time Wi-Fi comes up, not just the first: an update
+                // published during an outage is offered on reconnecting.
+                watchForUpdates(r.wifi.link) { updates.check(r) }
             }
         }
         scope.launch {

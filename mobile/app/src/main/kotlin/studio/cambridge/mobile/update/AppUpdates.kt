@@ -11,12 +11,17 @@ import android.provider.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import studio.cambridge.core.ApiRequest
+import studio.cambridge.core.Link
 import studio.cambridge.core.UpdateOffer
 import studio.cambridge.core.Updates
 import studio.cambridge.mobile.CamBridgeApplication
@@ -68,7 +73,10 @@ class AppUpdates(
         val s = _state.value
         if (s is UpdateState.Downloading || s is UpdateState.Installing) return
         _state.value = UpdateState.Checking
-        val answer = runCatching { remote.client.call(ApiRequest("GET", Updates.INFO_PATH)) }.getOrNull()
+        // Straight over Wi-Fi, which is the only way updates travel: the
+        // switching client may not have chosen a transport yet when Wi-Fi
+        // has just come up. (Found in review, PR #12.)
+        val answer = runCatching { remote.wifi.call(ApiRequest("GET", Updates.INFO_PATH)) }.getOrNull()
         _state.value = when {
             answer == null || !answer.ok ->
                 if (quiet) UpdateState.Idle else UpdateState.Failed(answer?.error ?: "CamBridge did not answer", null)
@@ -100,8 +108,7 @@ class AppUpdates(
                 }
                 // The installer replaces this process: stop the rig and let it
                 // go first, as closing the app does.
-                motion.stopAll("installing an app update")
-                motion.disconnect("installing an app update")
+                stopRigForInstall(motion)
                 _state.value = UpdateState.Installing(offer)
                 withContext(Dispatchers.IO) { commit(out) }
             } catch (e: Exception) {
@@ -165,6 +172,25 @@ class AppUpdates(
     fun dismiss() {
         if (_state.value is UpdateState.Failed || _state.value is UpdateState.UpToDate) _state.value = UpdateState.Idle
     }
+}
+
+/**
+ * STOP ALL, then let go of the rig, before an install. On the main thread:
+ * the Motion module's channel only takes calls there, and this runs from a
+ * background coroutine. If it throws, the install does not go ahead.
+ * (Found in review, PR #12.)
+ */
+internal suspend fun stopRigForInstall(motion: Motion) = withContext(Dispatchers.Main) {
+    motion.stopAll("installing an app update")
+    motion.disconnect("installing an app update")
+}
+
+/**
+ * Runs [check] each time [link] comes up, for as long as it is watched:
+ * the first connection and every reconnection after an outage.
+ */
+internal suspend fun watchForUpdates(link: Flow<Link>, check: suspend () -> Unit) {
+    link.map { it is Link.Up }.distinctUntilChanged().filter { it }.collect { check() }
 }
 
 /** Receives the installer's answer; on "needs the person", shows Android's confirm screen. */
